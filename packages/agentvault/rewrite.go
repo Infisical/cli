@@ -240,7 +240,13 @@ func applyBodySubstitutions(req *http.Request, serviceName string, subs []substi
 		return false, nil
 	}
 
-	body, err := io.ReadAll(io.LimitReader(req.Body, maxBodyRewriteSize+1))
+	var body []byte
+	var err error
+	if buffered, ok := req.Body.(*bufferedBody); ok {
+		body = buffered.data
+	} else {
+		body, err = io.ReadAll(io.LimitReader(req.Body, maxBodyRewriteSize+1))
+	}
 	if err != nil {
 		// Refused outright rather than forwarded short. This used to leave ContentLength disagreeing with the
 		// bytes so http.Transport would refuse, but a chunked upload declares -1 and there is nothing to leave
@@ -286,7 +292,7 @@ func applyBodySubstitutions(req *http.Request, serviceName string, subs []substi
 		// POST into a chunked request. Signing schemes and some gateways reject that.
 		req.Body = http.NoBody
 	} else {
-		req.Body = io.NopCloser(bytes.NewReader(rewritten))
+		req.Body = &bufferedBody{Reader: bytes.NewReader(rewritten), data: rewritten}
 	}
 	req.ContentLength = int64(len(rewritten))
 	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(rewritten)))

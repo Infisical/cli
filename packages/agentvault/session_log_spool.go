@@ -7,7 +7,11 @@ import (
 	"github.com/Infisical/infisical-merge/packages/api"
 )
 
-// Never add headers, bodies or the query string: they can carry the injected credential.
+// Never add headers, bodies or the query string: they can carry the injected credential. The one exception
+// is mcp, which holds only JSON-RPC method and tool names from the agent's own body. They are read before
+// any substitution or credential reaches the request, so nothing injected can be among them, and only names
+// matching mcpNamePattern are kept, so a value that happens to hold a secret cannot be logged as one. Tool
+// arguments are never read.
 type sessionLogRecord struct {
 	Ts           string  `json:"ts"`
 	Seq          uint64  `json:"seq"`
@@ -20,6 +24,9 @@ type sessionLogRecord struct {
 	Decision     string  `json:"decision"`
 	Service      *string `json:"service"`
 	AccessBundle *string `json:"accessBundle"`
+	// Null when no service matched, so a reader can tell that apart from an http service.
+	ServiceType *string    `json:"serviceType"`
+	MCP         *mcpDetail `json:"mcp,omitempty"`
 
 	at time.Time
 }

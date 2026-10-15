@@ -8,6 +8,8 @@ import (
 	"errors"
 	"golang.org/x/sync/singleflight"
 	"net/http"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,6 +39,8 @@ type credential struct {
 	value        []byte
 	username     string
 	password     []byte
+	// Only an OAuth token Infisical issued can be refreshed when the upstream rejects it.
+	refreshable bool
 }
 
 type customHeader struct {
@@ -54,8 +58,11 @@ type substitution struct {
 type resolvedService struct {
 	id               string
 	name             string
+	kind             string
 	accessBundleName string
-	hostPatterns     []hostPattern
+	// As Infisical sent it, so a credential refresh can name the destination the rejected token went to.
+	hostPattern  string
+	hostPatterns []hostPattern
 	// A nil map means every method is allowed; an empty slice of prefixes means every path.
 	allowedMethods      map[string]bool
 	allowedPathPrefixes []string
@@ -71,6 +78,16 @@ type sessionEntry struct {
 	sessionLog *sessionLogGrant
 	lastSeen   time.Time
 	fetchedAt  time.Time
+	// Keyed by service ID. A poll whose resolve began before a swap can return the token that swap replaced,
+	// so the merge consults this to keep the newer one.
+	swaps map[string]*credentialSwap
+}
+
+type credentialSwap struct {
+	installed   credential
+	hostPattern string
+	replaced    map[string]bool
+	gen         uint64
 }
 
 // The map key is the sha256 of the token, never the token itself, so a heap dump yields no live credential.
@@ -83,12 +100,21 @@ type sessionResolver interface {
 	resolve(sessionToken string, held *sessionLogGrant) (*resolveResult, error)
 }
 
+// Implemented by the Infisical resolver. Kept apart from sessionResolver so resolvers that never broker an
+// OAuth credential need not stub it.
+type credentialRefresher interface {
+	refreshCredential(sessionToken, serviceID, hostPattern, rejectedHash string, requiredScopes []string) (credential, string, error)
+}
+
 type sessionCache struct {
 	resolver     sessionResolver
 	pollInterval func() time.Duration
 
 	// Concurrent misses for one session share a single resolve rather than each posting to Infisical.
 	inflight singleflight.Group
+	// Concurrent upstream 401s for one service share a single refresh, so a burst of requests holding the
+	// same expired token costs Infisical one call.
+	credentialFlights singleflight.Group
 	// A refresh that outlives the poll interval must not pile a second one on top, nor hold up the heartbeat.
 	refreshing atomic.Bool
 
@@ -98,6 +124,8 @@ type sessionCache struct {
 	// A definitive refusal is remembered briefly, so an agent retrying a dead session costs one resolve per
 	// window rather than one per request. Outages and throttling are never stored here.
 	refused map[string]refusedEntry
+	// Bumped under mu by every credential swap, so a poll can tell which swaps happened after it began.
+	swapGen uint64
 }
 
 type refusedEntry struct {
@@ -316,6 +344,7 @@ func (c *sessionCache) refreshOne(key, token string) {
 	if entry, ok := c.entries[key]; ok {
 		held = entry.sessionLog
 	}
+	startGen := c.swapGen
 	c.mu.Unlock()
 
 	result, err := c.resolver.resolve(token, held)
@@ -329,10 +358,37 @@ func (c *sessionCache) refreshOne(key, token string) {
 	if entry, ok := c.entries[key]; ok {
 		entry.sessionID = result.SessionID
 		entry.expiresAt = result.ExpiresAt
-		entry.services = result.Services
+		entry.services = keepNewerSwaps(entry, result.Services, startGen)
 		entry.sessionLog = result.SessionLog
 		entry.fetchedAt = time.Now()
 	}
+}
+
+// keepNewerSwaps puts back a credential swapped in after the poll began when the poll returned a token that
+// swap replaced. Swaps the poll began after are settled by it and forgotten.
+func keepNewerSwaps(entry *sessionEntry, polled []*resolvedService, startGen uint64) []*resolvedService {
+	if len(entry.swaps) == 0 {
+		return polled
+	}
+	services, copied := polled, false
+	for i, svc := range polled {
+		swap, ok := entry.swaps[svc.id]
+		if !ok || swap.gen <= startGen || swap.hostPattern != svc.hostPattern || !svc.credential.refreshable || !swap.replaced[credentialHash(&svc.credential)] {
+			continue
+		}
+		if !copied {
+			services, copied = append([]*resolvedService(nil), polled...), true
+		}
+		updated := *svc
+		updated.credential = swap.installed
+		services[i] = &updated
+	}
+	for id, swap := range entry.swaps {
+		if swap.gen <= startGen {
+			delete(entry.swaps, id)
+		}
+	}
+	return services
 }
 
 func (c *sessionCache) handleRefreshFailure(key string, err error) {
@@ -381,4 +437,133 @@ func (c *sessionCache) close() {
 		delete(c.entries, key)
 		delete(c.tokens, key)
 	}
+}
+
+var (
+	errCredentialNotRefreshable = errors.New("the refresh did not return a refreshable credential")
+	errServiceHostChanged       = errors.New("the service's host pattern changed while its credential was refreshed")
+)
+
+func credentialHash(cred *credential) string {
+	sum := sha256.Sum256(cred.value)
+	return hex.EncodeToString(sum[:])
+}
+
+// refreshCredential asks Infisical for a replacement of the token the upstream rejected and swaps it into
+// the session's entry, so later requests inject it. With requiredScopes it reports a 403 insufficient_scope
+// instead, and Infisical answers with the current token unrefreshed. hostPattern is that of the cached
+// service whose credential the rejected request carried: a token minted for wherever the service points now
+// must never be sent to where it used to point.
+func (c *sessionCache) refreshCredential(sessionToken, serviceID, hostPattern string, rejected *credential, requiredScopes []string) (credential, error) {
+	refresher, ok := c.resolver.(credentialRefresher)
+	if !ok {
+		return credential{}, errCredentialNotRefreshable
+	}
+	key := sessionKey(sessionToken)
+	rejectedHash := credentialHash(rejected)
+
+	result, err, _ := c.credentialFlights.Do(credentialFlightKey(key, serviceID, hostPattern, rejectedHash, requiredScopes), func() (any, error) {
+		// Checked inside the flight so a caller that arrives after another refresh finished also reuses
+		// its replacement instead of asking Infisical again.
+		if len(requiredScopes) == 0 {
+			if current, ok := c.currentCredential(key, serviceID, hostPattern); ok && current.refreshable && credentialHash(&current) != rejectedHash {
+				return current, nil
+			}
+		}
+		fresh, status, err := refresher.refreshCredential(sessionToken, serviceID, hostPattern, rejectedHash, requiredScopes)
+		if err != nil {
+			return nil, err
+		}
+		if status != "" && status != oauthStatusConnected {
+			log.Warn().Str("serviceId", serviceID).Str("status", status).
+				Msg("agent-vault: Infisical reports this service's OAuth connection needs attention")
+		}
+		if fresh.kind != credentialBearer || !fresh.refreshable {
+			return nil, errCredentialNotRefreshable
+		}
+		return c.swapCredential(key, serviceID, hostPattern, rejectedHash, fresh)
+	})
+	if err != nil {
+		return credential{}, err
+	}
+	return result.(credential), nil
+}
+
+// Scope reports are bound to the rejected token, so neither different tokens nor different scope sets may
+// share a call. The set is canonical so another order or repeats still share one call.
+func credentialFlightKey(key, serviceID, hostPattern, rejectedHash string, requiredScopes []string) string {
+	base := key + "\x00" + serviceID + "\x00" + hostPattern + "\x00" + rejectedHash
+	if len(requiredScopes) == 0 {
+		return base + "\x00refresh"
+	}
+	scopes := append([]string(nil), requiredScopes...)
+	slices.Sort(scopes)
+	scopes = slices.Compact(scopes)
+	return base + "\x00scopes\x00" + strings.Join(scopes, " ")
+}
+
+func (c *sessionCache) currentCredential(key, serviceID, hostPattern string) (credential, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[key]
+	if !ok {
+		return credential{}, false
+	}
+	for _, svc := range entry.services {
+		if svc.id == serviceID && svc.hostPattern == hostPattern {
+			return svc.credential, true
+		}
+	}
+	return credential{}, false
+}
+
+// Copy on write: requests in flight hold pointers into the old slice and read it without the lock. A newer
+// cached credential wins over a delayed refresh or scope report, including the credential returned for retry.
+func (c *sessionCache) swapCredential(key, serviceID, hostPattern, replacedHash string, cred credential) (credential, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[key]
+	if !ok {
+		return cred, nil
+	}
+	for i, svc := range entry.services {
+		if svc.id != serviceID {
+			continue
+		}
+		if svc.hostPattern != hostPattern {
+			return credential{}, errServiceHostChanged
+		}
+		if !svc.credential.refreshable {
+			return credential{}, errCredentialNotRefreshable
+		}
+		if credentialHash(&svc.credential) != replacedHash {
+			return svc.credential, nil
+		}
+		updated := *svc
+		updated.credential = cred
+		services := append([]*resolvedService(nil), entry.services...)
+		services[i] = &updated
+		entry.services = services
+
+		c.swapGen++
+		if entry.swaps == nil {
+			entry.swaps = make(map[string]*credentialSwap)
+		}
+		swap, ok := entry.swaps[serviceID]
+		if !ok {
+			swap = &credentialSwap{replaced: make(map[string]bool)}
+			entry.swaps[serviceID] = swap
+		}
+		swap.installed = cred
+		if swap.hostPattern != hostPattern {
+			swap.hostPattern = hostPattern
+			clear(swap.replaced)
+		}
+		swap.replaced[replacedHash] = true
+		swap.gen = c.swapGen
+		// A scope report swaps in the token it reported, which is current rather than stale.
+		delete(swap.replaced, credentialHash(&cred))
+		return cred, nil
+	}
+	return cred, nil
 }
