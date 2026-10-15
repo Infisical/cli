@@ -2490,7 +2490,7 @@ func (tm *AgentManager) fetchCertificate(certificateId int, certConfig *AgentCer
 		return fmt.Errorf("certificate %s: %s", resolvedCertificateID, reason)
 	}
 
-	if onDiskAfterRestart && combine && certificateFilesMatch(certConfig, bundle) {
+	if onDiskAfterRestart && certificateFilesMatch(certConfig, bundle) {
 		markActive()
 		return nil
 	}
@@ -2906,6 +2906,11 @@ func certificateFileContent(certConfig *AgentCertificateConfig, certificate, cha
 func certificateFilesMatch(certConfig *AgentCertificateConfig, bundle *api.CertificateBundleResponse) bool {
 	if !fileHasCertificates(certConfig.FileConfig.Certificate.Path, certificateFileContent(certConfig, bundle.Certificate, bundle.CertificateChain)) {
 		return false
+	}
+	if !certConfig.FileConfig.CombineCertificateChain && certConfig.FileConfig.Chain.Path != "" && chainToWrite(certConfig, bundle.CertificateChain) != "" {
+		if _, err := os.Stat(certConfig.FileConfig.Chain.Path); err != nil {
+			return false
+		}
 	}
 	if certConfig.FileConfig.PrivateKey.Path != "" && bundle.PrivateKey != "" {
 		if _, err := os.Stat(certConfig.FileConfig.PrivateKey.Path); err != nil {

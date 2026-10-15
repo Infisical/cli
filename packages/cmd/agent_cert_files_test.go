@@ -185,6 +185,8 @@ func TestFetchCertificate_RestartRewritesOnlyOutdatedFiles(t *testing.T) {
 		{name: "combined file without root matches a bundle with root", combine: true, chain: c.intermediate + c.root, certOnDisk: combined, wantCert: combined, wantBundle: true},
 		{name: "leaf-only file converted to combined", combine: true, chain: c.intermediate, certOnDisk: c.leaf, chainOnDisk: c.intermediate, wantCert: combined, wantChain: c.intermediate, wantRewrite: true, wantBundle: true},
 		{name: "combined file split after opting out", chain: c.intermediate, certOnDisk: combined, chainOnDisk: c.intermediate, wantCert: c.leaf, wantChain: c.intermediate, wantRewrite: true, wantBundle: true},
+		{name: "separate files without chain file when only a root remains", chain: c.root, certOnDisk: c.leaf, wantCert: c.leaf, wantBundle: true},
+		{name: "missing chain file rewritten", chain: c.intermediate, certOnDisk: c.leaf, wantCert: c.leaf, wantChain: c.intermediate, wantRewrite: true, wantBundle: true},
 		{name: "rotated chain refreshed in combined file", combine: true, chain: rotated.intermediate, certOnDisk: combined, wantCert: c.leaf + rotated.intermediate, wantRewrite: true, wantBundle: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
