@@ -115,7 +115,7 @@ func TestCertificateOnlyPKCS12WithoutTrustAttribute(t *testing.T) {
 func TestLegacyEncryptedCertificateOnlyPKCS12(t *testing.T) {
 	password := "trust-441"
 	wrong := "nope"
-	for _, name := range []string{"legacy-3des-certonly.p12"} {
+	for _, name := range []string{"legacy-3des-certonly.p12", "legacy-rc2-certonly.p12"} {
 		t.Run(name, func(t *testing.T) {
 			data := readFixture(t, name)
 			if res := Parse(data, nil); res.Status != StatusLocked {

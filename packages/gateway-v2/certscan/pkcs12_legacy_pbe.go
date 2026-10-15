@@ -15,10 +15,15 @@ const (
 	pkcs12KDFIVID       = 2
 	pkcs12KDFBlockSize  = 64
 	tripleDESKeyLength  = 24
+	rc2KeyLength40      = 5
+	rc2EffectiveBits40  = 40
 	legacyPBEBlockBytes = des.BlockSize
 )
 
-var oidPBEWithSHAAnd3KeyTripleDESCBC = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 12, 1, 3}
+var (
+	oidPBEWithSHAAnd3KeyTripleDESCBC = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 12, 1, 3}
+	oidPBEWithSHAAnd40BitRC2CBC      = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 12, 1, 6}
+)
 
 type legacyPBEParams struct {
 	Salt       []byte
@@ -84,9 +89,19 @@ func pkcs12KDF(salt, password []byte, iterations int, id byte, size int) []byte 
 }
 
 func decryptLegacyPBE(algorithm pkix.AlgorithmIdentifier, ciphertext []byte, password string) ([]byte, error) {
-	if !algorithm.Algorithm.Equal(oidPBEWithSHAAnd3KeyTripleDESCBC) {
+	var keyLength int
+	var newBlock func(key []byte) (cipher.Block, error)
+	switch {
+	case algorithm.Algorithm.Equal(oidPBEWithSHAAnd3KeyTripleDESCBC):
+		keyLength = tripleDESKeyLength
+		newBlock = func(key []byte) (cipher.Block, error) { return des.NewTripleDESCipher(key) }
+	case algorithm.Algorithm.Equal(oidPBEWithSHAAnd40BitRC2CBC):
+		keyLength = rc2KeyLength40
+		newBlock = func(key []byte) (cipher.Block, error) { return newRC2Cipher(key, rc2EffectiveBits40) }
+	default:
 		return nil, errUnsupportedPKCS12Encryption
 	}
+
 	var params legacyPBEParams
 	if _, err := asn1.Unmarshal(algorithm.Parameters.FullBytes, &params); err != nil {
 		return nil, err
@@ -99,9 +114,9 @@ func decryptLegacyPBE(algorithm pkix.AlgorithmIdentifier, ciphertext []byte, pas
 	}
 
 	encodedPassword := bmpPassword(password)
-	key := pkcs12KDF(params.Salt, encodedPassword, params.Iterations, pkcs12KDFKeyID, tripleDESKeyLength)
+	key := pkcs12KDF(params.Salt, encodedPassword, params.Iterations, pkcs12KDFKeyID, keyLength)
 	iv := pkcs12KDF(params.Salt, encodedPassword, params.Iterations, pkcs12KDFIVID, legacyPBEBlockBytes)
-	block, err := des.NewTripleDESCipher(key)
+	block, err := newBlock(key)
 	if err != nil {
 		return nil, err
 	}
