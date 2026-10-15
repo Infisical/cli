@@ -3036,7 +3036,7 @@ func (tm *AgentManager) writeCertificateFiles(certificate *AgentCertificateConfi
 	}
 
 	chain := chainToWrite(certificate, response.Certificate.CertificateChain)
-	if !certificate.FileConfig.CombineCertificateChain && chain != "" && chainPath != "" {
+	if !certificate.FileConfig.CombineCertificateChain && chainPath != "" {
 		if err := os.MkdirAll(path.Dir(chainPath), 0755); err != nil {
 			return fmt.Errorf("failed to create directory for certificate chain %s: %v", chainPath, err)
 		}

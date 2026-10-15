@@ -163,6 +163,33 @@ func TestWithoutRootCertificates(t *testing.T) {
 	assert.Equal(t, c.intermediate+c.root, chainToWrite(cert, c.intermediate+c.root))
 }
 
+func TestWriteCertificateFiles_EmptyChainWritesEmptyChainFile(t *testing.T) {
+	c := newTestCertificateChain(t)
+	for _, tc := range []struct {
+		name  string
+		chain string
+	}{
+		{name: "chain with only a root", chain: c.root},
+		{name: "no chain", chain: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cert := distributionConfigWithKeyPath(t.TempDir())
+			cert.FileConfig.Chain.Path = filepath.Join(filepath.Dir(cert.FileConfig.Certificate.Path), "chain.pem")
+			require.NoError(t, os.WriteFile(cert.FileConfig.Chain.Path, []byte(c.root), 0600))
+
+			tm := &AgentManager{}
+			require.NoError(t, tm.WriteCertificateFiles(cert, &api.CertificateResponse{
+				Certificate: &api.CertificateData{Certificate: c.leaf, CertificateChain: tc.chain, PrivateKey: "private key"},
+			}))
+
+			content, err := os.ReadFile(cert.FileConfig.Chain.Path)
+			require.NoError(t, err)
+			assert.Empty(t, content)
+			assert.True(t, allConfiguredOutputsExist(cert))
+		})
+	}
+}
+
 func TestFetchCertificate_RestartRewritesOnlyOutdatedFiles(t *testing.T) {
 	c := newTestCertificateChain(t)
 	rotated := newTestCertificateChain(t)
