@@ -2473,7 +2473,7 @@ func (tm *AgentManager) fetchCertificate(certificateId int, certConfig *AgentCer
 
 	bundle, err := api.CallGetCertificateBundle(httpClient, resolvedCertificateID)
 	if err != nil {
-		if onDiskAfterRestart && combine {
+		if onDiskAfterRestart && combine && privateKeyOnDisk(certConfig) {
 			log.Warn().Str("Certificate", displayName).Msgf("could not fetch the certificate bundle to verify the files on disk, keeping them: %v", err)
 			markActive()
 			return nil
@@ -2718,7 +2718,7 @@ func (tm *AgentManager) checkCertificateRequestStatus(certificateId int, certifi
 	if err != nil {
 		return fmt.Errorf("failed to get certificate request status: %v", err)
 	}
-	if err := fillCertificateRequestChain(httpClient, response); err != nil {
+	if err := fillCertificateRequestChain(httpClient, certificate, response); err != nil {
 		return err
 	}
 
@@ -2849,6 +2849,14 @@ func allConfiguredOutputsExist(certConfig *AgentCertificateConfig) bool {
 		}
 	}
 	return true
+}
+
+func privateKeyOnDisk(certConfig *AgentCertificateConfig) bool {
+	if certConfig.FileConfig.PrivateKey.Path == "" {
+		return true
+	}
+	_, err := os.Stat(certConfig.FileConfig.PrivateKey.Path)
+	return err == nil
 }
 
 func certificateFileHoldsOnlyLeaf(certConfig *AgentCertificateConfig) bool {
@@ -3400,7 +3408,7 @@ func (tm *AgentManager) PollCertificateRequestForRenewal(certificateId int, cert
 	displayName := tm.getCertificateDisplayName(certificateId, certificate)
 
 	for {
-		status, certResponse, err := tm.checkCertificateRequestStatusByID(requestID)
+		status, certResponse, err := tm.checkCertificateRequestStatusByID(certificate, requestID)
 		if err != nil {
 			log.Error().Str("Certificate", displayName).Msgf("failed to check renewal status: %v", err)
 
@@ -3578,8 +3586,9 @@ func (tm *AgentManager) handleImmediateRenewalResponseFromIssuance(certificateId
 }
 
 // The certificate request response carries no chain, so it is read from the issued certificate instead.
-func fillCertificateRequestChain(httpClient *resty.Client, response *api.GetCertificateRequestResponse) error {
-	if response.Status != "issued" || response.CertificateID == nil || (response.CertificateChain != nil && *response.CertificateChain != "") {
+func fillCertificateRequestChain(httpClient *resty.Client, certConfig *AgentCertificateConfig, response *api.GetCertificateRequestResponse) error {
+	chainNeeded := certConfig.FileConfig.CombineCertificateChain || certConfig.FileConfig.Chain.Path != ""
+	if !chainNeeded || response.Status != "issued" || response.CertificateID == nil || (response.CertificateChain != nil && *response.CertificateChain != "") {
 		return nil
 	}
 	body, err := api.CallGetCertificateBody(httpClient, *response.CertificateID)
@@ -3590,7 +3599,7 @@ func fillCertificateRequestChain(httpClient *resty.Client, response *api.GetCert
 	return nil
 }
 
-func (tm *AgentManager) checkCertificateRequestStatusByID(requestID string) (string, *api.CertificateResponse, error) {
+func (tm *AgentManager) checkCertificateRequestStatusByID(certConfig *AgentCertificateConfig, requestID string) (string, *api.CertificateResponse, error) {
 	httpClient, err := tm.createAuthenticatedClient()
 	if err != nil {
 		return "", nil, err
@@ -3600,7 +3609,7 @@ func (tm *AgentManager) checkCertificateRequestStatusByID(requestID string) (str
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to get certificate request status: %v", err)
 	}
-	if err := fillCertificateRequestChain(httpClient, response); err != nil {
+	if err := fillCertificateRequestChain(httpClient, certConfig, response); err != nil {
 		return "", nil, err
 	}
 

@@ -225,24 +225,39 @@ func TestFetchCertificate_RestartRewritesOnlyOutdatedFiles(t *testing.T) {
 	}
 }
 
-func TestFetchCertificate_RestartKeepsMatchingFilesWhenBundleIsUnavailable(t *testing.T) {
+func TestFetchCertificate_RestartWhenBundleIsUnavailable(t *testing.T) {
 	leaf := newTestCertificateChain(t).leaf
-	cert := distributionConfigWithKeyPath(t.TempDir())
-	cert.FileConfig.CombineCertificateChain = true
-	require.NoError(t, os.WriteFile(cert.FileConfig.Certificate.Path, []byte(leaf), 0600))
+	for _, tc := range []struct {
+		name       string
+		keyOnDisk  bool
+		wantErr    bool
+		wantStatus string
+		wantCalls  int32
+	}{
+		{name: "complete files are kept", keyOnDisk: true, wantStatus: "active", wantCalls: 1},
+		{name: "missing key stays retryable", wantErr: true, wantStatus: "failed", wantCalls: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cert := distributionConfigWithKeyPath(t.TempDir())
+			cert.FileConfig.CombineCertificateChain = true
+			require.NoError(t, os.WriteFile(cert.FileConfig.Certificate.Path, []byte(leaf), 0600))
+			if tc.keyOnDisk {
+				require.NoError(t, os.WriteFile(cert.FileConfig.PrivateKey.Path, []byte("private key"), 0600))
+			}
 
-	bundleCalls := mockCertificateServer(t, func() (int, api.CertificateBundleResponse) {
-		return http.StatusInternalServerError, api.CertificateBundleResponse{}
-	})
+			bundleCalls := mockCertificateServer(t, func() (int, api.CertificateBundleResponse) {
+				return http.StatusInternalServerError, api.CertificateBundleResponse{}
+			})
 
-	tm := &AgentManager{accessToken: "test-token", certificateStates: map[int]*CertificateState{1: {}}}
-	require.NoError(t, tm.FetchCertificate(1, cert))
-	assert.Equal(t, int32(1), bundleCalls.Load())
-	assert.Equal(t, "active", tm.certificateStates[1].Status)
-	assert.Zero(t, tm.certificateStates[1].RetryCount)
+			tm := &AgentManager{accessToken: "test-token", certificateStates: map[int]*CertificateState{1: {}}}
+			err := tm.FetchCertificate(1, cert)
+			assert.Equal(t, tc.wantErr, err != nil)
+			assert.Equal(t, tc.wantStatus, tm.certificateStates[1].Status)
 
-	require.NoError(t, tm.SyncFetchedCertificate(1, cert))
-	assert.Equal(t, int32(1), bundleCalls.Load(), "a delivered certificate is not fetched again")
+			_ = tm.SyncFetchedCertificate(1, cert)
+			assert.Equal(t, tc.wantCalls, bundleCalls.Load())
+		})
+	}
 }
 
 func TestCheckCertificateRequestStatusByID_FillsMissingChain(t *testing.T) {
@@ -250,14 +265,21 @@ func TestCheckCertificateRequestStatusByID_FillsMissingChain(t *testing.T) {
 	leaf, intermediate := c.leaf, c.intermediate
 
 	for _, tc := range []struct {
-		name       string
-		bodyStatus int
-		wantErr    bool
+		name          string
+		combine       bool
+		chainPath     bool
+		bodyStatus    int
+		wantErr       bool
+		wantChain     string
+		wantBodyCalls int32
 	}{
-		{name: "chain read from the issued certificate", bodyStatus: http.StatusOK},
-		{name: "error when the chain cannot be read", bodyStatus: http.StatusInternalServerError, wantErr: true},
+		{name: "combined output reads the chain", combine: true, bodyStatus: http.StatusOK, wantChain: intermediate, wantBodyCalls: 1},
+		{name: "chain file reads the chain", chainPath: true, bodyStatus: http.StatusOK, wantChain: intermediate, wantBodyCalls: 1},
+		{name: "error when a needed chain cannot be read", combine: true, bodyStatus: http.StatusInternalServerError, wantErr: true, wantBodyCalls: 1},
+		{name: "leaf-only output skips the chain", bodyStatus: http.StatusInternalServerError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			var bodyCalls atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				switch r.URL.Path {
@@ -266,6 +288,7 @@ func TestCheckCertificateRequestStatusByID_FillsMissingChain(t *testing.T) {
 						"status": "issued", "certificate": leaf, "certificateId": "cert-02", "serialNumber": "02",
 					})
 				case "/v1/cert-manager/certificates/cert-02/certificate":
+					bodyCalls.Add(1)
 					w.WriteHeader(tc.bodyStatus)
 					_ = json.NewEncoder(w).Encode(api.CertificateBodyResponse{Certificate: leaf, CertificateChain: intermediate, SerialNumber: "02"})
 				default:
@@ -275,8 +298,15 @@ func TestCheckCertificateRequestStatusByID_FillsMissingChain(t *testing.T) {
 			t.Cleanup(server.Close)
 			withMockInfisicalURL(t, server.URL)
 
+			cert := distributionConfigWithKeyPath(t.TempDir())
+			cert.FileConfig.CombineCertificateChain = tc.combine
+			if tc.chainPath {
+				cert.FileConfig.Chain.Path = filepath.Join(filepath.Dir(cert.FileConfig.Certificate.Path), "chain.pem")
+			}
+
 			tm := &AgentManager{accessToken: "test-token"}
-			status, response, err := tm.checkCertificateRequestStatusByID("req-1")
+			status, response, err := tm.checkCertificateRequestStatusByID(cert, "req-1")
+			assert.Equal(t, tc.wantBodyCalls, bodyCalls.Load())
 			if tc.wantErr {
 				require.Error(t, err)
 				assert.Nil(t, response)
@@ -284,14 +314,16 @@ func TestCheckCertificateRequestStatusByID_FillsMissingChain(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Equal(t, "issued", status)
-			assert.Equal(t, intermediate, response.Certificate.CertificateChain)
+			assert.Equal(t, tc.wantChain, response.Certificate.CertificateChain)
 
-			cert := distributionConfigWithKeyPath(t.TempDir())
-			cert.FileConfig.CombineCertificateChain = true
 			require.NoError(t, tm.WriteCertificateFiles(cert, response))
 			content, err := os.ReadFile(cert.FileConfig.Certificate.Path)
 			require.NoError(t, err)
-			assert.Len(t, pemCertificateBlocks(content), 2)
+			wantBlocks := 1
+			if tc.combine {
+				wantBlocks = 2
+			}
+			assert.Len(t, pemCertificateBlocks(content), wantBlocks)
 		})
 	}
 }
