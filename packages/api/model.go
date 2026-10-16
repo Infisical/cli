@@ -229,6 +229,42 @@ type Project struct {
 	Slug string `json:"slug"`
 }
 
+type ProjectEnvironment struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Slug string `json:"slug"`
+}
+
+// ProjectDetails is a project as the /v1/projects endpoints return it, with its environments.
+type ProjectDetails struct {
+	ID           string               `json:"id"`
+	Name         string               `json:"name"`
+	Slug         string               `json:"slug"`
+	Description  string               `json:"description,omitempty"`
+	Type         string               `json:"type"`
+	OrgID        string               `json:"orgId"`
+	Environments []ProjectEnvironment `json:"environments"`
+}
+
+type ListProjectsResponse struct {
+	Projects []ProjectDetails `json:"projects"`
+}
+
+type GetProjectResponse struct {
+	Project ProjectDetails `json:"project"`
+}
+
+type CreateProjectRequest struct {
+	ProjectName        string `json:"projectName"`
+	ProjectDescription string `json:"projectDescription,omitempty"`
+	Slug               string `json:"slug,omitempty"`
+	Type               string `json:"type"`
+}
+
+type CreateProjectResponse struct {
+	Project ProjectDetails `json:"project"`
+}
+
 type RawSecret struct {
 	SecretKey     string   `json:"secretKey,omitempty"`
 	SecretValue   string   `json:"secretValue,omitempty"`

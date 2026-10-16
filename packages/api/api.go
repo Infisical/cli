@@ -33,6 +33,9 @@ const (
 	operationCallSelectOrganization                = "CallSelectOrganization"
 	operationCallGetAllWorkSpacesUserBelongsTo     = "CallGetAllWorkSpacesUserBelongsTo"
 	operationCallGetProjectById                    = "CallGetProjectById"
+	operationCallListProjects                      = "CallListProjects"
+	operationCallGetProject                        = "CallGetProject"
+	operationCallCreateProject                     = "CallCreateProject"
 	operationCallIsAuthenticated                   = "CallIsAuthenticated"
 	operationCallGetNewAccessTokenWithRefreshToken = "CallGetNewAccessTokenWithRefreshToken"
 	operationCallGetFoldersV1                      = "CallGetFoldersV1"
@@ -356,6 +359,66 @@ func CallGetProjectById(httpClient *resty.Client, id string) (Project, error) {
 	}
 
 	return projectResponse.Project, nil
+}
+
+// CallListProjects lists the projects of the given type in the organization the token is scoped to.
+func CallListProjects(httpClient *resty.Client, projectType string) ([]ProjectDetails, error) {
+	var listResponse ListProjectsResponse
+	response, err := httpClient.
+		R().
+		SetResult(&listResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		SetQueryParam("type", projectType).
+		Get(fmt.Sprintf("%v/v1/projects", config.INFISICAL_URL))
+
+	if err != nil {
+		return nil, NewGenericRequestError(operationCallListProjects, err)
+	}
+
+	if response.IsError() {
+		return nil, NewAPIErrorWithResponse(operationCallListProjects, response, nil)
+	}
+
+	return listResponse.Projects, nil
+}
+
+func CallGetProject(httpClient *resty.Client, id string) (ProjectDetails, error) {
+	var projectResponse GetProjectResponse
+	response, err := httpClient.
+		R().
+		SetResult(&projectResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/projects/%s", config.INFISICAL_URL, url.PathEscape(id)))
+
+	if err != nil {
+		return ProjectDetails{}, NewGenericRequestError(operationCallGetProject, err)
+	}
+
+	if response.IsError() {
+		return ProjectDetails{}, NewAPIErrorWithResponse(operationCallGetProject, response, nil)
+	}
+
+	return projectResponse.Project, nil
+}
+
+func CallCreateProject(httpClient *resty.Client, request CreateProjectRequest) (ProjectDetails, error) {
+	var createResponse CreateProjectResponse
+	response, err := httpClient.
+		R().
+		SetBody(request).
+		SetResult(&createResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Post(fmt.Sprintf("%v/v1/projects", config.INFISICAL_URL))
+
+	if err != nil {
+		return ProjectDetails{}, NewGenericRequestError(operationCallCreateProject, err)
+	}
+
+	if response.IsError() {
+		return ProjectDetails{}, NewAPIErrorWithResponse(operationCallCreateProject, response, nil)
+	}
+
+	return createResponse.Project, nil
 }
 
 func CallGetProjectBySlug(httpClient *resty.Client, slug string) (Project, error) {
