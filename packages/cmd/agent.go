@@ -904,6 +904,26 @@ func (s *secretArguments) SetDefaults() {
 	}
 }
 
+// appendTemplateEtag folds the etag of one fetch into the template's combined etag.
+// A template can read from several sources and each etag only covers its own request,
+// so the combined value has to change whenever any of them does.
+func appendTemplateEtag(currentEtag *string, etag string) {
+	combined := sha256.Sum256([]byte(*currentEtag + "\x00" + etag))
+	*currentEtag = hex.EncodeToString(combined[:])
+}
+
+func dynamicSecretEtag(projectSlug, envSlug, secretPath, slug, ttl, principals string, data map[string]any) (string, error) {
+	etagData := fmt.Sprintf("%s-%s-%s-%s-%s-%s", projectSlug, envSlug, secretPath, slug, ttl, principals)
+	dynamicSecretDataBytes, err := json.Marshal(data)
+	if err != nil {
+		return "", err
+	}
+	hexEncodedData := hex.EncodeToString(dynamicSecretDataBytes)
+
+	etag := sha256.Sum256(fmt.Appendf(nil, "%s-%s", etagData, hexEncodedData))
+	return hex.EncodeToString(etag[:]), nil
+}
+
 func secretTemplateFunction(accessToken string, currentEtag *string) func(string, string, string, ...string) ([]models.SingleEnvironmentVariable, error) {
 	// ...string is because golang doesn't have optional arguments.
 	// thus we make it slice and pick it only first element
@@ -924,7 +944,7 @@ func secretTemplateFunction(accessToken string, currentEtag *string) func(string
 			return nil, err
 		}
 
-		*currentEtag = res.Etag
+		appendTemplateEtag(currentEtag, res.Etag)
 
 		return res.Secrets, nil
 	}
@@ -953,7 +973,7 @@ func getSingleSecretTemplateFunction(accessToken string, currentEtag *string) fu
 		if err != nil {
 			return models.SingleEnvironmentVariable{}, err
 		}
-		*currentEtag = etag
+		appendTemplateEtag(currentEtag, etag)
 
 		return secret, nil
 	}
@@ -984,15 +1004,11 @@ func dynamicSecretTemplateFunction(accessToken string, dynamicSecretManager *Dyn
 		if dynamicSecretData != nil {
 			dynamicSecretManager.RegisterTemplateUnsafe(projectSlug, envSlug, secretPath, slug, templateId, ttl, principals)
 
-			etagData := fmt.Sprintf("%s-%s-%s-%s-%s-%s", projectSlug, envSlug, secretPath, slug, ttl, principals)
-			dynamicSecretDataBytes, err := json.Marshal(dynamicSecretData.Data)
+			etag, err := dynamicSecretEtag(projectSlug, envSlug, secretPath, slug, ttl, principals, dynamicSecretData.Data)
 			if err != nil {
 				return nil, err
 			}
-			hexEncodedData := hex.EncodeToString(dynamicSecretDataBytes)
-
-			etag := sha256.Sum256([]byte(fmt.Sprintf("%s-%s", etagData, hexEncodedData)))
-			*currentEtag = hex.EncodeToString(etag[:])
+			appendTemplateEtag(currentEtag, etag)
 
 			return dynamicSecretData.Data, nil
 		}
@@ -1029,6 +1045,13 @@ func dynamicSecretTemplateFunction(accessToken string, dynamicSecretManager *Dyn
 		}
 
 		dynamicSecretManager.AppendUnsafe(DynamicSecretLeaseWithTTL{LeaseID: res.Id, ExpireAt: res.ExpireAt, Environment: envSlug, SecretPath: secretPath, Slug: slug, ProjectSlug: projectSlug, Data: leaseData, TemplateIDs: []int{templateId}, RequestedLeaseTTL: ttl, Principals: principals})
+
+		// same etag the next render computes from the stored lease, so a fresh lease re-renders once instead of again on the next poll
+		etag, err := dynamicSecretEtag(projectSlug, envSlug, secretPath, slug, ttl, principals, leaseData)
+		if err != nil {
+			return nil, err
+		}
+		appendTemplateEtag(currentEtag, etag)
 
 		return leaseData, nil
 	}
@@ -1901,6 +1924,9 @@ func (tm *AgentManager) MonitorSecretChanges(ctx context.Context, secretTemplate
 
 					var processedTemplate *bytes.Buffer
 					var err error
+
+					// every fetch in the template folds its etag into currentEtag, so start each render from scratch
+					currentEtag = ""
 
 					if secretTemplate.SourcePath != "" {
 						processedTemplate, err = ProcessTemplate(templateId, secretTemplate.SourcePath, nil, token, &currentEtag, tm.dynamicSecretLeases, tm)
