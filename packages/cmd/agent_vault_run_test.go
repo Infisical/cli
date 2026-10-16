@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
 func selfSignedPEM(t *testing.T, cn string) string {
@@ -204,6 +206,236 @@ func TestValidateProxyAddrNamesWhatFollowsThePort(t *testing.T) {
 		err := validateProxyAddr(addr)
 		if err == nil || !strings.Contains(err.Error(), "nothing after the port") {
 			t.Errorf("%q: want the trailing-path message, got %v", addr, err)
+		}
+	}
+}
+
+func sessionTokenCmd(t *testing.T, args ...string) *cobra.Command {
+	t.Helper()
+	cmd := &cobra.Command{Use: "run", Run: func(*cobra.Command, []string) {}}
+	cmd.Flags().String("session-token", "", "")
+	if err := cmd.Flags().Parse(args); err != nil {
+		t.Fatal(err)
+	}
+	return cmd
+}
+
+func TestResolveAgentVaultSessionTokenPrefersTheFlag(t *testing.T) {
+	t.Setenv(agentVaultSessionTokenEnv, "agv_from_env")
+
+	token, source, err := resolveAgentVaultSessionToken(sessionTokenCmd(t, "--session-token", "agv_from_flag"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "agv_from_flag" || source != agentVaultSourceFlag {
+		t.Errorf("the flag should win over the environment, got %q source=%v", token, source)
+	}
+}
+
+func TestResolveAgentVaultSessionTokenFallsBackToTheEnvironment(t *testing.T) {
+	t.Setenv(agentVaultSessionTokenEnv, "  agv_from_env  ")
+
+	token, source, err := resolveAgentVaultSessionToken(sessionTokenCmd(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "agv_from_env" {
+		t.Errorf("want the environment value trimmed, got %q", token)
+	}
+	if source != agentVaultSourceEnv {
+		t.Errorf("a token out of the environment must report itself as such, got %v", source)
+	}
+}
+
+func TestResolveAgentVaultSessionTokenIgnoresABlankEnvironmentValue(t *testing.T) {
+	t.Setenv(agentVaultSessionTokenEnv, "   ")
+
+	token, source, err := resolveAgentVaultSessionToken(sessionTokenCmd(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "" || source != agentVaultSourceNone {
+		t.Errorf("a blank variable names no session, got %q source=%v", token, source)
+	}
+}
+
+func TestResolveAgentVaultSessionTokenRefusesAnEmptyFlag(t *testing.T) {
+	t.Setenv(agentVaultSessionTokenEnv, "agv_from_env")
+
+	if _, _, err := resolveAgentVaultSessionToken(sessionTokenCmd(t, "--session-token", "")); err == nil {
+		t.Fatal("an explicitly empty --session-token should be an error, not a fall back to the environment")
+	}
+}
+
+func TestResolveAgentVaultSessionTokenWithNeitherSourceIsEmpty(t *testing.T) {
+	t.Setenv(agentVaultSessionTokenEnv, "")
+
+	token, source, err := resolveAgentVaultSessionToken(sessionTokenCmd(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "" || source != agentVaultSourceNone {
+		t.Errorf("want no token, got %q source=%v", token, source)
+	}
+}
+
+func TestBuildAgentVaultRunEnvDropsAStaleSessionTokenVariable(t *testing.T) {
+	parent := []string{agentVaultSessionTokenEnv + "=agv_stale", "PATH=/usr/bin"}
+
+	env := buildAgentVaultRunEnv(parent, "10.0.1.5:17323", "agv_minted", "", "")
+
+	for _, kv := range env {
+		if strings.Contains(kv, "agv_stale") {
+			t.Fatalf("a session other than this run's reached the agent through %q", kv)
+		}
+	}
+	if !strings.Contains(strings.Join(env, " "), "agv_minted") {
+		t.Error("the minted session should still reach the agent in the proxy URL")
+	}
+}
+
+func TestBuildAgentVaultRunEnvKeepsTheVariableThatHoldsThisSession(t *testing.T) {
+	// Removing it here would hide nothing: the same token is the proxy password either way.
+	parent := []string{agentVaultSessionTokenEnv + "=agv_this_run", "PATH=/usr/bin"}
+
+	env := buildAgentVaultRunEnv(parent, "10.0.1.5:17323", "agv_this_run", "", "")
+
+	var kept bool
+	for _, kv := range env {
+		if kv == agentVaultSessionTokenEnv+"=agv_this_run" {
+			kept = true
+		}
+	}
+	if !kept {
+		t.Errorf("the variable naming this run's own session should be left alone, got %q", env)
+	}
+}
+
+func TestAgentVaultSourceNameBlamesWhatWasActuallyUsed(t *testing.T) {
+	if got := agentVaultSourceName(agentVaultSourceEnv, "--session-token", agentVaultSessionTokenEnv); got != agentVaultSessionTokenEnv {
+		t.Errorf("a variable should be named in the message, got %q", got)
+	}
+	if got := agentVaultSourceName(agentVaultSourceFlag, "--session-token", agentVaultSessionTokenEnv); got != "--session-token" {
+		t.Errorf("a flag should be named in the message, got %q", got)
+	}
+}
+
+func accessBundleCmd(t *testing.T, args ...string) *cobra.Command {
+	t.Helper()
+	cmd := &cobra.Command{Use: "run", Run: func(*cobra.Command, []string) {}}
+	cmd.Flags().StringArray("access-bundle", nil, "")
+	if err := cmd.Flags().Parse(args); err != nil {
+		t.Fatal(err)
+	}
+	return cmd
+}
+
+func TestResolveAgentVaultAccessBundlesPrefersTheFlag(t *testing.T) {
+	t.Setenv(agentVaultAccessBundleEnv, "from-env")
+
+	bundles, source, err := resolveAgentVaultAccessBundles(accessBundleCmd(t, "--access-bundle", "from-flag"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bundles) != 1 || bundles[0] != "from-flag" || source != agentVaultSourceFlag {
+		t.Errorf("the flag should win over the environment, got %q source=%v", bundles, source)
+	}
+}
+
+func TestResolveAgentVaultAccessBundlesFallsBackToTheEnvironment(t *testing.T) {
+	t.Setenv(agentVaultAccessBundleEnv, "  code-review  ")
+
+	bundles, source, err := resolveAgentVaultAccessBundles(accessBundleCmd(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bundles) != 1 || bundles[0] != "code-review" || source != agentVaultSourceEnv {
+		t.Errorf("want the environment value trimmed, got %q source=%v", bundles, source)
+	}
+}
+
+func TestResolveAgentVaultAccessBundlesIgnoresABlankEnvironmentValue(t *testing.T) {
+	t.Setenv(agentVaultAccessBundleEnv, "   ")
+
+	bundles, source, err := resolveAgentVaultAccessBundles(accessBundleCmd(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bundles) != 0 || source != agentVaultSourceNone {
+		t.Errorf("a blank variable names no bundle, got %q source=%v", bundles, source)
+	}
+}
+
+func TestResolveAgentVaultAccessBundlesRefusesAnEmptyFlag(t *testing.T) {
+	t.Setenv(agentVaultAccessBundleEnv, "from-env")
+
+	if _, _, err := resolveAgentVaultAccessBundles(accessBundleCmd(t, "--access-bundle", "")); err == nil {
+		t.Fatal("an explicitly empty --access-bundle should be an error, not a fall back to the environment")
+	}
+}
+
+func TestResolveAgentVaultAccessBundlesKeepsEveryFlagName(t *testing.T) {
+	// The count is what the one-bundle rule rejects by name, so both have to survive resolution.
+	bundles, _, err := resolveAgentVaultAccessBundles(accessBundleCmd(t, "--access-bundle", "a", "--access-bundle", "b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bundles) != 2 {
+		t.Errorf("want both names, got %q", bundles)
+	}
+}
+
+func TestDecideAgentVaultSession(t *testing.T) {
+	const (
+		none = agentVaultSourceNone
+		env  = agentVaultSourceEnv
+		flag = agentVaultSourceFlag
+	)
+	for _, tc := range []struct {
+		name        string
+		token       agentVaultSource
+		bundle      agentVaultSource
+		wantErr     bool
+		wantToken   bool
+		wantWarning bool
+	}{
+		{"neither names a session", none, none, true, false, false},
+		{"bundle variable alone mints", none, env, false, false, false},
+		{"bundle flag alone mints", none, flag, false, false, false},
+		{"token variable alone runs on it", env, none, false, true, false},
+		{"token flag alone runs on it", flag, none, false, true, false},
+		{"both flags is a conflict", flag, flag, true, false, false},
+		{"both variables is a tie we refuse", env, env, true, false, false},
+		{"token flag beats the bundle variable", flag, env, false, true, true},
+		{"bundle flag beats the token variable", env, flag, false, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			useToken, warning, err := decideAgentVaultSession(tc.token, tc.bundle)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, want error %v", err, tc.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			if useToken != tc.wantToken {
+				t.Errorf("useToken = %v, want %v", useToken, tc.wantToken)
+			}
+			if (warning != "") != tc.wantWarning {
+				t.Errorf("warning = %q, want one %v", warning, tc.wantWarning)
+			}
+		})
+	}
+}
+
+func TestDecideAgentVaultSessionTieErrorNamesBothVariables(t *testing.T) {
+	// Both ways out have to be named: unsetting one variable, or a flag that picks between them.
+	_, _, err := decideAgentVaultSession(agentVaultSourceEnv, agentVaultSourceEnv)
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	for _, want := range []string{agentVaultSessionTokenEnv, agentVaultAccessBundleEnv, "--session-token", "--access-bundle"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the message should name %q, got %q", want, err)
 		}
 	}
 }
