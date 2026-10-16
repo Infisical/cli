@@ -911,7 +911,7 @@ func appendTemplateEtag(currentEtag *string, etag string) {
 	*currentEtag = hex.EncodeToString(combined[:])
 }
 
-func dynamicSecretEtag(projectSlug, envSlug, secretPath, slug, ttl, principals string, data map[string]interface{}) (string, error) {
+func dynamicSecretEtag(projectSlug, envSlug, secretPath, slug, ttl, principals string, data map[string]any) (string, error) {
 	etagData := fmt.Sprintf("%s-%s-%s-%s-%s-%s", projectSlug, envSlug, secretPath, slug, ttl, principals)
 	dynamicSecretDataBytes, err := json.Marshal(data)
 	if err != nil {
@@ -919,7 +919,7 @@ func dynamicSecretEtag(projectSlug, envSlug, secretPath, slug, ttl, principals s
 	}
 	hexEncodedData := hex.EncodeToString(dynamicSecretDataBytes)
 
-	etag := sha256.Sum256([]byte(fmt.Sprintf("%s-%s", etagData, hexEncodedData)))
+	etag := sha256.Sum256(fmt.Appendf(nil, "%s-%s", etagData, hexEncodedData))
 	return hex.EncodeToString(etag[:]), nil
 }
 
