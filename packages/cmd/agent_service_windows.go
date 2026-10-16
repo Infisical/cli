@@ -55,6 +55,43 @@ func restrictToAdministrators(path string) error {
 		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, owner, nil, dacl, nil)
 }
 
+// checkOwnedByAdministrators fails unless path itself, not what a link there points to, is owned by Administrators
+// or SYSTEM. It is only needed for paths install did not create: one install creates is restricted right away.
+func checkOwnedByAdministrators(path string) error {
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	// FILE_FLAG_OPEN_REPARSE_POINT opens a junction or symbolic link itself; FILE_FLAG_BACKUP_SEMANTICS opens folders
+	handle, err := windows.CreateFile(name, windows.READ_CONTROL|windows.FILE_READ_ATTRIBUTES, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil, windows.OPEN_EXISTING, windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		return fmt.Errorf("unable to open %s: %w", path, err)
+	}
+	defer windows.CloseHandle(handle)
+
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(handle, &info); err != nil {
+		return fmt.Errorf("unable to read %s: %w", path, err)
+	}
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		return fmt.Errorf("%s is a link to another location, so a standard user may have created it to redirect the agent's logs. Check it, delete it and install again", path)
+	}
+
+	sd, err := windows.GetSecurityInfo(handle, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	if err != nil {
+		return fmt.Errorf("unable to read the owner of %s: %w", path, err)
+	}
+	owner, _, err := sd.Owner()
+	if err != nil {
+		return fmt.Errorf("unable to read the owner of %s: %w", path, err)
+	}
+	if !owner.IsWellKnown(windows.WinBuiltinAdministratorsSid) && !owner.IsWellKnown(windows.WinLocalSystemSid) {
+		return fmt.Errorf("%s is owned by %s rather than Administrators, so a standard user may have created it to read or redirect the agent's logs. Check it, delete it and install again", path, owner)
+	}
+	return nil
+}
+
 // agentServiceDir holds a service's own copies of infisical.exe and of its config
 func agentServiceDir(name string) string {
 	programFiles := os.Getenv("ProgramFiles")
@@ -179,6 +216,31 @@ func installAgentService(name string, configPath string) error {
 		return fmt.Errorf("a service named %s already exists. To replace it, first run: infisical agent service uninstall %s", opts.Name, opts.Name)
 	}
 
+	// logs can hold secret values at debug level. Standard users may create folders in %ProgramData%, so the folders
+	// that hold the logs, and a log file that already exists, must not be ones a standard user created to read the
+	// logs, swap the folder or point it elsewhere
+	logFile := agentServiceLogFile(opts.Name)
+	for _, dir := range []string{filepath.Dir(filepath.Dir(logFile)), filepath.Dir(logFile)} {
+		if err := os.Mkdir(dir, 0o755); os.IsExist(err) {
+			if err := checkOwnedByAdministrators(dir); err != nil {
+				return err
+			}
+		} else if err != nil {
+			return fmt.Errorf("unable to create %s: %w", dir, err)
+		}
+		if err := restrictToAdministrators(dir); err != nil {
+			return fmt.Errorf("unable to restrict access to %s to Administrators: %w", dir, err)
+		}
+	}
+	if FileExists(logFile) {
+		if err := checkOwnedByAdministrators(logFile); err != nil {
+			return err
+		}
+		if err := restrictToAdministrators(logFile); err != nil {
+			return fmt.Errorf("unable to restrict access to %s to Administrators: %w", logFile, err)
+		}
+	}
+
 	executable, err := copyAgentServiceExecutable(opts.Name, opts.Executable)
 	if err != nil {
 		return fmt.Errorf("unable to copy infisical.exe into %s: %w", agentServiceDir(opts.Name), err)
@@ -189,19 +251,6 @@ func installAgentService(name string, configPath string) error {
 	configCopy := agentServiceConfigCopy(opts.Name)
 	if err := os.WriteFile(configCopy, opts.ConfigData, 0o600); err != nil {
 		return fmt.Errorf("unable to copy the config into %s: %w", agentServiceDir(opts.Name), err)
-	}
-	logDir := filepath.Dir(agentServiceLogFile(opts.Name))
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
-		return fmt.Errorf("unable to create %s: %w", logDir, err)
-	}
-	if err := restrictToAdministrators(logDir); err != nil {
-		return fmt.Errorf("unable to restrict access to %s to Administrators: %w", logDir, err)
-	}
-	// a log file that already exists keeps its own owner and permissions, e.g. one a standard user created to read the logs
-	if logFile := agentServiceLogFile(opts.Name); FileExists(logFile) {
-		if err := restrictToAdministrators(logFile); err != nil {
-			return fmt.Errorf("unable to restrict access to %s to Administrators: %w", logFile, err)
-		}
 	}
 
 	s, err := m.CreateService(opts.Name, executable, mgr.Config{

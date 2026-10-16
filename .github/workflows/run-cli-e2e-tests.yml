@@ -252,7 +252,7 @@ jobs:
           $binary = (Get-CimInstance Win32_Service -Filter "Name='ci-agent'").PathName
           if ($binary -notlike "*$serviceDir\infisical.exe*--config*$configCopy*") { throw "the service does not run its own copies of infisical.exe and the config: $binary" }
           if ((Get-FileHash $configCopy).Hash -ne (Get-FileHash $config).Hash) { throw 'the config copy differs from the config' }
-          foreach ($path in @($configCopy, (Split-Path $log), $serviceDir)) {
+          foreach ($path in @($configCopy, (Split-Path $log), (Split-Path (Split-Path $log)), $serviceDir)) {
             if ((Get-Acl $path).Access | Where-Object { $_.IdentityReference -match 'Users' }) { throw "$path is still accessible to standard users" }
           }
           & $exe agent service start ci-agent

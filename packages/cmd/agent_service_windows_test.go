@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -81,4 +82,14 @@ func TestNewAgentServiceOptionsRejectsBadInput(t *testing.T) {
 func TestAgentServiceLogFile(t *testing.T) {
 	t.Setenv("ProgramData", `D:\Data`)
 	assert.Equal(t, `D:\Data\Infisical\Agent\chef-secrets.log`, agentServiceLogFile("chef-secrets"))
+}
+
+func TestAgentServiceLogFolderRefusesLinks(t *testing.T) {
+	// standard users can create junctions, so one in place of the log folder could redirect the agent's logs
+	target := t.TempDir()
+	junction := filepath.Join(t.TempDir(), "Agent")
+	require.NoError(t, exec.Command("cmd", "/c", "mklink", "/J", junction, target).Run())
+
+	assert.ErrorContains(t, checkOwnedByAdministrators(junction), "is a link to another location")
+	assert.ErrorContains(t, checkOwnedByAdministrators(filepath.Join(target, "missing.log")), "unable to open")
 }
