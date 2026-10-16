@@ -95,15 +95,15 @@ var agentVaultRunCmd = &cobra.Command{
 
 The agent's HTTP traffic is pointed at the proxy, which attaches the real credential at the network boundary.
 The process you start receives a session token, the proxy address and the proxy's certificate authority, and
-inherits the rest of your environment unchanged.
+inherits the rest of your environment.
 
 Two ways to get a session, exactly one of them required:
 
   --access-bundle   mint one now over the named bundle, or set INFISICAL_AGENT_VAULT_ACCESS_BUNDLE
                     (needs your login or a machine identity). Revoked when the agent exits unless
                     --keep-session is set.
-  --session-token   run with a session token minted in the dashboard, or set INFISICAL_AGENT_VAULT_SESSION_TOKEN
-                    to keep it off the command line. Never revoked by this command.
+  --session-token   run with a session token minted in the dashboard, or set
+                    INFISICAL_AGENT_VAULT_SESSION_TOKEN. Never revoked by this command.
 
 Both accept a variable instead of the flag, and a flag beats a variable. If both variables are set and
 neither flag is passed, the run stops and asks which you meant.
@@ -140,6 +140,7 @@ func nonBlank(values []string) []string {
 const (
 	agentVaultSessionTokenEnv = "INFISICAL_AGENT_VAULT_SESSION_TOKEN"
 	agentVaultAccessBundleEnv = "INFISICAL_AGENT_VAULT_ACCESS_BUNDLE"
+	agentVaultProxyAddressEnv = "INFISICAL_AGENT_VAULT_PROXY_ADDRESS"
 )
 
 // Where a setting came from. A flag was typed for this run; a variable is ambient and may be left over
@@ -218,6 +219,15 @@ func decideAgentVaultSession(tokenSource, bundleSource agentVaultSource) (useTok
 	}
 }
 
+// Which of the two spellings of a setting to blame in a message, so an operator who typed no flag is not
+// pointed at one.
+func agentVaultSourceName(source agentVaultSource, flagName, envName string) string {
+	if source == agentVaultSourceEnv {
+		return envName
+	}
+	return flagName
+}
+
 func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	sessionToken, tokenSource, err := resolveAgentVaultSessionToken(cmd)
 	if err != nil {
@@ -235,10 +245,14 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	if warning != "" {
 		util.PrintWarning(warning)
 	}
+	// The discarded side stops being a source, so later messages and the summary only ever name what this
+	// run actually used.
 	if useToken {
 		accessBundles = nil
+		bundleSource = agentVaultSourceNone
 	} else {
 		sessionToken = ""
+		tokenSource = agentVaultSourceNone
 	}
 
 	if len(accessBundles) > 1 {
@@ -246,7 +260,8 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	}
 	for _, name := range accessBundles {
 		if !agentVaultBundleNameRe.MatchString(name) {
-			util.HandleError(fmt.Errorf("%q is not an access bundle name; names are lowercase letters, numbers and hyphens, for example 'coding-agent'", name))
+			util.HandleError(fmt.Errorf("%q from %s is not an access bundle name; names are lowercase letters, numbers and hyphens, for example 'coding-agent'",
+				name, agentVaultSourceName(bundleSource, "--access-bundle", agentVaultAccessBundleEnv)))
 		}
 	}
 
@@ -254,17 +269,23 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 
 	// Neither flag can reach a session minted in the dashboard: its expiry was fixed when it was created.
 	if sessionToken != "" {
+		tokenName := agentVaultSourceName(tokenSource, "--session-token", agentVaultSessionTokenEnv)
 		if cmd.Flags().Changed("ttl") {
 			util.HandleError(fmt.Errorf(
-				"--ttl applies to a session this command mints; the one behind --session-token was given its lifetime in the dashboard. Drop --ttl, or mint here with --access-bundle"))
+				"--ttl applies to a session this command mints; the one behind %s was given its lifetime in the dashboard. Drop --ttl, or mint here with --access-bundle", tokenName))
 		}
 		if cmd.Flags().Changed("keep-session") {
 			util.HandleError(fmt.Errorf(
-				"--keep-session applies to a session this command mints; the one behind --session-token is never revoked here. Drop --keep-session, or mint here with --access-bundle"))
+				"--keep-session applies to a session this command mints; the one behind %s is never revoked here. Drop --keep-session, or mint here with --access-bundle", tokenName))
 		}
 	}
 
-	proxyAddr, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "proxy", []string{"INFISICAL_AGENT_VAULT_PROXY_ADDRESS"}, "")
+	// Same reasoning as the empty --session-token: "$AV_PROXY" with the variable unset would otherwise fall
+	// through to whatever the environment holds, and the session token is sent to that address.
+	if flagValue, _ := cmd.Flags().GetString("proxy"); cmd.Flags().Changed("proxy") && strings.TrimSpace(flagValue) == "" {
+		util.HandleError(fmt.Errorf("--proxy was given but is empty; pass the address as host:port, or drop the flag and set %s", agentVaultProxyAddressEnv))
+	}
+	proxyAddr, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "proxy", []string{agentVaultProxyAddressEnv}, "")
 	if err != nil {
 		util.HandleError(err, "Unable to read --proxy")
 	}
@@ -379,7 +400,7 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 
 	env := buildAgentVaultRunEnv(os.Environ(), proxyAddr, sessionToken, caPath, extraNoProxy)
 
-	printAgentVaultRunSummary(proxyAddr, caResp, servedFingerprint, minted)
+	printAgentVaultRunSummary(proxyAddr, caResp, servedFingerprint, minted, tokenSource, bundleSource)
 
 	exitCode := runAgentVaultChild(args, env)
 
@@ -461,16 +482,42 @@ func resolveAgentVaultIdentityToken(cmd *cobra.Command) string {
 	return details.UserCredentials.JTWToken
 }
 
+// Windows resolves variable names case-insensitively, so os.Getenv finds a lowercase spelling and the run
+// uses it, while an exact match here would hand that same spelling to the agent.
+func isAgentVaultSessionTokenKey(key string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(key, agentVaultSessionTokenEnv)
+	}
+	return key == agentVaultSessionTokenEnv
+}
+
 // The parent's environment, with stale proxy settings replaced by ours and the CA-trust variables added.
-// Nothing else is removed.
+//
+// Only one variable is removed, and not to keep a secret from the agent. This command does not sandbox it,
+// so on a workstation it runs as the operator and can read the stored login regardless of its environment.
+// In a container the identity credentials may exist only in the environment, but there they belong to a
+// machine identity granted the one bundle the agent was started on, so a session it mints for itself
+// reaches no further than the one it was given. Those credentials, the bundle name and the domain are
+// inherited on purpose.
+//
+// The session token variable is the exception, because the agent could run on that session instead of this
+// run's:
+//
+//	INFISICAL_AGENT_VAULT_SESSION_TOKEN=agv_old   # this morning's session, wider bundle
+//	infisical agent-vault run --access-bundle code-review --proxy ... -- claude
+//
+// That run mints a narrow session and prints that it is ignoring agv_old, then without this would hand
+// agv_old to the agent anyway. The same happens with --session-token agv_new while the variable still holds
+// agv_old. So it is dropped whenever it names a session other than the one being handed over, and kept when
+// it names that same session, where the agent already has it as the proxy password.
+//
+// 'secrets agent-proxy run' strips a longer list because its agent is sandboxed and cannot read those
+// credentials back from disk.
 func buildAgentVaultRunEnv(parent []string, proxyAddr, sessionToken, caPath, extraNoProxy string) []string {
 	stale := map[string]bool{}
 	for _, k := range proxyEnvKeys {
 		stale[k] = true
 	}
-	// The agent's session is the one in the proxy URL. An inherited token is either that same secret a
-	// second time or, on an --access-bundle run, the one this command just said it was ignoring.
-	stale[agentVaultSessionTokenEnv] = true
 
 	var operatorNoProxy []string
 	env := map[string]string{}
@@ -481,6 +528,9 @@ func buildAgentVaultRunEnv(parent []string, proxyAddr, sessionToken, caPath, ext
 		}
 		if parts[0] == "NO_PROXY" || parts[0] == "no_proxy" {
 			operatorNoProxy = append(operatorNoProxy, parts[1])
+			continue
+		}
+		if isAgentVaultSessionTokenKey(parts[0]) && parts[1] != sessionToken {
 			continue
 		}
 		if !stale[parts[0]] {
@@ -559,10 +609,17 @@ func agentVaultFingerprintsEqual(a, b string) bool {
 	return normalize(a) != "" && normalize(a) == normalize(b)
 }
 
-func printAgentVaultRunSummary(proxyAddr string, ca agentVaultProxyCa, fingerprint string, minted *api.AgentVaultSession) {
+func printAgentVaultRunSummary(proxyAddr string, ca agentVaultProxyCa, fingerprint string, minted *api.AgentVaultSession, tokenSource, bundleSource agentVaultSource) {
 	dim := color.HiBlackString
 	fmt.Fprintln(os.Stderr, color.GreenString("Starting agent behind Agent Vault proxy %q at %s", ca.Name, proxyAddr))
 	fmt.Fprintln(os.Stderr, dim("proxy CA fingerprint: "+fingerprint))
+	// A flag was typed and needs no echo. A variable is ambient, so the run says which session it picked up.
+	if tokenSource == agentVaultSourceEnv {
+		fmt.Fprintln(os.Stderr, dim("session from "+agentVaultSessionTokenEnv))
+	}
+	if bundleSource == agentVaultSourceEnv {
+		fmt.Fprintln(os.Stderr, dim("access bundle from "+agentVaultAccessBundleEnv))
+	}
 	if minted != nil {
 		expiry := "never"
 		if minted.ExpiresAt != nil {
@@ -603,9 +660,9 @@ func runAgentVaultChild(args, env []string) int {
 func init() {
 	agentVaultRunCmd.Flags().StringArray("access-bundle", nil, "mint a session over the access bundle with this `name` (falls back to "+agentVaultAccessBundleEnv+")")
 	agentVaultRunCmd.Flags().String("session-token", "", "run with a session token minted in the dashboard instead of minting one (falls back to "+agentVaultSessionTokenEnv+")")
-	agentVaultRunCmd.Flags().String("ttl", "7d", "lifetime of the session this command creates: one number and one unit, such as 30m, 8h or 7d (not 2h30m), or never")
+	agentVaultRunCmd.Flags().String("ttl", "never", "lifetime of the session this command creates: one number and one unit, such as 30m, 8h or 7d (not 2h30m), or never")
 	agentVaultRunCmd.Flags().Bool("keep-session", false, "leave a minted session active when the agent exits")
-	agentVaultRunCmd.Flags().String("proxy", "", "address of the Agent Vault proxy as host:port (falls back to INFISICAL_AGENT_VAULT_PROXY_ADDRESS)")
+	agentVaultRunCmd.Flags().String("proxy", "", "address of the Agent Vault proxy as host:port (falls back to "+agentVaultProxyAddressEnv+")")
 	agentVaultRunCmd.Flags().String("ca-fingerprint", "", "abort unless the proxy's certificate authority matches this SHA256 fingerprint from the Proxies page")
 	agentVaultRunCmd.Flags().String("no-proxy", "", "additional comma-separated hosts to bypass the proxy (always merged with localhost,127.0.0.1)")
 	agentVaultRunCmd.Flags().String("ca-file", "", "where to write the certificate authority fetched from the proxy; an output path, not a CA to trust (default: "+filepath.Join(defaultDataDirHelp(), "ca-<proxy-id>.pem")+")")

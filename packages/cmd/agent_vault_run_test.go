@@ -279,21 +279,44 @@ func TestResolveAgentVaultSessionTokenWithNeitherSourceIsEmpty(t *testing.T) {
 	}
 }
 
-func TestBuildAgentVaultRunEnvDropsTheSessionTokenVariable(t *testing.T) {
+func TestBuildAgentVaultRunEnvDropsAStaleSessionTokenVariable(t *testing.T) {
 	parent := []string{agentVaultSessionTokenEnv + "=agv_stale", "PATH=/usr/bin"}
 
 	env := buildAgentVaultRunEnv(parent, "10.0.1.5:17323", "agv_minted", "", "")
 
 	for _, kv := range env {
-		if strings.HasPrefix(kv, agentVaultSessionTokenEnv+"=") {
-			t.Fatalf("the agent must not inherit a session token the proxy URL did not give it, got %q", kv)
-		}
 		if strings.Contains(kv, "agv_stale") {
-			t.Fatalf("a stale token reached the agent through %q", kv)
+			t.Fatalf("a session other than this run's reached the agent through %q", kv)
 		}
 	}
 	if !strings.Contains(strings.Join(env, " "), "agv_minted") {
 		t.Error("the minted session should still reach the agent in the proxy URL")
+	}
+}
+
+func TestBuildAgentVaultRunEnvKeepsTheVariableThatHoldsThisSession(t *testing.T) {
+	// Removing it here would hide nothing: the same token is the proxy password either way.
+	parent := []string{agentVaultSessionTokenEnv + "=agv_this_run", "PATH=/usr/bin"}
+
+	env := buildAgentVaultRunEnv(parent, "10.0.1.5:17323", "agv_this_run", "", "")
+
+	var kept bool
+	for _, kv := range env {
+		if kv == agentVaultSessionTokenEnv+"=agv_this_run" {
+			kept = true
+		}
+	}
+	if !kept {
+		t.Errorf("the variable naming this run's own session should be left alone, got %q", env)
+	}
+}
+
+func TestAgentVaultSourceNameBlamesWhatWasActuallyUsed(t *testing.T) {
+	if got := agentVaultSourceName(agentVaultSourceEnv, "--session-token", agentVaultSessionTokenEnv); got != agentVaultSessionTokenEnv {
+		t.Errorf("a variable should be named in the message, got %q", got)
+	}
+	if got := agentVaultSourceName(agentVaultSourceFlag, "--session-token", agentVaultSessionTokenEnv); got != "--session-token" {
+		t.Errorf("a flag should be named in the message, got %q", got)
 	}
 }
 
@@ -405,7 +428,7 @@ func TestDecideAgentVaultSession(t *testing.T) {
 }
 
 func TestDecideAgentVaultSessionTieErrorNamesBothVariables(t *testing.T) {
-	// The way out is a flag, so the message has to say so without telling anyone to unset their shell.
+	// Both ways out have to be named: unsetting one variable, or a flag that picks between them.
 	_, _, err := decideAgentVaultSession(agentVaultSourceEnv, agentVaultSourceEnv)
 	if err == nil {
 		t.Fatal("want an error")
