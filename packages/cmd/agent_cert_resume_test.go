@@ -515,3 +515,81 @@ func TestResumeCertificateFromDisk_IssuesWhenCertificateWasAlreadyRenewed(t *tes
 	assert.Zero(t, server.renewCalls)
 	assert.Equal(t, "pending", tm.certificateStates[1].Status)
 }
+
+func deliverCertificateWithChain(t *testing.T, cfg *AgentCertificateConfig, c testCertificateChain) {
+	t.Helper()
+	tm := &AgentManager{}
+	require.NoError(t, tm.WriteCertificateFiles(cfg, &api.CertificateResponse{
+		Certificate: &api.CertificateData{
+			Certificate:      c.leaf,
+			CertificateChain: c.intermediate + c.root,
+			PrivateKey:       "key",
+			SerialNumber:     "1",
+			CertificateID:    resumeTestCertificateID,
+		},
+	}))
+}
+
+func TestResumeCertificateFromDisk_ResumesWrittenChainOutputs(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		combine   bool
+		chainPath bool
+	}{
+		{name: "combined certificate file", combine: true},
+		{name: "chain file without the root", chainPath: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := newResumeTestConfig(t.TempDir())
+			cfg.Lifecycle.RenewBeforeExpiry = "1m"
+			cfg.FileConfig.CombineCertificateChain = tc.combine
+			if tc.chainPath {
+				cfg.FileConfig.Chain.Path = filepath.Join(filepath.Dir(cfg.FileConfig.Certificate.Path), "chain.pem")
+			}
+			deliverCertificateWithChain(t, cfg, newTestCertificateChain(t))
+
+			server := &resumeTestServer{status: "active", serial: "1", notAfter: time.Now().Add(time.Hour)}
+			server.start(t, nil)
+
+			tm := newResumeTestManager(cfg)
+			assert.True(t, tm.resumeCertificateFromDisk(1, cfg))
+			assert.Zero(t, server.issueCalls)
+			assert.Zero(t, server.renewCalls)
+		})
+	}
+}
+
+func TestResumeCertificateFromDisk_IssuesWhenCombineCertificateChainChanged(t *testing.T) {
+	cfg := newResumeTestConfig(t.TempDir())
+	cfg.Lifecycle.RenewBeforeExpiry = "1m"
+	deliverCertificateWithChain(t, cfg, newTestCertificateChain(t))
+
+	server := &resumeTestServer{status: "active", serial: "1", notAfter: time.Now().Add(time.Hour)}
+	server.start(t, nil)
+
+	cfg.FileConfig.CombineCertificateChain = true
+	tm := newResumeTestManager(cfg)
+	assert.False(t, tm.resumeCertificateFromDisk(1, cfg))
+}
+
+func TestConfigFingerprint_UnchangedWhenCombineCertificateChainIsOff(t *testing.T) {
+	cfg := newResumeTestConfig(t.TempDir())
+	payload, err := json.Marshal(struct {
+		ProfileID       string
+		ApplicationID   string
+		CSR             string
+		Attributes      *CertificateAttributes
+		CertificatePath string
+		PrivateKeyPath  string
+		ChainPath       string
+		ChainOmitRoot   *bool
+	}{
+		ProfileID:       cfg.ProfileID,
+		ApplicationID:   cfg.ApplicationID,
+		Attributes:      cfg.Attributes,
+		CertificatePath: cfg.FileConfig.Certificate.Path,
+		PrivateKeyPath:  cfg.FileConfig.PrivateKey.Path,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, contentHash(string(payload)), configFingerprint(cfg))
+}
