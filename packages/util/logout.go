@@ -119,6 +119,35 @@ func ClearStoredSession(profile models.Profile) error {
 	return firstErr
 }
 
+// PruneOrgSessionIndex removes the cached organization sessions listed on the
+// named profiles and saves the config. An entry whose token could not be
+// deleted stays listed, so a later logout can still remove it. Profiles that do
+// not exist are ignored.
+func PruneOrgSessionIndex(names []string) error {
+	configFile, err := GetMigratedConfigFile()
+	if err != nil {
+		return err
+	}
+
+	changed := false
+	for _, name := range names {
+		idx := findProfileIndex(configFile.Profiles, name)
+		if idx < 0 || len(configFile.Profiles[idx].OrgSessions) == 0 {
+			continue
+		}
+		kept := purgeOrgSessions(configFile.Profiles[idx])
+		if len(kept) != len(configFile.Profiles[idx].OrgSessions) {
+			configFile.Profiles[idx].OrgSessions = kept
+			changed = true
+		}
+	}
+
+	if !changed {
+		return nil
+	}
+	return WriteConfigFile(&configFile)
+}
+
 // RevokeSession ends a server-side session by id, authenticating with a token
 // that belongs to the account owning it.
 func RevokeSession(sessionToken string, sessionID string) error {
