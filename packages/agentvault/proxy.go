@@ -421,9 +421,10 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 
 	// reqPath was taken before forward, so a credential substituted into the path never reaches the record.
 	if outcome.sessionLog != nil {
-		var service, bundle *string
+		var service, bundle, serviceType *string
 		if matched != nil {
-			service, bundle = &matched.name, &matched.accessBundleName
+			kind := matched.serviceType()
+			service, bundle, serviceType = &matched.name, &matched.accessBundleName, &kind
 		}
 		ps.sessionLogs.record(outcome.sessionLog, sessionLogRecord{
 			Method:       reqMethod,
@@ -434,6 +435,8 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 			Decision:     decision,
 			Service:      service,
 			AccessBundle: bundle,
+			ServiceType:  serviceType,
+			MCP:          outcome.mcp,
 		})
 	}
 
@@ -477,6 +480,7 @@ type forwardOutcome struct {
 	brokered    bool
 	substituted []string
 	sessionLog  *sessionLogGrant
+	mcp         *mcpDetail
 }
 
 func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessionToken string) (*http.Response, *resolvedService, forwardOutcome, error) {
@@ -503,6 +507,9 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 	}
 
 	matched := bestMatch(services, hostname, port)
+	// Set only when the proxy injected a credential Infisical can refresh, which is what decides whether an
+	// upstream 401 or 403 is handled here or passed to the agent.
+	var sent *credential
 
 	if ps.blocksOffBundle(matched, hostname, port) {
 		return nil, nil, outcome, fmt.Errorf("no service covers host %q: %w", hostname, errHostBlocked)
@@ -533,6 +540,17 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 	}
 
 	if matched != nil {
+		// Before anything is injected, so the names it records can only have come from the agent. Parsed
+		// only for a session log; with logs off the body is still buffered for an OAuth credential, so a
+		// rejected token's request can be sent again.
+		if matched.kind == serviceKindMCP {
+			if grant != nil {
+				outcome.mcp = inspectMCPRequest(req)
+			} else if matched.credential.refreshable {
+				bufferMCPRequest(req)
+			}
+		}
+
 		// Substitutions first, so an injected real value can never itself be rewritten. The credential last,
 		// so a custom header naming the credential's own header loses rather than replacing the token.
 		substituted, err := applySubstitutions(req, matched.name, matched.substitutions)
@@ -547,6 +565,9 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 		}
 		if injectCredential(req, &matched.credential) {
 			outcome.brokered = true
+			if matched.credential.refreshable {
+				sent = &matched.credential
+			}
 		}
 
 		// After the brokered headers rather than before them, so a custom header cannot reintroduce an
@@ -569,9 +590,22 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 		}
 	}
 
+	// Captured before the round trip, which consumes the body.
+	var replay []byte
+	replayable := false
+	if sent != nil {
+		replay, replayable = replayableBody(req)
+	}
+
 	resp, err := ps.transport.RoundTrip(req)
 	if err != nil {
 		return nil, matched, outcome, err
+	}
+	if sent != nil {
+		resp, err = ps.handleUpstreamAuth(req, resp, matched, sessionToken, sent, replay, replayable)
+		if err != nil {
+			return nil, matched, outcome, err
+		}
 	}
 	return resp, matched, outcome, nil
 }
