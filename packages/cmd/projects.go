@@ -5,7 +5,9 @@ package cmd
 
 import (
 	"fmt"
+	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/util"
@@ -13,6 +15,7 @@ import (
 	"github.com/go-resty/resty/v2"
 	"github.com/google/uuid"
 	"github.com/posthog/posthog-go"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
@@ -54,7 +57,7 @@ infisical sm projects list --token <access-token>`,
 		Run:                   runProjectsList,
 	}
 	listCmd.Flags().String("token", "", "List projects using a machine identity access token")
-	util.AddOutputFlagsToCmd(listCmd, "The output to format the projects in.")
+	addProjectsOutputFlag(listCmd, "The output to format the projects in")
 	projectsCmd.AddCommand(listCmd)
 
 	getCmd := &cobra.Command{
@@ -70,7 +73,7 @@ infisical sm projects get`,
 	}
 	getCmd.Flags().String("projectId", "", "project id (falls back to INFISICAL_PROJECT_ID, then .infisical.yaml or a legacy .infisical.json)")
 	getCmd.Flags().String("token", "", "Get the project using a machine identity access token")
-	util.AddOutputFlagsToCmd(getCmd, "The output to format the project in.")
+	addProjectsOutputFlag(getCmd, "The output to format the project in")
 	projectsCmd.AddCommand(getCmd)
 
 	createCmd := &cobra.Command{
@@ -88,15 +91,16 @@ infisical sm projects create --name my-app --description "Backend service" --slu
 	createCmd.Flags().String("description", "", "Description of the project (up to 1024 characters)")
 	createCmd.Flags().String("slug", "", "Slug of the project (5-64 characters, generated from the name when omitted)")
 	createCmd.Flags().String("token", "", "Create the project using a machine identity access token")
-	util.AddOutputFlagsToCmd(createCmd, "The output to format the created project in.")
+	addProjectsOutputFlag(createCmd, "The output to format the created project in")
 	projectsCmd.AddCommand(createCmd)
 
 	return projectsCmd
 }
 
 // projectsHTTPClient authenticates with the machine identity token from --token or the
-// environment when there is one, and with the logged-in user's session otherwise.
-func projectsHTTPClient(cmd *cobra.Command) *resty.Client {
+// environment when there is one, and with the logged-in user's session otherwise. Service
+// tokens can only read a project by ID, so list and create pass allowServiceToken=false.
+func projectsHTTPClient(cmd *cobra.Command, allowServiceToken bool) *resty.Client {
 	token, err := util.GetInfisicalToken(cmd)
 	if err != nil {
 		util.HandleError(err, "Unable to parse flag")
@@ -107,8 +111,13 @@ func projectsHTTPClient(cmd *cobra.Command) *resty.Client {
 		util.HandleError(err, "Unable to get resty client with custom headers")
 	}
 
-	if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER {
-		util.PrintErrorMessageAndExit(fmt.Sprintf("Service tokens can't manage projects (from %s). Use a machine identity access token, or log in with [infisical login].", token.Source))
+	if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER && !allowServiceToken {
+		if cmd.Flags().Changed("token") {
+			util.PrintErrorMessageAndExit("Service tokens can't list or create projects. Pass a machine identity access token with --token, or log in with [infisical login].")
+		}
+		// INFISICAL_TOKEN is often set for run and secrets, so fall back to the login session.
+		log.Debug().Msgf("Ignoring the service token from %s, which can't list or create projects", token.Source)
+		token = nil
 	}
 
 	if token != nil {
@@ -131,7 +140,21 @@ func projectsOutputFormat(cmd *cobra.Command) string {
 		_, err := util.FormatOutput(outputFormat, struct{}{}, nil)
 		util.HandleError(err, "Unable to format output")
 	}
+	if outputFormat == util.OUTPUT_FORMAT_DOTENV {
+		util.HandleError(fmt.Errorf("projects can't be output as dotenv; use json or yaml"))
+	}
 	return outputFormat
+}
+
+func addProjectsOutputFlag(cmd *cobra.Command, outputDescription string) {
+	cmd.Flags().StringP("output", "o", "", outputDescription+". Supported formats are yaml, json")
+}
+
+// printProjectsTip prints a hint to stderr unless --silent is set.
+func printProjectsTip(cmd *cobra.Command, tip string) {
+	if silent, _ := cmd.Flags().GetBool("silent"); !silent {
+		util.PrintlnStderr(tip)
+	}
 }
 
 func printFormattedOutput[T any](outputFormat string, value T) {
@@ -145,7 +168,7 @@ func printFormattedOutput[T any](outputFormat string, value T) {
 func runProjectsList(cmd *cobra.Command, args []string) {
 	outputFormat := projectsOutputFormat(cmd)
 
-	projects, err := api.CallListProjects(projectsHTTPClient(cmd), secretManagerProjectType)
+	projects, err := api.CallListProjects(projectsHTTPClient(cmd, false), secretManagerProjectType)
 	if err != nil {
 		util.HandleError(err, "Unable to list projects")
 	}
@@ -153,7 +176,7 @@ func runProjectsList(cmd *cobra.Command, args []string) {
 	if outputFormat != "" {
 		printFormattedOutput(outputFormat, projects)
 	} else if len(projects) == 0 {
-		util.PrintlnStderr("No projects found in this organization. Create one with [infisical sm projects create --name <name>].")
+		printProjectsTip(cmd, "No projects found in this organization. Create one with [infisical sm projects create --name <name>].")
 	} else {
 		visualize.PrintAllProjectsDetails(projects)
 	}
@@ -169,16 +192,27 @@ func runProjectsGet(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 	if projectID == "" {
-		workspaceFile, err := util.GetWorkSpaceFromFile()
-		if err != nil || workspaceFile.WorkspaceId == "" {
-			util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project, or pass in project id with --projectId flag (see [infisical sm projects list])")
+		notLinked := "Please either run infisical init to connect to a project, or pass in project id with --projectId flag (see [infisical sm projects list])"
+		configFile, err := util.FindWorkspaceConfigFile()
+		if err != nil {
+			util.PrintErrorMessageAndExit(notLinked)
+		}
+		workspaceFile, err := util.GetWorkSpaceFromFilePath(filepath.Dir(configFile))
+		if err != nil {
+			util.HandleError(err, fmt.Sprintf("Unable to read the project config at %s", configFile))
+		}
+		if workspaceFile.WorkspaceId == "" {
+			util.PrintErrorMessageAndExit(notLinked)
 		}
 		projectID = workspaceFile.WorkspaceId
 	}
 
-	project, err := api.CallGetProject(projectsHTTPClient(cmd), projectID)
+	project, err := api.CallGetProject(projectsHTTPClient(cmd, true), projectID)
 	if err != nil {
 		util.HandleError(err, "Unable to get the project")
+	}
+	if project.Type != "" && project.Type != secretManagerProjectType {
+		util.HandleError(fmt.Errorf("project %s is a %s project, not a Secrets Management project", util.SanitizeDisplay(project.ID), util.SanitizeDisplay(project.Type)))
 	}
 
 	if outputFormat != "" {
@@ -193,13 +227,14 @@ func runProjectsGet(cmd *cobra.Command, args []string) {
 func runProjectsCreate(cmd *cobra.Command, args []string) {
 	outputFormat := projectsOutputFormat(cmd)
 	name, _ := cmd.Flags().GetString("name")
+	name = strings.TrimSpace(name)
 	if name == "" {
 		util.HandleError(fmt.Errorf("the project name is required; pass --name"))
 	}
 	description, _ := cmd.Flags().GetString("description")
 	slug, _ := cmd.Flags().GetString("slug")
 
-	project, err := api.CallCreateProject(projectsHTTPClient(cmd), api.CreateProjectRequest{
+	project, err := api.CallCreateProject(projectsHTTPClient(cmd, false), api.CreateProjectRequest{
 		ProjectName:        name,
 		ProjectDescription: description,
 		Slug:               slug,
@@ -218,7 +253,7 @@ func runProjectsCreate(cmd *cobra.Command, args []string) {
 
 	// The ID ends up in a command the user may paste, so only suggest it when it is a plain UUID.
 	if parsedID, err := uuid.Parse(project.ID); err == nil {
-		util.PrintlnStderr(fmt.Sprintf("\nLink this directory to it with [infisical init --project-id %s].", parsedID.String()))
+		printProjectsTip(cmd, fmt.Sprintf("\nLink this directory to it with [infisical init --project-id %s].", parsedID.String()))
 	}
 
 	Telemetry.CaptureEvent("cli-command:projects create", posthog.NewProperties().Set("version", util.CLI_VERSION))
