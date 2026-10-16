@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/Infisical/infisical-merge/packages/models"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/Infisical/infisical-merge/packages/visualize"
 	"github.com/go-resty/resty/v2"
@@ -97,10 +98,20 @@ infisical sm projects create --name my-app --description "Backend service" --slu
 	return projectsCmd
 }
 
+var serviceTokenUnsupportedCommands = map[string]bool{
+	"infisical sm projects list":   true,
+	"infisical sm projects create": true,
+}
+
+// Reports whether cmd will skip token and use the login session instead,
+// so the root command doesn't warn that the token overrides the session.
+func ignoresEnvServiceToken(cmd *cobra.Command, token *models.TokenDetails) bool {
+	return token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER && !cmd.Flags().Changed("token") && serviceTokenUnsupportedCommands[cmd.CommandPath()]
+}
+
 // projectsHTTPClient authenticates with the machine identity token from --token or the
-// environment when there is one, and with the logged-in user's session otherwise. Service
-// tokens can only read a project by ID, so list and create pass allowServiceToken=false.
-func projectsHTTPClient(cmd *cobra.Command, allowServiceToken bool) *resty.Client {
+// environment when there is one, and with the logged-in user's session otherwise.
+func projectsHTTPClient(cmd *cobra.Command) *resty.Client {
 	token, err := util.GetInfisicalToken(cmd)
 	if err != nil {
 		util.HandleError(err, "Unable to parse flag")
@@ -111,13 +122,12 @@ func projectsHTTPClient(cmd *cobra.Command, allowServiceToken bool) *resty.Clien
 		util.HandleError(err, "Unable to get resty client with custom headers")
 	}
 
-	if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER && !allowServiceToken {
-		if cmd.Flags().Changed("token") {
-			util.PrintErrorMessageAndExit("Service tokens can't list or create projects. Pass a machine identity access token with --token, or log in with [infisical login].")
-		}
-		// INFISICAL_TOKEN is often set for run and secrets, so fall back to the login session.
+	if ignoresEnvServiceToken(cmd, token) {
 		log.Debug().Msgf("Ignoring the service token from %s, which can't list or create projects", token.Source)
 		token = nil
+	}
+	if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER && serviceTokenUnsupportedCommands[cmd.CommandPath()] {
+		util.PrintErrorMessageAndExit("Service tokens can't list or create projects. Pass a machine identity access token with --token, or log in with [infisical login].")
 	}
 
 	if token != nil {
@@ -168,7 +178,7 @@ func printFormattedOutput[T any](outputFormat string, value T) {
 func runProjectsList(cmd *cobra.Command, args []string) {
 	outputFormat := projectsOutputFormat(cmd)
 
-	projects, err := api.CallListProjects(projectsHTTPClient(cmd, false), secretManagerProjectType)
+	projects, err := api.CallListProjects(projectsHTTPClient(cmd), secretManagerProjectType)
 	if err != nil {
 		util.HandleError(err, "Unable to list projects")
 	}
@@ -207,7 +217,7 @@ func runProjectsGet(cmd *cobra.Command, args []string) {
 		projectID = workspaceFile.WorkspaceId
 	}
 
-	project, err := api.CallGetProject(projectsHTTPClient(cmd, true), projectID)
+	project, err := api.CallGetProject(projectsHTTPClient(cmd), projectID)
 	if err != nil {
 		util.HandleError(err, "Unable to get the project")
 	}
@@ -234,7 +244,7 @@ func runProjectsCreate(cmd *cobra.Command, args []string) {
 	description, _ := cmd.Flags().GetString("description")
 	slug, _ := cmd.Flags().GetString("slug")
 
-	project, err := api.CallCreateProject(projectsHTTPClient(cmd, false), api.CreateProjectRequest{
+	project, err := api.CallCreateProject(projectsHTTPClient(cmd), api.CreateProjectRequest{
 		ProjectName:        name,
 		ProjectDescription: description,
 		Slug:               slug,
