@@ -73,8 +73,14 @@ func InstallAgentSystemdService(name string, configPath string) (string, error) 
 		return "", nil
 	}
 
-	if _, err := os.Stat(agentServiceFilePath(name)); err == nil {
-		return "", fmt.Errorf("a systemd service named '%s' already exists; uninstall it first with: sudo infisical agent systemd uninstall %s", name, name)
+	// systemd loads units from several directories (/etc, /run, /usr/lib/systemd/system, ...), so ask it whether the
+	// name is taken: a unit written to /etc/systemd/system would override a system service such as cron
+	out, err := exec.Command("systemctl", "show", "-p", "LoadState", UnitName(name)).Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to check for an existing '%s' unit: %v", name, err)
+	}
+	if strings.TrimSpace(string(out)) != "LoadState=not-found" {
+		return "", fmt.Errorf("a systemd unit named '%s' already exists. Pick another name, or if 'infisical agent systemd install' created it, uninstall it first with: sudo infisical agent systemd uninstall %s", name, name)
 	}
 
 	if err := os.MkdirAll(agentsConfigDir, 0755); err != nil {

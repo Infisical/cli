@@ -184,6 +184,13 @@ jobs:
             exit 1
           fi
 
+          # a name systemd already uses would override that service
+          if sudo ./infisical-cli agent systemd install systemd-journald --config "$dir/agent-config.yaml"; then
+            echo "install accepted the name of a system service"
+            exit 1
+          fi
+          test ! -e /etc/systemd/system/systemd-journald.service
+
           sudo ./infisical-cli agent systemd install ci-agent --config "$dir/agent-config.yaml"
           # Type=notify: start only returns once the agent reported it is ready
           sudo ./infisical-cli agent systemd start ci-agent
