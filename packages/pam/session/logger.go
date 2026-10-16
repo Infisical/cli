@@ -30,19 +30,21 @@ type SessionLogEntry struct {
 type SessionEventType string
 
 const (
-	SessionEventInput  SessionEventType = "input"  // Data from user to server
-	SessionEventOutput SessionEventType = "output" // Data from server to user
-	SessionEventRDP    SessionEventType = "rdp"    // RDP tap event (see SessionChannelRDP)
+	SessionEventInput   SessionEventType = "input"   // Data from user to server
+	SessionEventOutput  SessionEventType = "output"  // Data from server to user
+	SessionEventRDP     SessionEventType = "rdp"     // RDP tap event (see SessionChannelRDP)
+	SessionEventBrowser SessionEventType = "browser" // Remote browser event (see SessionChannelBrowser)
 )
 
 // SessionChannelType represents the type of SSH channel
 type SessionChannelType string
 
 const (
-	SessionChannelShell SessionChannelType = "terminal" // Interactive shell session
-	SessionChannelExec  SessionChannelType = "exec"     // Single command execution
-	SessionChannelSFTP  SessionChannelType = "sftp"     // SFTP file transfer
-	SessionChannelRDP   SessionChannelType = "rdp"      // RDP frame/input tap; Data carries an RDP-specific JSON envelope
+	SessionChannelShell   SessionChannelType = "terminal" // Interactive shell session
+	SessionChannelExec    SessionChannelType = "exec"     // Single command execution
+	SessionChannelSFTP    SessionChannelType = "sftp"     // SFTP file transfer
+	SessionChannelRDP     SessionChannelType = "rdp"      // RDP frame/input tap; Data carries an RDP-specific JSON envelope
+	SessionChannelBrowser SessionChannelType = "browser"  // Remote browser frames, requests and input; Data carries a JSON envelope
 )
 
 // SessionEvent represents a single event in a recorded session (SSH or RDP).
@@ -299,12 +301,12 @@ func (sl *EncryptedSessionLogger) LogSessionEvent(event SessionEvent) error {
 		if event.ElapsedTime == 0 {
 			event.ElapsedTime = time.Since(sl.sessionStart).Seconds()
 		}
-		// RDP carries a structured JSON envelope (with base64-encoded PDU
-		// bytes, scancodes, etc.) in Data, not free-form terminal text.
-		// Masking patterns are SSH-shaped regexes; running them over the
-		// envelope would corrupt valid recordings whenever a pattern
+		// RDP and the remote browser carry a structured JSON envelope (with
+		// base64-encoded PDU bytes, JPEG frames, etc.) in Data, not free-form
+		// terminal text. Masking patterns are SSH-shaped regexes; running them
+		// over the envelope would corrupt valid recordings whenever a pattern
 		// happened to match a substring of the JSON or base64.
-		if event.ChannelType != SessionChannelRDP {
+		if event.ChannelType != SessionChannelRDP && event.ChannelType != SessionChannelBrowser {
 			event.Data = sl.applyMasking(event.Data)
 		}
 		return json.Marshal(event)

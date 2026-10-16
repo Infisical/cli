@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +21,8 @@ import (
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/gateway-v2/winrm"
 	"github.com/Infisical/infisical-merge/packages/pam"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/browser"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/browser/cdp"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mongodb"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/systemd"
@@ -38,6 +41,7 @@ const (
 	ForwardModeTCP             ForwardMode = "TCP"
 	ForwardModePAM             ForwardMode = "PAM"
 	ForwardModePAMRDPBrowser   ForwardMode = "PAM_RDP_BROWSER"
+	ForwardModePAMBrowser      ForwardMode = "PAM_BROWSER"
 	ForwardModePAMCancellation ForwardMode = "PAM_CANCELLATION"
 	ForwardModePAMCapabilities ForwardMode = "PAM_CAPABILITIES"
 	ForwardModePing            ForwardMode = "PING"
@@ -140,6 +144,10 @@ type Gateway struct {
 
 	// PAM session uploader
 	pamSessionUploader *session.SessionUploader
+
+	// Web app browsers; nil when no browser binary is installed
+	browserPool   *cdp.Pool
+	browserEngine browser.BrowserEngine
 
 	// mTLS server components
 	tlsConfig atomic.Pointer[tls.Config]
@@ -264,8 +272,8 @@ func (g *Gateway) DeregisterPAMSession(sessionID string, conn *tls.Conn) bool {
 	return isLast
 }
 
-// Cancels prior entries and waits for them to clean up. RDP needs serial
-// bridges so drain writes don't interleave into the recording file.
+// Cancels prior entries and waits for them to clean up. RDP and web app sessions
+// need serial bridges so drain writes don't interleave into the recording file.
 func (g *Gateway) evictExistingPAMSessions(sessionID string, timeout time.Duration) {
 	g.pamSessionsMu.Lock()
 	prior := g.pamSessions[sessionID]
@@ -274,7 +282,7 @@ func (g *Gateway) evictExistingPAMSessions(sessionID string, timeout time.Durati
 		return
 	}
 	log.Info().Str("sessionId", sessionID).Int("priorCount", len(prior)).
-		Msg("Evicting existing PAM connections before starting new RDP bridge")
+		Msg("Evicting existing PAM connections before starting new bridge")
 	for _, e := range prior {
 		_ = e.conn.Close()
 		e.cancel()
@@ -526,6 +534,9 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// Bound WinRM HTTP response bodies before serving.
 	winrm.InstallHTTPResponseCap()
 
+	// Before any listener starts.
+	g.startBrowserEngine()
+
 	errCh := make(chan error, 1)
 	listenerFatal := make(chan error, 1)
 	if err := g.registerGateway(); err != nil {
@@ -600,6 +611,19 @@ func (g *Gateway) Start(ctx context.Context) error {
 	}
 }
 
+func (g *Gateway) startBrowserEngine() {
+	binary := browser.BinaryPath()
+	if binary == "" {
+		return
+	}
+	g.browserPool = cdp.NewPool(cdp.NewExecLauncher(cdp.ExecLauncherConfig{
+		BinaryPath:  binary,
+		ProfileRoot: filepath.Join(session.GetSessionRecordingDir(), "browser-profiles"),
+	}), cdp.PoolConfig{Warm: 1})
+	g.browserEngine = cdp.NewEngine(g.browserPool)
+	log.Info().Str("binary", binary).Msg("Web app sessions enabled")
+}
+
 func (g *Gateway) runRelayLoop(ctx context.Context, errCh chan error) error {
 	for {
 		select {
@@ -664,6 +688,11 @@ func (g *Gateway) Stop() {
 		delete(g.mongoProxies, id)
 	}
 	g.mongoProxiesMu.Unlock()
+
+	// Sessions stop their own browsers; this stops the warm ones.
+	if g.browserPool != nil {
+		g.browserPool.Close()
+	}
 
 	// Shutdown PAM session uploader and credentials manager
 	if g.pamSessionUploader != nil {
@@ -1205,10 +1234,11 @@ func (g *Gateway) handleGatewayConnection(conn net.Conn, onHandshakeSettled func
 			log.Info().Msg("TCP proxy handler completed")
 		}
 		return
-	} else if forwardConfig.Mode == ForwardModePAM || forwardConfig.Mode == ForwardModePAMRDPBrowser {
-		// RDP only: prior bridge must fully tear down before the new one starts,
+	} else if forwardConfig.Mode == ForwardModePAM || forwardConfig.Mode == ForwardModePAMRDPBrowser || forwardConfig.Mode == ForwardModePAMBrowser {
+		// RDP and web app only: prior bridge must fully tear down before the new one starts,
 		// else overlapping drains write non-monotonic elapsedMs to the recording.
-		if forwardConfig.PAMConfig.ResourceType == session.ResourceTypeWindows {
+		if forwardConfig.PAMConfig.ResourceType == session.ResourceTypeWindows ||
+			forwardConfig.PAMConfig.ResourceType == session.ResourceTypeWebApp {
 			g.evictExistingPAMSessions(forwardConfig.PAMConfig.SessionId, 5*time.Second)
 		}
 		sessionCtx, sessionCancel := context.WithCancel(g.ctx)
@@ -1350,6 +1380,10 @@ func (g *Gateway) parseForwardConfigFromALPN(tlsConn *tls.Conn, reader *bufio.Re
 		config.Mode = ForwardModePAMRDPBrowser
 		return config, nil
 
+	case "infisical-pam-browser":
+		config.Mode = ForwardModePAMBrowser
+		return config, nil
+
 	case "infisical-pam-session-cancellation":
 		config.Mode = ForwardModePAMCancellation
 		return config, nil
@@ -1478,6 +1512,7 @@ func (g *Gateway) parseDetailsFromCertificate(tlsConn *tls.Conn, config *Forward
 				CredentialsManager: g.pamCredentialsManager,
 				SessionUploader:    g.pamSessionUploader,
 				GetMongoProxy:      g.GetOrCreateMongoProxy,
+				BrowserEngine:      g.browserEngine,
 			}
 		}
 	}
@@ -1564,6 +1599,7 @@ func nextProtosForGateway(pkcs11Loaded bool) []string {
 		"infisical-ping",
 		"infisical-pam-proxy",
 		"infisical-pam-rdp-browser",
+		"infisical-pam-browser",
 		"infisical-pam-session-cancellation",
 		"infisical-pam-capabilities",
 		"infisical-adcs",

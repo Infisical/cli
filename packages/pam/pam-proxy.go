@@ -16,6 +16,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/azure"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/browser"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/clickhouse"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/gcp"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/kubernetes"
@@ -44,8 +45,9 @@ type GatewayPAMConfig struct {
 	ExpiryTime         time.Time
 	CredentialsManager *session.CredentialsManager
 	SessionUploader    *session.SessionUploader
-	GetMongoProxy      MongoProxyGetter // Session-level MongoDB proxy sharing
-	OnActivity         func()           // Called on data flow
+	GetMongoProxy      MongoProxyGetter      // Session-level MongoDB proxy sharing
+	OnActivity         func()                // Called on data flow
+	BrowserEngine      browser.BrowserEngine // nil when no browser is installed
 }
 
 type PAMCapabilitiesResponse struct {
@@ -73,6 +75,10 @@ func GetSupportedResourceTypes() []string {
 	// session at connect time with ErrRdpUnavailable.
 	if rdp.IsSupported() {
 		types = append(types, session.ResourceTypeWindows)
+	}
+	// Only advertise web apps when a browser binary is installed.
+	if browser.IsSupported() {
+		types = append(types, session.ResourceTypeWebApp)
 	}
 	return types
 }
@@ -169,6 +175,7 @@ func credentialValues(c *session.PAMCredentials) []string {
 		c.Token,
 		c.ServiceAccountToken,
 		c.ConnectionString,
+		c.HeaderValue,
 	}
 	for _, token := range c.Tokens {
 		values = append(values, token)
@@ -637,6 +644,33 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Str("sessionId", pamConfig.SessionId).
 			Msg("Starting Azure CLI PAM proxy")
 		return proxy.HandleConnection(ctx, handlerConn)
+	case session.ResourceTypeWebApp:
+		browserConfig := browser.BrowserProxyConfig{
+			TargetURL:             credentials.Url,
+			StartPath:             credentials.StartPath,
+			AuthMethod:            credentials.AuthMethod,
+			Username:              credentials.Username,
+			Password:              credentials.Password,
+			Token:                 credentials.Token,
+			HeaderName:            credentials.HeaderName,
+			HeaderValue:           credentials.HeaderValue,
+			TLSRejectUnauthorized: credentials.TLSRejectUnauthorized,
+			TLSCaCertificate:      credentials.TLSCaCertificate,
+			SessionID:             pamConfig.SessionId,
+			ExpiresAt:             pamConfig.ExpiryTime,
+			Engine:                pamConfig.BrowserEngine,
+			OnActivity:            pamConfig.OnActivity,
+			SessionLogger:         sessionLogger,
+			SessionUploader:       pamConfig.SessionUploader,
+			PriorElapsedNs:        pamConfig.SessionUploader.GetPriorElapsedNs(pamConfig.SessionId),
+		}
+		proxy := browser.NewBrowserProxy(browserConfig)
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Str("target", browserConfig.TargetURL).
+			Msg("Starting web app PAM proxy")
+		// Raw conn: only the handler's input loop counts as activity.
+		return proxy.HandleConnection(ctx, conn)
 	default:
 		return fmt.Errorf("unsupported resource type: %s", pamConfig.ResourceType)
 	}

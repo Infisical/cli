@@ -1036,6 +1036,11 @@ type PAMSessionCredentials struct {
 	Schema                string            `json:"schema,omitempty"`
 	Role                  string            `json:"role,omitempty"`
 	PrivateKeyPassphrase  string            `json:"privateKeyPassphrase,omitempty"`
+	StartPath             string            `json:"startPath,omitempty"`
+	TLSRejectUnauthorized *bool             `json:"tlsRejectUnauthorized,omitempty"` // nil means true, so a missing field can't turn TLS checks off
+	TLSCaCertificate      string            `json:"tlsCaCertificate,omitempty"`
+	HeaderName            string            `json:"headerName,omitempty"`
+	HeaderValue           string            `json:"headerValue,omitempty"`
 }
 
 type MFASessionStatus string

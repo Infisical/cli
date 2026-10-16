@@ -51,6 +51,11 @@ type PAMCredentials struct {
 	Schema                string
 	Role                  string
 	PrivateKeyPassphrase  string
+	StartPath             string
+	TLSRejectUnauthorized bool
+	TLSCaCertificate      string
+	HeaderName            string
+	HeaderValue           string
 	PolicyRules           *api.PAMPolicyRules
 }
 
@@ -216,6 +221,11 @@ func (cm *CredentialsManager) GetPAMSessionCredentials(sessionId string, expiryT
 		Schema:                response.Credentials.Schema,
 		Role:                  response.Credentials.Role,
 		PrivateKeyPassphrase:  response.Credentials.PrivateKeyPassphrase,
+		StartPath:             response.Credentials.StartPath,
+		TLSRejectUnauthorized: response.Credentials.TLSRejectUnauthorized == nil || *response.Credentials.TLSRejectUnauthorized,
+		TLSCaCertificate:      response.Credentials.TLSCaCertificate,
+		HeaderName:            response.Credentials.HeaderName,
+		HeaderValue:           response.Credentials.HeaderValue,
 		PolicyRules:           response.PolicyRules,
 	}
 
