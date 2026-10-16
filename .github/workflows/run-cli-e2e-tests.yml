@@ -167,7 +167,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           set -euo pipefail
-          # the shared systemd unit runs `infisical agent start` from PATH, makes /home inaccessible and has its own /tmp
+          # the shared systemd unit runs `infisical agent start` from PATH, makes /home inaccessible and has its own /tmp and /var/tmp
           sudo cp ./infisical-cli /usr/local/bin/infisical
           dir=/etc/infisical/agents/ci
           sudo mkdir -p "$dir"

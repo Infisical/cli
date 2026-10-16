@@ -34,11 +34,11 @@ func agentEnvFilePath(name string) string {
 }
 
 // CheckPathsVisibleToSystemd fails for paths an agent run by the shared systemd unit cannot use: the unit makes
-// /home inaccessible and gives the service its own /tmp.
+// /home inaccessible and gives the service its own /tmp and /var/tmp.
 func CheckPathsVisibleToSystemd(paths []string) error {
 	for _, path := range paths {
 		clean := filepath.Clean(path)
-		for _, hidden := range []string{"/home", "/tmp"} {
+		for _, hidden := range []string{"/home", "/tmp", "/var/tmp"} {
 			if clean == hidden || strings.HasPrefix(clean, hidden+"/") {
 				return fmt.Errorf("%s is under %s, which the agent's systemd service cannot access. Move it, e.g. to %s", path, hidden, agentsConfigDir)
 			}

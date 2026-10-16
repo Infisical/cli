@@ -4197,7 +4197,7 @@ var agentStartCmd = &cobra.Command{
 var agentSystemdCmd = &cobra.Command{
 	Use:   "systemd",
 	Short: "Manage systemd services for the Infisical agent",
-	Long:  "Manage systemd services for the Infisical agent. Use 'systemd install' to install and enable a service. The service logs to the systemd journal (journalctl -u <name>). It makes /home inaccessible and has its own /tmp, so keep the config, templates and their output elsewhere, e.g. in /etc/infisical/agents.",
+	Long:  "Manage systemd services for the Infisical agent. Use 'systemd install' to install and enable a service. The service logs to the systemd journal (journalctl -u <name>). It makes /home inaccessible and has its own /tmp and /var/tmp, so keep the config, templates and their output elsewhere, e.g. in /etc/infisical/agents.",
 	Example: `  sudo infisical agent systemd install my-agent --config /etc/infisical/agents/my-agent.yaml
   sudo infisical agent systemd start my-agent
   sudo infisical agent systemd uninstall my-agent`,
