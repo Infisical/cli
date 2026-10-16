@@ -3087,7 +3087,7 @@ func (tm *AgentManager) writeCertificateFiles(certificate *AgentCertificateConfi
 	if err := ioutil.WriteFile(certificatePath, []byte(certificateContent), certificatePerms); err != nil {
 		return fmt.Errorf("failed to write certificate to %s: %v", certificatePath, err)
 	}
-	writtenFiles[certificatePath] = contentHash(response.Certificate.Certificate)
+	writtenFiles[certificatePath] = contentHash(certificateContent)
 
 	chain := chainToWrite(certificate, response.Certificate.CertificateChain)
 	if !certificate.FileConfig.CombineCertificateChain && chainPath != "" {
@@ -3097,7 +3097,7 @@ func (tm *AgentManager) writeCertificateFiles(certificate *AgentCertificateConfi
 		if err := ioutil.WriteFile(chainPath, []byte(chain), chainPerms); err != nil {
 			return fmt.Errorf("failed to write certificate chain to %s: %v", chainPath, err)
 		}
-		writtenFiles[chainPath] = contentHash(response.Certificate.CertificateChain)
+		writtenFiles[chainPath] = contentHash(chain)
 	}
 
 	if certificate.resumesOnRestart() {
