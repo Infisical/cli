@@ -47,6 +47,11 @@ func TestNewAgentServiceOptions(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, os.SameFile(expectedInfo, configInfo))
 
+	// the service runs a copy of exactly the config that was checked
+	content, err := os.ReadFile(opts.ConfigPath)
+	require.NoError(t, err)
+	assert.Equal(t, content, opts.ConfigData)
+
 	assert.True(t, filepath.IsAbs(opts.Executable), opts.Executable)
 	assert.Equal(t, "infisical-agent", opts.Name)
 }

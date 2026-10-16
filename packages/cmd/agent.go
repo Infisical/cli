@@ -3556,25 +3556,21 @@ var agentCmd = &cobra.Command{
 		}
 
 		// exit right away, as the agent always has, instead of waiting for a pending update check
-		os.Exit(runAgent(configPath, nil, nil, nil))
+		os.Exit(runAgent(configPath, nil, nil))
 	},
 }
 
 // runAgent runs the agent until it gets a shutdown signal or stop is closed, and returns the exit code.
-// Config errors are logged and return 0, as the agent always has. configData, when set, is used instead of
-// reading the config, so a caller that checked the file runs exactly what it checked. ready, when set, is
-// called once the config is loaded and the agent's workers have started.
-func runAgent(configPath string, configData []byte, stop <-chan struct{}, ready func()) int {
+// Config errors are logged and return 0, as the agent always has. ready, when set, is called once the
+// config is loaded and the agent's workers have started.
+func runAgent(configPath string, stop <-chan struct{}, ready func()) int {
 	log.Info().Msg("starting Infisical agent...")
 
-	agentConfigInBytes := configData
+	var agentConfigInBytes []byte
 
-	agentConfigInBase64 := ""
-	if configData == nil {
-		agentConfigInBase64 = os.Getenv("INFISICAL_AGENT_CONFIG_BASE64")
-	}
+	agentConfigInBase64 := os.Getenv("INFISICAL_AGENT_CONFIG_BASE64")
 
-	if configData == nil && agentConfigInBase64 == "" {
+	if agentConfigInBase64 == "" {
 		data, err := ioutil.ReadFile(configPath)
 		if err != nil {
 			if !FileExists(configPath) {
@@ -3595,7 +3591,7 @@ func runAgent(configPath string, configData []byte, stop <-chan struct{}, ready 
 		agentConfigInBytes = decodedAgentConfig
 	}
 
-	if configData == nil && !FileExists(configPath) && agentConfigInBase64 == "" {
+	if !FileExists(configPath) && agentConfigInBase64 == "" {
 		log.Error().Msgf("No agent config file provided at %v. Please provide a agent config file", configPath)
 		return 0
 	}
@@ -4061,27 +4057,28 @@ func validateAgentServiceName(name string) error {
 	return nil
 }
 
-// validateAgentServiceConfig reports config errors at install time rather than on the service's first start.
-func validateAgentServiceConfig(configPath string) (*Config, error) {
+// readAgentServiceConfig reads the config a service is installed with and reports its errors at install time rather
+// than on the service's first start. Install copies exactly these bytes, so the service runs the config it checked.
+func readAgentServiceConfig(configPath string) ([]byte, *Config, error) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return nil, fmt.Errorf("unable to read the agent config: %w", err)
+		return nil, nil, fmt.Errorf("unable to read the agent config: %w", err)
 	}
 
 	agentConfig, err := ParseAgentConfig(data)
 	if err != nil {
-		return nil, fmt.Errorf("unable to parse the agent config at %s: %w", configPath, err)
+		return nil, nil, fmt.Errorf("unable to parse the agent config at %s: %w", configPath, err)
 	}
 
 	if valid, _ := util.IsAuthMethodValid(agentConfig.Auth.Type, false); !valid {
-		return nil, fmt.Errorf("the auth method '%s' in %s is not supported", agentConfig.Auth.Type, configPath)
+		return nil, nil, fmt.Errorf("the auth method '%s' in %s is not supported", agentConfig.Auth.Type, configPath)
 	}
 
 	if agentConfig.Infisical.ExitAfterAuth {
-		return nil, fmt.Errorf("%s sets 'exit-after-auth: true', so the agent would exit after its first render and the service would keep being restarted. Remove it to run the agent as a service", configPath)
+		return nil, nil, fmt.Errorf("%s sets 'exit-after-auth: true', so the agent would exit after its first render and the service would keep being restarted. Remove it to run the agent as a service", configPath)
 	}
 
-	return agentConfig, nil
+	return data, agentConfig, nil
 }
 
 // agentSystemdPaths returns the files a systemd-run agent reads or writes (its config, credential files, cache,
@@ -4170,7 +4167,7 @@ func newAgentServiceActionCmd(group string, action string, short string, check f
 var agentStartCmd = &cobra.Command{
 	Use:                   "start",
 	Short:                 "Run the agent with the config from --config or the INFISICAL_AGENT_CONFIG_PATH environment variable",
-	Long:                  "Run the agent, as 'infisical agent' does. This is what the agent's systemd service runs: the config comes from --config or INFISICAL_AGENT_CONFIG_PATH, and relative paths in it resolve from the config's directory.",
+	Long:                  "Run the agent, as 'infisical agent' does. This is what the agent's systemd service runs: the config comes from --config or INFISICAL_AGENT_CONFIG_PATH, and relative paths in it resolve from INFISICAL_AGENT_WORKING_DIR, or else the config's directory.",
 	Example:               "  INFISICAL_AGENT_CONFIG_PATH=/etc/infisical/agents/my-agent.yaml infisical agent start",
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.NoArgs,
@@ -4185,12 +4182,17 @@ var agentStartCmd = &cobra.Command{
 			util.HandleError(err, "Unable to resolve the config path")
 		}
 
-		// a service manager does not start the agent from the config's directory
-		if err := os.Chdir(filepath.Dir(configPath)); err != nil {
+		// a service manager does not start the agent from the config's directory, and a service runs a copy of its
+		// config, so install stores the directory relative paths resolve from: the original config's
+		workingDir := os.Getenv(agent.WorkingDirEnvName)
+		if workingDir == "" {
+			workingDir = filepath.Dir(configPath)
+		}
+		if err := os.Chdir(workingDir); err != nil {
 			util.HandleError(err, "Unable to change to the config directory")
 		}
 
-		os.Exit(runAgent(configPath, nil, nil, nil))
+		os.Exit(runAgent(configPath, nil, nil))
 	},
 }
 
@@ -4208,7 +4210,7 @@ var agentSystemdCmd = &cobra.Command{
 var agentSystemdInstallCmd = &cobra.Command{
 	Use:                   "install [name]",
 	Short:                 "Install and enable systemd service for the agent (requires sudo)",
-	Long:                  "Install and enable systemd service for the agent. Must be run with sudo on Linux. The service is named infisical-agent unless you pass a name, so several agents can run on one machine.",
+	Long:                  "Install and enable systemd service for the agent. Must be run with sudo on Linux. The service is named infisical-agent unless you pass a name, so several agents can run on one machine. It runs as root, so it runs a copy of the config that only root can change, /etc/infisical/agents/<name>.service-config.yaml: edit that copy and restart the service, or edit the original and install again. Relative paths in the config still resolve from the original's directory.",
 	Example:               "  sudo infisical agent systemd install my-agent --config /etc/infisical/agents/my-agent.yaml",
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.MaximumNArgs(1),
@@ -4233,7 +4235,7 @@ var agentSystemdInstallCmd = &cobra.Command{
 			util.HandleError(err, "Unable to resolve the config path")
 		}
 
-		agentConfig, err := validateAgentServiceConfig(configPath)
+		configData, agentConfig, err := readAgentServiceConfig(configPath)
 		if err != nil {
 			util.HandleError(err, "Failed to install agent systemd service")
 		}
@@ -4242,7 +4244,7 @@ var agentSystemdInstallCmd = &cobra.Command{
 			util.HandleError(err, "Failed to install agent systemd service")
 		}
 
-		installedServiceName, err := agent.InstallAgentSystemdService(name, configPath)
+		installedServiceName, err := agent.InstallAgentSystemdService(name, configPath, configData)
 		if err != nil {
 			util.HandleError(err, "Failed to install agent systemd service")
 		}
@@ -4277,7 +4279,7 @@ The service is named infisical-agent unless you pass a name, so several agents w
 var agentServiceInstallCmd = &cobra.Command{
 	Use:   "install [name]",
 	Short: "Install the agent as a Windows service that starts on boot (requires Administrator)",
-	Long:  "Install the agent as a Windows service that starts on boot and restarts when it fails. The service runs as LocalSystem, so it runs its own copy of infisical.exe from %ProgramFiles%\\Infisical\\Agent\\<name> (uninstall and install again to upgrade it) and the config is restricted to Administrators. The config is checked before the service is created. The service is not started; run 'infisical agent service start' afterwards.",
+	Long:  "Install the agent as a Windows service that starts on boot and restarts when it fails. The service runs as LocalSystem, so it runs its own copies of infisical.exe and the config from %ProgramFiles%\\Infisical\\Agent\\<name>, which only Administrators can change: uninstall and install again to upgrade it or to apply changes to the original config, or edit the copy (service-config.yaml) and restart the service. Relative paths in the config still resolve from the original's directory. The config is checked before the service is created. The service is not started; run 'infisical agent service start' afterwards.",
 	Example: `  infisical agent service install --config C:\infisical\agent-config.yaml
   infisical agent service install chef-secrets --config C:\infisical\chef.yaml`,
 	DisableFlagsInUseLine: true,

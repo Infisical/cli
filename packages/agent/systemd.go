@@ -15,6 +15,10 @@ import (
 // ConfigPathEnvName tells `infisical agent start` which config to run. The systemd environment file sets it.
 const ConfigPathEnvName = "INFISICAL_AGENT_CONFIG_PATH"
 
+// WorkingDirEnvName is the directory relative paths in a service's config resolve from. A service runs a copy of its
+// config, so install sets it to the original config's directory.
+const WorkingDirEnvName = "INFISICAL_AGENT_WORKING_DIR"
+
 const agentsConfigDir = "/etc/infisical/agents"
 
 // UnitName returns the systemd unit of an agent. systemctl gets the full unit name, so a name that itself ends in
@@ -31,6 +35,11 @@ func agentServiceFilePath(name string) string {
 // agentEnvFilePath returns the systemd environment file path for an agent.
 func agentEnvFilePath(name string) string {
 	return filepath.Join(agentsConfigDir, name+".env.conf")
+}
+
+// agentConfigCopyPath returns the copy of its config an agent service runs.
+func agentConfigCopyPath(name string) string {
+	return filepath.Join(agentsConfigDir, name+".service-config.yaml")
 }
 
 // CheckPathsVisibleToSystemd fails for paths an agent run by the shared systemd unit cannot use: the unit makes
@@ -59,10 +68,10 @@ func EnsureAgentSystemdService(name string) error {
 	return nil
 }
 
-// InstallAgentSystemdService installs the systemd unit for an agent that runs the given config. The service is
-// named after the agent, so several agents can run on the same machine. It logs to the systemd journal
+// InstallAgentSystemdService installs the systemd unit for an agent that runs configData, read from configPath. The
+// service is named after the agent, so several agents can run on the same machine. It logs to the systemd journal
 // (journalctl -u <name>), which only root can read by default: debug logs include rendered secrets.
-func InstallAgentSystemdService(name string, configPath string) (string, error) {
+func InstallAgentSystemdService(name string, configPath string, configData []byte) (string, error) {
 	if runtime.GOOS != "linux" {
 		log.Info().Msg("Skipping systemd service installation - not on Linux")
 		return "", nil
@@ -87,7 +96,13 @@ func InstallAgentSystemdService(name string, configPath string) (string, error) 
 		return "", fmt.Errorf("failed to create config directory: %v", err)
 	}
 
-	configContent := fmt.Sprintf("%s=%s\n", ConfigPathEnvName, configPath)
+	// the service runs as root and its config can run commands, so it runs its own copy that only root can change: a
+	// user who can edit the original, or still has it open from before, cannot change what the service runs
+	if err := os.WriteFile(agentConfigCopyPath(name), configData, 0600); err != nil {
+		return "", fmt.Errorf("failed to write the service's copy of the config: %v", err)
+	}
+
+	configContent := fmt.Sprintf("%s=%s\n%s=%s\n", ConfigPathEnvName, agentConfigCopyPath(name), WorkingDirEnvName, filepath.Dir(configPath))
 	if err := os.WriteFile(agentEnvFilePath(name), []byte(configContent), 0600); err != nil {
 		return "", fmt.Errorf("failed to write environment file: %v", err)
 	}
@@ -102,6 +117,7 @@ func InstallAgentSystemdService(name string, configPath string) (string, error) 
 	}
 
 	log.Info().Msgf("Successfully installed systemd service '%s'", name)
+	log.Info().Msgf("It runs a copy of %s that only root can change, %s: edit that copy and restart the service, or edit the original and install again", configPath, agentConfigCopyPath(name))
 	return name, nil
 }
 
@@ -134,7 +150,7 @@ func StopAgentSystemdService(name string) error {
 	return nil
 }
 
-// UninstallAgentSystemdService stops and removes an agent service, with its environment file.
+// UninstallAgentSystemdService stops and removes an agent service, with its environment file and config copy.
 func UninstallAgentSystemdService(name string) error {
 	if runtime.GOOS != "linux" {
 		log.Info().Msg("Skipping systemd service uninstallation - not on Linux")
@@ -167,9 +183,11 @@ func UninstallAgentSystemdService(name string) error {
 		return fmt.Errorf("failed to remove systemd service file: %v", err)
 	}
 
-	// Remove the systemd environment file
-	if err := os.Remove(agentEnvFilePath(name)); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to remove environment file: %v", err)
+	// Remove the systemd environment file and the service's copy of the config
+	for _, path := range []string{agentEnvFilePath(name), agentConfigCopyPath(name)} {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to remove %s: %v", path, err)
+		}
 	}
 
 	// Reload systemd to apply changes
