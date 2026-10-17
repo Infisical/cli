@@ -62,6 +62,9 @@ type resolvedService struct {
 	credential          credential
 	customHeaders       []customHeader
 	substitutions       []substitution
+	// Set when the session's owner still has to set their personal values. The server sends the
+	// service with no credential, so forwarding it would reach the host unauthenticated.
+	personalValuesMissing bool
 }
 
 type sessionEntry struct {
