@@ -332,3 +332,23 @@ func TestAnEscapedSlashIsRefusedWhateverElseThePathCarries(t *testing.T) {
 		}
 	}
 }
+
+func TestPersonalValuesMissing(t *testing.T) {
+	svc := serviceWithPolicy(nil, nil)
+	svc.accessBundleName = "on-call"
+	svc.personalValuesMissing = true
+
+	err := checkServicePolicy(svc, requestTo(t, "GET", "/x"))
+	if !errors.Is(err, errPolicyBlocked) {
+		t.Fatalf("a service missing the owner's personal values should be blocked, got %v", err)
+	}
+	if !strings.Contains(err.Error(), `service "github" needs your personal values`) ||
+		!strings.Contains(err.Error(), "Access Bundles > on-call") {
+		t.Fatalf("the refusal should say what to set up and where: %q", err.Error())
+	}
+
+	svc.personalValuesMissing = false
+	if err := checkServicePolicy(svc, requestTo(t, "GET", "/x")); err != nil {
+		t.Fatalf("a configured service should pass: %v", err)
+	}
+}

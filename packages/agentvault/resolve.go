@@ -62,15 +62,16 @@ func (r *infisicalResolver) resolve(sessionToken string, held *sessionLogGrant) 
 	services := make([]*resolvedService, 0, len(res.Services))
 	for _, wire := range res.Services {
 		services = append(services, &resolvedService{
-			id:                  wire.ID,
-			name:                wire.Name,
-			accessBundleName:    wire.AccessBundleName,
-			hostPatterns:        parseHostPatterns(wire.HostPattern),
-			allowedMethods:      toMethodSet(wire.AllowedMethods),
-			allowedPathPrefixes: toPathPrefixes(wire.AllowedPathPrefixes),
-			credential:          toCredential(wire.Credential),
-			customHeaders:       toCustomHeaders(wire.CustomHeaders),
-			substitutions:       toSubstitutions(wire.Substitutions),
+			id:                    wire.ID,
+			name:                  wire.Name,
+			accessBundleName:      wire.AccessBundleName,
+			hostPatterns:          parseHostPatterns(wire.HostPattern),
+			allowedMethods:        toMethodSet(wire.AllowedMethods),
+			allowedPathPrefixes:   toPathPrefixes(wire.AllowedPathPrefixes),
+			credential:            toCredential(wire.Credential),
+			customHeaders:         toCustomHeaders(wire.CustomHeaders),
+			substitutions:         toSubstitutions(wire.Substitutions),
+			personalValuesMissing: wire.PersonalValuesMissing,
 		})
 	}
 
