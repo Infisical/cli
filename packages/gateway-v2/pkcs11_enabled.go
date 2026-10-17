@@ -434,7 +434,7 @@ func (m *pkcs11ModuleImpl) Sign(slotLabel string, pin []byte, key KeyRef, mechan
 				return err
 			}
 		case expectedPublicKey == nil:
-			return &Pkcs11Error{Code: Pkcs11ErrInternal, Message: "Failed to read CKA_KEY_TYPE and CKA_ID"}
+			log.Warn().Err(err).Str("keyLabel", key.Label).Msg("pkcs11: key type and ID unreadable and no expected public key sent, signing without verification")
 		default:
 			log.Warn().Err(err).Str("keyLabel", key.Label).Msg("pkcs11: key type and ID unreadable, verifying the signature against the expected public key")
 		}
@@ -446,8 +446,10 @@ func (m *pkcs11ModuleImpl) Sign(slotLabel string, pin []byte, key KeyRef, mechan
 			return mapPkcs11SignError(err)
 		}
 		if !attrsReadable {
-			if err := verifySignature(expectedPublicKey, mechanism, isDigest, data, out); err != nil {
-				return err
+			if expectedPublicKey != nil {
+				if err := verifySignature(expectedPublicKey, mechanism, isDigest, data, out); err != nil {
+					return err
+				}
 			}
 			result = SignResult{Signature: out, KeyID: key.ID}
 			return nil
