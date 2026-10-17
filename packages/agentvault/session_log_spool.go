@@ -242,6 +242,7 @@ func (s *sessionLogSpool) sealSlice(records []sessionLogRecord, plaintext []byte
 			EndedAt:          latest.Ts,
 			CiphertextBytes:  len(ciphertext),
 			CiphertextSha256: infisicalCiphertextSha256(ciphertext),
+			RecordCount:      len(records),
 		},
 		ciphertext: ciphertext,
 		records:    len(records),

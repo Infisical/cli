@@ -26,6 +26,7 @@ type shipperCall struct {
 	chunkID   string
 	url       string
 	bytes     int
+	records   int
 	body      []byte
 	final     bool
 }
@@ -56,7 +57,7 @@ func (f *fakeShipper) createChunk(_ context.Context, final bool, sessionID strin
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.calls = append(f.calls, shipperCall{kind: "post", sessionID: sessionID, chunkID: req.ChunkID, bytes: req.CiphertextBytes, final: final})
+	f.calls = append(f.calls, shipperCall{kind: "post", sessionID: sessionID, chunkID: req.ChunkID, bytes: req.CiphertextBytes, records: req.RecordCount, final: final})
 	post := len(f.calls) - 1
 
 	result := f.postDefault
@@ -103,6 +104,9 @@ func (f *fakeShipper) uploadedRecordCounts(t *testing.T) []int {
 		var records []sessionLogRecord
 		if err := json.Unmarshal(plaintext, &records); err != nil {
 			t.Fatalf("the upload to %s is not a record list: %v", call.url, err)
+		}
+		if post.records != len(records) {
+			t.Fatalf("the chunk uploaded to %s reported %d records but carries %d", call.url, post.records, len(records))
 		}
 		counts = append(counts, len(records))
 	}
@@ -536,7 +540,7 @@ func TestARefusalRacingANewKeyDropsNothing(t *testing.T) {
 	grant := testGrant("s1")
 
 	log.record(grant, aRecord("api.github.com"))
-	log.switchOff(sessionLogGrantsIssued.Load() - 1)
+	log.switchOff(sessionLogGrantsIssued.Load()-1, apiErr(400, sessionLogDisabledName))
 
 	if log.hold.off || log.spools["s1"].ring.len() != 1 {
 		t.Fatal("a refusal sent before a newer key was issued still dropped what was held")

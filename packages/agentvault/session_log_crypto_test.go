@@ -86,7 +86,11 @@ func TestSealMatchesTheBrowserVector(t *testing.T) {
 func TestASealedChunkCarriesTheDigestOfExactlyWhatIsUploaded(t *testing.T) {
 	key := make([]byte, 32)
 	spool := newSessionLogSpool(newSessionLogGrant("sess-1", key), time.Now())
-	chunk, err := spool.sealSlice(vectorRecords(), []byte("[]"))
+	plaintext, err := json.Marshal(vectorRecords())
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunk, err := spool.sealSlice(vectorRecords(), plaintext)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,12 +105,23 @@ func TestASealedChunkCarriesTheDigestOfExactlyWhatIsUploaded(t *testing.T) {
 	if chunk.meta.CiphertextBytes != len(chunk.ciphertext) {
 		t.Fatalf("the chunk reports %d bytes, the object is %d", chunk.meta.CiphertextBytes, len(chunk.ciphertext))
 	}
+	if want := len(vectorRecords()); chunk.meta.RecordCount != want || chunk.records != want {
+		t.Fatalf("the chunk reports %d records and tracks %d, it sealed %d", chunk.meta.RecordCount, chunk.records, want)
+	}
 
 	iv, sealed := chunk.ciphertext[:sessionLogIVBytes], chunk.ciphertext[sessionLogIVBytes:]
 	block, _ := aes.NewCipher(key)
 	gcm, _ := cipher.NewGCM(block)
-	if _, err := gcm.Open(nil, iv, sealed, buildSessionLogAAD("sess-1", chunk.meta.ChunkID)); err != nil {
+	opened, err := gcm.Open(nil, iv, sealed, buildSessionLogAAD("sess-1", chunk.meta.ChunkID))
+	if err != nil {
 		t.Fatalf("the chunk does not open under its session and chunk ID: %v", err)
+	}
+	var carried []sessionLogRecord
+	if err := json.Unmarshal(opened, &carried); err != nil {
+		t.Fatalf("the chunk is not a record list: %v", err)
+	}
+	if len(carried) != chunk.meta.RecordCount {
+		t.Fatalf("the chunk reports %d records but carries %d", chunk.meta.RecordCount, len(carried))
 	}
 }
 

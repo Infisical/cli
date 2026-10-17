@@ -143,6 +143,7 @@ type CreateAgentVaultSessionLogChunkRequest struct {
 	EndedAt          string `json:"endedAt"`
 	CiphertextBytes  int    `json:"ciphertextBytes"`
 	CiphertextSha256 string `json:"ciphertextSha256"`
+	RecordCount      int    `json:"recordCount"`
 }
 
 type CreateAgentVaultSessionLogChunkResponse struct {
