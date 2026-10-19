@@ -70,25 +70,32 @@ func (t *Telemetry) IsEnabled() bool {
 // long-lived, whose start would otherwise wait on an unreachable PostHog. The event is lost if the process exits
 // before the send completes.
 func (t *Telemetry) CaptureEventAsync(eventName string, properties posthog.Properties) {
-	if !t.isEnabled {
+	// Everything that reads or writes the config file or this struct runs here, on the caller: these commands
+	// can exit at any moment, and an exit in the middle of a config write would leave the file truncated. The
+	// goroutine only talks to PostHog.
+	if !t.enqueue(eventName, properties) {
 		return
 	}
-	// Identify can write the config file, so it runs here rather than in the background: these commands can
-	// exit at any moment, and an exit mid-write would leave the file truncated. The background capture then
-	// finds the user already identified and only reads the file.
-	t.IdentifyUserIfNeeded()
-	go t.CaptureEvent(eventName, properties)
+	go t.posthogClient.Close()
 }
 
 func (t *Telemetry) CaptureEvent(eventName string, properties posthog.Properties) {
+	if !t.enqueue(eventName, properties) {
+		return
+	}
+	t.closeWithin(flushTimeout)
+}
+
+// enqueue does everything but the send, and reports whether an event was queued.
+func (t *Telemetry) enqueue(eventName string, properties posthog.Properties) bool {
 	// Checked first, so a run that opted out never reads the machine ID or the config file.
 	if !t.isEnabled {
-		return
+		return false
 	}
 
 	userIdentity, err := t.GetDistinctId()
 	if err != nil {
-		return
+		return false
 	}
 
 	// Lazily issue the PostHog Identify/Alias for the current logged-in
@@ -110,8 +117,7 @@ func (t *Telemetry) CaptureEvent(eventName string, properties posthog.Properties
 	}
 
 	t.posthogClient.Enqueue(capture)
-
-	t.closeWithin(flushTimeout)
+	return true
 }
 
 // SetActor records who the command is acting as, for commands that resolve their

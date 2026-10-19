@@ -64,6 +64,31 @@ func TestTelemetryCaptureEventAsyncWritesConfigBeforeReturning(t *testing.T) {
 	waitForDelivery(t, server)
 }
 
+func TestTelemetryCaptureEventAsyncBackgroundOnlySends(t *testing.T) {
+	isolate(t)
+	server, release := hangingPostHog(t)
+	if err := util.WriteConfigFile(&models.ConfigFile{LoggedInUserEmail: "dev@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+
+	newTestTelemetry(t, server.URL, true).CaptureEventAsync("cli-command:test", posthog.NewProperties())
+
+	// A user the CLI has not identified yet: anything identifying in the background would now write the file.
+	if err := util.WriteConfigFile(&models.ConfigFile{LoggedInUserEmail: "other@example.com", LastIdentifiedEmail: "dev@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	waitForDelivery(t, server)
+
+	configFile, err := util.GetConfigFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configFile.LastIdentifiedEmail != "dev@example.com" {
+		t.Fatalf("the background send wrote the config file (LastIdentifiedEmail = %q)", configFile.LastIdentifiedEmail)
+	}
+}
+
 func TestTelemetryCaptureEventAsyncDisabledSendsNothing(t *testing.T) {
 	isolate(t)
 	server := newFakePostHog(t)
@@ -71,7 +96,8 @@ func TestTelemetryCaptureEventAsyncDisabledSendsNothing(t *testing.T) {
 	tel := newTestTelemetry(t, server.URL, false)
 	tel.CaptureEventAsync("cli-command:test", posthog.NewProperties())
 
-	time.Sleep(200 * time.Millisecond)
+	// Anything CaptureEventAsync queues is queued before it returns, so closing the client now delivers it.
+	tel.posthogClient.Close()
 	if got := server.received(); len(got) != 0 {
 		t.Fatalf("expected nothing sent after opting out, got %q", got)
 	}
