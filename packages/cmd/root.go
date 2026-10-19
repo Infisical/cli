@@ -162,6 +162,9 @@ func init() {
 		if err != nil {
 			util.HandleError(err)
 		}
+		if !silent && !isStructuredOutputRequested(cmd) {
+			util.EnableWorkspaceConfigMessages()
+		}
 
 		profileFlag, err := cmd.Flags().GetString("profile")
 		if err != nil {
@@ -194,13 +197,11 @@ func init() {
 
 		if !util.IsRunningInDocker() && !silent && !isStructuredOutputRequested(cmd) {
 			util.CheckForUpdateWithWriter(cmd.ErrOrStderr())
-			if cmd != migrateConfigCmd {
-				projectConfigDir := ""
-				if f := cmd.Flags().Lookup("project-config-dir"); f != nil {
-					projectConfigDir = f.Value.String()
-				}
-				util.DisplayWorkspaceConfigMigrationNoticeWithWriter(silent, projectConfigDir, cmd.ErrOrStderr())
+			projectConfigDir := ""
+			if f := cmd.Flags().Lookup("project-config-dir"); f != nil {
+				projectConfigDir = f.Value.String()
 			}
+			util.DisplayWorkspaceConfigMigrationNoticeWithWriter(silent, projectConfigDir, cmd.ErrOrStderr())
 		}
 
 		loggedInDetails, err := util.GetCurrentLoggedInUserDetails(false)
