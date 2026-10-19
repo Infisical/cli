@@ -347,6 +347,6 @@ func (t *Telemetry) closeWithin(timeout time.Duration) {
 	select {
 	case <-done:
 	case <-time.After(timeout):
-		log.Debug().Msgf("PostHog did not answer within %s, dropping the telemetry event", timeout)
+		log.Debug().Msgf("telemetry: PostHog did not respond within %s, continuing", timeout)
 	}
 }
