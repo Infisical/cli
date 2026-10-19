@@ -337,6 +337,7 @@ func pickOrganization(httpClient *resty.Client, label string, username string) (
 
 func writeWorkspaceFile(selectedWorkspace models.Workspace) error {
 	workspaceFileToSave := models.WorkspaceConfigFileYaml{
+		Version: util.INFISICAL_WORKSPACE_CONFIG_YAML_VERSION,
 		SecretsManagement: models.SecretsManagementConfigSection{
 			ProjectID: selectedWorkspace.ID,
 		},
