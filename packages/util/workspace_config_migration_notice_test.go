@@ -91,6 +91,7 @@ func TestWorkspaceConfigMigrationNoticeCreatesYamlInsteadOfWarning(t *testing.T)
 	jsonPath := filepath.Join(projectDir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 	writeTestFile(t, jsonPath, legacyWorkspaceJSON)
 	stderr := captureStderr(t)
+	enableWorkspaceConfigMessages(t)
 	startNewRun()
 
 	var buf bytes.Buffer

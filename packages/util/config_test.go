@@ -196,6 +196,14 @@ func captureStderr(t *testing.T) *bytes.Buffer {
 	return &buf
 }
 
+// enableWorkspaceConfigMessages turns the yaml messages on for the rest of the test, as the root command does
+// outside --silent and structured output.
+func enableWorkspaceConfigMessages(t *testing.T) {
+	t.Helper()
+	EnableWorkspaceConfigMessages()
+	t.Cleanup(func() { workspaceConfigMessagesEnabled = false })
+}
+
 // startNewRun forgets that the reminder to remove the legacy json was shown, as if the CLI was run again.
 func startNewRun() {
 	legacyWorkspaceConfigReminderShown = false
@@ -207,6 +215,7 @@ func TestLegacyWorkspaceConfigRemovalMessage(t *testing.T) {
 	yamlPath := filepath.Join(dir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
 	writeTestFile(t, jsonPath, legacyWorkspaceJSON)
 	stderr := captureStderr(t)
+	enableWorkspaceConfigMessages(t)
 	startNewRun()
 
 	readWorkspaceConfig := func(t *testing.T) string {
@@ -257,6 +266,30 @@ func TestLegacyWorkspaceConfigRemovalMessage(t *testing.T) {
 	startNewRun()
 	if out := readWorkspaceConfig(t); out != "" {
 		t.Errorf("expected no message once the legacy json is removed, got:\n%s", out)
+	}
+}
+
+func TestLegacyWorkspaceConfigMessagesSilenced(t *testing.T) {
+	dir := t.TempDir()
+	jsonPath := filepath.Join(dir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+	writeTestFile(t, jsonPath, legacyWorkspaceJSON)
+	// --silent and structured output leave the messages off
+	stderr := captureStderr(t)
+
+	// the run that creates the yaml, then a later run where both files exist
+	for run := 1; run <= 2; run++ {
+		startNewRun()
+		cfg, err := GetWorkSpaceFromFilePath(dir)
+		if err != nil {
+			t.Fatalf("run %d: GetWorkSpaceFromFilePath: %v", run, err)
+		}
+		assertFullWorkspaceConfig(t, cfg, "proj-123")
+		if !fileExists(filepath.Join(dir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)) {
+			t.Fatalf("run %d: the yaml should still be created in silent mode", run)
+		}
+		if out := stderr.String(); out != "" {
+			t.Errorf("run %d: expected no output in silent mode, got:\n%s", run, out)
+		}
 	}
 }
 
@@ -415,6 +448,14 @@ func TestConvertLegacyWorkspaceConfigToYaml(t *testing.T) {
 			t.Fatalf("readWorkspaceConfigYaml: %v", err)
 		}
 		assertFullWorkspaceConfig(t, cfg, "proj-123")
+
+		raw, err := os.ReadFile(yamlPath)
+		if err != nil {
+			t.Fatalf("read %s: %v", yamlPath, err)
+		}
+		if !strings.HasPrefix(string(raw), "version: 1\n") {
+			t.Errorf("yaml should start with the config version, got:\n%s", raw)
+		}
 
 		info, err := os.Stat(yamlPath)
 		if err != nil {

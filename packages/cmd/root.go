@@ -162,6 +162,9 @@ func init() {
 		if err != nil {
 			util.HandleError(err)
 		}
+		if !silent && !isStructuredOutputRequested(cmd) {
+			util.EnableWorkspaceConfigMessages()
+		}
 
 		profileFlag, err := cmd.Flags().GetString("profile")
 		if err != nil {

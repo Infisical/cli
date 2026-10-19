@@ -96,17 +96,23 @@ func createWorkspaceConfigYamlFromLegacy(jsonConfigFilePath string, yamlConfigFi
 		return false
 	}
 
-	PrintlnStderr(fmt.Sprintf("Created %s from the legacy %s (commit it if this project is under version control).", yamlConfigFilePath, jsonConfigFilePath))
+	if workspaceConfigMessagesEnabled {
+		PrintlnStderr(fmt.Sprintf("Created %s from the legacy %s (commit it if this project is under version control).", yamlConfigFilePath, jsonConfigFilePath))
+	}
 	RemindToRemoveLegacyWorkspaceConfig(filepath.Dir(jsonConfigFilePath))
 	return true
 }
 
-// legacyWorkspaceConfigReminderShown keeps a command that reads the workspace config several times from repeating
-// the reminder.
 var legacyWorkspaceConfigReminderShown bool
 
+var workspaceConfigMessagesEnabled bool
+
+func EnableWorkspaceConfigMessages() {
+	workspaceConfigMessagesEnabled = true
+}
+
 func RemindToRemoveLegacyWorkspaceConfig(configFileDir string) {
-	if legacyWorkspaceConfigReminderShown {
+	if legacyWorkspaceConfigReminderShown || !workspaceConfigMessagesEnabled {
 		return
 	}
 	if absDir, err := filepath.Abs(configFileDir); err == nil {
@@ -180,6 +186,7 @@ func convertLegacyWorkspaceConfigToYaml(jsonConfigFilePath string, yamlConfigFil
 
 func workspaceConfigToYaml(workspaceConfig models.WorkspaceConfigFile) models.WorkspaceConfigFileYaml {
 	var workspaceConfigYaml models.WorkspaceConfigFileYaml
+	workspaceConfigYaml.Version = INFISICAL_WORKSPACE_CONFIG_YAML_VERSION
 	workspaceConfigYaml.General.Domain = workspaceConfig.Domain
 	workspaceConfigYaml.SecretsManagement.ProjectID = workspaceConfig.WorkspaceId
 	workspaceConfigYaml.SecretsManagement.DefaultEnvironment = workspaceConfig.DefaultEnvironment
