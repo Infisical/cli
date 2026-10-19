@@ -101,7 +101,14 @@ func createWorkspaceConfigYamlFromLegacy(jsonConfigFilePath string, yamlConfigFi
 	return true
 }
 
+// legacyWorkspaceConfigReminderShown keeps a command that reads the workspace config several times from repeating
+// the reminder.
+var legacyWorkspaceConfigReminderShown bool
+
 func RemindToRemoveLegacyWorkspaceConfig(configFileDir string) {
+	if legacyWorkspaceConfigReminderShown {
+		return
+	}
 	if absDir, err := filepath.Abs(configFileDir); err == nil {
 		configFileDir = absDir
 	}
@@ -110,6 +117,7 @@ func RemindToRemoveLegacyWorkspaceConfig(configFileDir string) {
 		return
 	}
 
+	legacyWorkspaceConfigReminderShown = true
 	PrintWarning(fmt.Sprintf("Both %s and %s exist in %s. %s takes precedence, so the legacy %s is no longer used and you can remove it.", INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_WORKSPACE_CONFIG_FILE_NAME, configFileDir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, jsonConfigFilePath))
 }
 

@@ -91,14 +91,20 @@ func TestWorkspaceConfigMigrationNoticeCreatesYamlInsteadOfWarning(t *testing.T)
 	jsonPath := filepath.Join(projectDir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 	writeTestFile(t, jsonPath, legacyWorkspaceJSON)
 	stderr := captureStderr(t)
+	startNewRun()
 
 	var buf bytes.Buffer
 	DisplayWorkspaceConfigMigrationNoticeWithWriter(false, "", &buf)
 	if buf.Len() != 0 {
 		t.Errorf("expected no notice once the yaml is created, got:\n%s", buf.String())
 	}
-	if !strings.Contains(stderr.String(), "you can remove") {
-		t.Errorf("expected the user to be told the legacy json can be removed, got:\n%s", stderr.String())
+
+	// the command reading the new yaml in the same run must not repeat that the json can be removed
+	if _, err := GetWorkSpaceFromFile(); err != nil {
+		t.Fatalf("GetWorkSpaceFromFile: %v", err)
+	}
+	if got := strings.Count(stderr.String(), "you can remove"); got != 1 {
+		t.Errorf("expected the removal message once, got it %d times:\n%s", got, stderr.String())
 	}
 	if fileExists(migrationNoticeCachePathForTest(t)) {
 		t.Error("expected no notice cache file to be written")

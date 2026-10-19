@@ -196,12 +196,18 @@ func captureStderr(t *testing.T) *bytes.Buffer {
 	return &buf
 }
 
+// startNewRun forgets that the reminder to remove the legacy json was shown, as if the CLI was run again.
+func startNewRun() {
+	legacyWorkspaceConfigReminderShown = false
+}
+
 func TestLegacyWorkspaceConfigRemovalMessage(t *testing.T) {
 	dir := t.TempDir()
 	jsonPath := filepath.Join(dir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 	yamlPath := filepath.Join(dir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
 	writeTestFile(t, jsonPath, legacyWorkspaceJSON)
 	stderr := captureStderr(t)
+	startNewRun()
 
 	readWorkspaceConfig := func(t *testing.T) string {
 		t.Helper()
@@ -224,21 +230,31 @@ func TestLegacyWorkspaceConfigRemovalMessage(t *testing.T) {
 
 	bothFilesExist := []string{"Both .infisical.yaml and .infisical.json exist in " + dir, "the legacy " + jsonPath + " is no longer used and you can remove it"}
 
-	// the read that creates the yaml says both files exist
+	// the run that creates the yaml says both files exist
 	out := readWorkspaceConfig(t)
 	assertContains(t, out, append([]string{"Created " + yamlPath}, bothFilesExist...)...)
+	if out := readWorkspaceConfig(t); out != "" {
+		t.Errorf("expected the message once per run, got on the second read:\n%s", out)
+	}
 
-	// later reads keep saying it while both files exist, without creating the yaml again
-	out = readWorkspaceConfig(t)
-	assertContains(t, out, bothFilesExist...)
-	if strings.Contains(out, "Created ") {
-		t.Errorf("the yaml already exists, so it should not be created again, got:\n%s", out)
+	// later runs keep saying it while both files exist, without creating the yaml again
+	for run := 2; run <= 3; run++ {
+		startNewRun()
+		out := readWorkspaceConfig(t)
+		assertContains(t, out, bothFilesExist...)
+		if strings.Contains(out, "Created ") {
+			t.Errorf("run %d: the yaml already exists, so it should not be created again, got:\n%s", run, out)
+		}
+		if out := readWorkspaceConfig(t); out != "" {
+			t.Errorf("run %d: expected the message once per run, got on the second read:\n%s", run, out)
+		}
 	}
 
 	// nothing to say once the json is gone
 	if err := os.Remove(jsonPath); err != nil {
 		t.Fatalf("remove %s: %v", jsonPath, err)
 	}
+	startNewRun()
 	if out := readWorkspaceConfig(t); out != "" {
 		t.Errorf("expected no message once the legacy json is removed, got:\n%s", out)
 	}
