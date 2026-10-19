@@ -388,7 +388,7 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		Telemetry.SetActor(telemetry.IdentityClaimsFromToken(identity))
 	}
 
-	Telemetry.CaptureEvent("cli-command:agent-vault run", posthog.NewProperties().
+	Telemetry.CaptureEventAsync("cli-command:agent-vault run", posthog.NewProperties().
 		Set("version", util.CLI_VERSION).
 		Set("agent", telemetryAgentName(args)).
 		Set("platform", runtime.GOOS).

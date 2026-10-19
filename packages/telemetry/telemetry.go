@@ -65,6 +65,20 @@ func (t *Telemetry) IsEnabled() bool {
 	return t.isEnabled
 }
 
+// CaptureEventAsync sends the event without waiting on PostHog. It is for commands that go on to run something
+// long-lived, whose start would otherwise wait on an unreachable PostHog. The event is lost if the process exits
+// before the send completes.
+func (t *Telemetry) CaptureEventAsync(eventName string, properties posthog.Properties) {
+	if !t.isEnabled {
+		return
+	}
+	// Identify can write the config file, so it runs here rather than in the background: these commands can
+	// exit at any moment, and an exit mid-write would leave the file truncated. The background capture then
+	// finds the user already identified and only reads the file.
+	t.IdentifyUserIfNeeded()
+	go t.CaptureEvent(eventName, properties)
+}
+
 func (t *Telemetry) CaptureEvent(eventName string, properties posthog.Properties) {
 	// Checked first, so a run that opted out never reads the machine ID or the config file.
 	if !t.isEnabled {
