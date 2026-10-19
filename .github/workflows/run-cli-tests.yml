@@ -46,6 +46,7 @@ jobs:
         run: |
           go test -race -count=1 ./packages/telemetry/
           go test -race -count=1 -run 'Telemetry' ./packages/cmd/
+          go test -race -count=1 -run 'TestLoginRenewalArgs' ./packages/util/
       - name: Test with the Go CLI
         env:
           CLI_TESTS_UA_CLIENT_ID: ${{ secrets.CLI_TESTS_UA_CLIENT_ID }}
