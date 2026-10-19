@@ -47,13 +47,12 @@ func DisplayWorkspaceConfigMigrationNoticeWithWriter(isSilent bool, projectConfi
 		ID:    workspaceConfigMigrationNoticeID,
 		Title: fmt.Sprintf("Important: unable to create %s. This project still uses the deprecated %s.", INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_WORKSPACE_CONFIG_FILE_NAME),
 		Message: fmt.Sprintf(
-			"What's happening: the CLI is reading a legacy %s, and support for it will be removed\n"+
-				"in a future release. File in use: %s\n"+
-				"The CLI creates %s next to it automatically, but could not write it in %s.\n"+
-				"What to do: make sure that directory is writable and the file is valid JSON, then run\n"+
-				"any infisical command again, or create %s there yourself.",
+			"\nThe Infisical CLI is reading the legacy %s config file, and support for it will be removed in the near future.\n"+
+				"Falling back to the legacy config file \"%s\".\n\n"+
+				"The CLI attempts to create the %s config file next to it automatically, but could not write it to \"%s\".\n\n"+
+				"What to do: make sure that the directory is writable and your \"%s\" file is valid JSON, then run any Infisical command again, or create \"%s\" there yourself.",
 			INFISICAL_WORKSPACE_CONFIG_FILE_NAME, legacyConfigFilePath,
-			INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, configFileDir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME,
+			INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, configFileDir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME,
 		),
 		DocsURL: workspaceConfigMigrationGuideURL,
 	}, w)
