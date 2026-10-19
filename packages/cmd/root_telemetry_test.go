@@ -13,10 +13,21 @@ import (
 	"github.com/Infisical/infisical-merge/packages/util"
 )
 
+// clearTelemetryEnv keeps an opt-out set on the machine running the tests from leaking into them.
+func clearTelemetryEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv(util.INFISICAL_TELEMETRY_ENABLED_NAME, "")
+	t.Setenv(util.DO_NOT_TRACK_NAME, "")
+}
+
 // executeRootForTelemetry runs a throwaway subcommand through RootCmd, so flags are parsed and the cobra
 // initializers run exactly as they do for a real command, and reports whether telemetry ended up enabled.
-func executeRootForTelemetry(t *testing.T, args ...string) bool {
+func executeRootForTelemetry(t *testing.T, env map[string]string, args ...string) bool {
 	t.Helper()
+	clearTelemetryEnv(t)
+	for name, value := range env {
+		t.Setenv(name, value)
+	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -69,14 +80,73 @@ func executeRootForTelemetry(t *testing.T, args ...string) bool {
 
 func TestTelemetryFlagIsAppliedAfterParsing(t *testing.T) {
 	t.Run("--telemetry=false disables", func(t *testing.T) {
-		if executeRootForTelemetry(t, "--telemetry=false") {
+		if executeRootForTelemetry(t, nil, "--telemetry=false") {
 			t.Fatal("telemetry stayed enabled after --telemetry=false")
 		}
 	})
 
 	t.Run("enabled by default", func(t *testing.T) {
-		if !executeRootForTelemetry(t) {
+		if !executeRootForTelemetry(t, nil) {
 			t.Fatal("telemetry should stay enabled when nothing opts out")
 		}
 	})
+
+	t.Run("INFISICAL_TELEMETRY_ENABLED=false disables", func(t *testing.T) {
+		if executeRootForTelemetry(t, map[string]string{util.INFISICAL_TELEMETRY_ENABLED_NAME: "false"}) {
+			t.Fatal("telemetry stayed enabled after INFISICAL_TELEMETRY_ENABLED=false")
+		}
+	})
+
+	t.Run("DO_NOT_TRACK=1 disables", func(t *testing.T) {
+		if executeRootForTelemetry(t, map[string]string{util.DO_NOT_TRACK_NAME: "1"}) {
+			t.Fatal("telemetry stayed enabled after DO_NOT_TRACK=1")
+		}
+	})
+}
+
+func TestTelemetryEnabledPrecedence(t *testing.T) {
+	cases := []struct {
+		name        string
+		flag        string // empty leaves --telemetry unset
+		enabledEnv  string
+		doNotTrack  string
+		wantEnabled bool
+	}{
+		{name: "nothing set", wantEnabled: true},
+		{name: "flag false", flag: "false", wantEnabled: false},
+		{name: "explicit flag true beats DO_NOT_TRACK", flag: "true", doNotTrack: "1", wantEnabled: true},
+		{name: "explicit flag true beats env false", flag: "true", enabledEnv: "false", wantEnabled: true},
+		{name: "explicit flag false beats env true", flag: "false", enabledEnv: "true", wantEnabled: false},
+		{name: "env false", enabledEnv: "false", wantEnabled: false},
+		{name: "env 0", enabledEnv: "0", wantEnabled: false},
+		{name: "env true", enabledEnv: "true", wantEnabled: true},
+		{name: "env not a boolean fails closed", enabledEnv: "nope", wantEnabled: false},
+		{name: "env true does not override DO_NOT_TRACK", enabledEnv: "true", doNotTrack: "1", wantEnabled: false},
+		{name: "DO_NOT_TRACK=1", doNotTrack: "1", wantEnabled: false},
+		{name: "DO_NOT_TRACK=true", doNotTrack: "true", wantEnabled: false},
+		{name: "DO_NOT_TRACK=yes", doNotTrack: "yes", wantEnabled: false},
+		{name: "DO_NOT_TRACK=0", doNotTrack: "0", wantEnabled: true},
+		{name: "DO_NOT_TRACK=false", doNotTrack: "false", wantEnabled: true},
+		{name: "DO_NOT_TRACK= FALSE ", doNotTrack: " FALSE ", wantEnabled: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clearTelemetryEnv(t)
+			t.Setenv(util.INFISICAL_TELEMETRY_ENABLED_NAME, tc.enabledEnv)
+			t.Setenv(util.DO_NOT_TRACK_NAME, tc.doNotTrack)
+
+			root := &cobra.Command{Use: "infisical"}
+			root.PersistentFlags().Bool("telemetry", true, "")
+			if tc.flag != "" {
+				if err := root.PersistentFlags().Set("telemetry", tc.flag); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if got := telemetryEnabled(root); got != tc.wantEnabled {
+				t.Fatalf("telemetryEnabled() = %v, want %v", got, tc.wantEnabled)
+			}
+		})
+	}
 }
