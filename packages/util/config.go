@@ -77,7 +77,24 @@ func GetWorkSpaceFromFilePath(configFileDir string) (models.WorkspaceConfigFile,
 		return models.WorkspaceConfigFile{}, fmt.Errorf("no %s or %s found in %s", INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_WORKSPACE_CONFIG_FILE_NAME, configFileDir)
 	}
 
-	return GetWorkspaceConfigByPath(jsonConfigFilePath)
+	workspaceConfigFile, err := GetWorkspaceConfigByPath(jsonConfigFilePath)
+	if err != nil {
+		return models.WorkspaceConfigFile{}, err
+	}
+
+	createWorkspaceConfigYamlFromLegacy(jsonConfigFilePath, yamlConfigFilePath)
+
+	return workspaceConfigFile, nil
+}
+
+func createWorkspaceConfigYamlFromLegacy(jsonConfigFilePath string, yamlConfigFilePath string) bool {
+	if err := convertLegacyWorkspaceConfigToYaml(jsonConfigFilePath, yamlConfigFilePath); err != nil {
+		log.Debug().Err(err).Msgf("createWorkspaceConfigYamlFromLegacy: unable to create [path=%s], using the legacy [path=%s]", yamlConfigFilePath, jsonConfigFilePath)
+		return false
+	}
+
+	PrintlnStderr(fmt.Sprintf("Created %s from the legacy %s, which was left in place. %s now takes precedence, so future changes belong there; commit it and delete the legacy file when ready.", yamlConfigFilePath, jsonConfigFilePath, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME))
+	return true
 }
 
 func readWorkspaceConfigYamlIfExists(path string) (workspaceConfigFile models.WorkspaceConfigFile, exists bool, err error) {
@@ -107,11 +124,11 @@ func readWorkspaceConfigYaml(path string) (models.WorkspaceConfigFile, error) {
 	return workspaceConfigFromYaml(workspaceConfigFileYaml), nil
 }
 
-func ConvertLegacyWorkspaceConfigToYaml(jsonConfigFilePath string, yamlConfigFilePath string) error {
+func convertLegacyWorkspaceConfigToYaml(jsonConfigFilePath string, yamlConfigFilePath string) error {
 	if _, err := os.Stat(yamlConfigFilePath); err == nil {
-		return fmt.Errorf("ConvertLegacyWorkspaceConfigToYaml: %s already exists", yamlConfigFilePath)
+		return fmt.Errorf("convertLegacyWorkspaceConfigToYaml: %s already exists", yamlConfigFilePath)
 	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("ConvertLegacyWorkspaceConfigToYaml: unable to check %s [err=%s]", yamlConfigFilePath, err)
+		return fmt.Errorf("convertLegacyWorkspaceConfigToYaml: unable to check %s [err=%s]", yamlConfigFilePath, err)
 	}
 
 	legacyWorkspaceConfig, err := GetWorkspaceConfigByPath(jsonConfigFilePath)
@@ -121,12 +138,12 @@ func ConvertLegacyWorkspaceConfigToYaml(jsonConfigFilePath string, yamlConfigFil
 
 	yamlConfigFileAsBytes, err := yaml.Marshal(workspaceConfigToYaml(legacyWorkspaceConfig))
 	if err != nil {
-		return fmt.Errorf("ConvertLegacyWorkspaceConfigToYaml: unable to marshal yaml [err=%s]", err)
+		return fmt.Errorf("convertLegacyWorkspaceConfigToYaml: unable to marshal yaml [err=%s]", err)
 	}
 
 	// written atomically so a partially written .infisical.yaml is never left behind
 	if err := WriteFileAtomic(yamlConfigFilePath, yamlConfigFileAsBytes, 0600); err != nil {
-		return fmt.Errorf("ConvertLegacyWorkspaceConfigToYaml: unable to create %s [err=%s]", yamlConfigFilePath, err)
+		return fmt.Errorf("convertLegacyWorkspaceConfigToYaml: unable to create %s [err=%s]", yamlConfigFilePath, err)
 	}
 
 	if _, err := readWorkspaceConfigYaml(yamlConfigFilePath); err != nil {

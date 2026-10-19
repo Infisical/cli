@@ -171,6 +171,18 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
+// makeDirReadOnly blocks creating files in dir for the rest of the test, so a .infisical.yaml can't be written.
+func makeDirReadOnly(t *testing.T, dir string) {
+	t.Helper()
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("directory permissions don't block writes here")
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatalf("chmod %s: %v", dir, err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+}
+
 func TestGetWorkSpaceFromFilePath(t *testing.T) {
 	t.Run("reads yaml when only yaml exists", func(t *testing.T) {
 		dir := t.TempDir()
@@ -183,9 +195,10 @@ func TestGetWorkSpaceFromFilePath(t *testing.T) {
 		assertFullWorkspaceConfig(t, cfg, "proj-123")
 	})
 
-	t.Run("reads legacy json when only json exists", func(t *testing.T) {
+	t.Run("reads legacy json and creates a yaml beside it", func(t *testing.T) {
 		dir := t.TempDir()
 		jsonPath := filepath.Join(dir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+		yamlPath := filepath.Join(dir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
 		writeTestFile(t, jsonPath, legacyWorkspaceJSON)
 
 		cfg, err := GetWorkSpaceFromFilePath(dir)
@@ -194,11 +207,44 @@ func TestGetWorkSpaceFromFilePath(t *testing.T) {
 		}
 		assertFullWorkspaceConfig(t, cfg, "proj-123")
 
+		yamlCfg, err := readWorkspaceConfigYaml(yamlPath)
+		if err != nil {
+			t.Fatalf("yaml should be created when reading the legacy json: %v", err)
+		}
+		assertFullWorkspaceConfig(t, yamlCfg, "proj-123")
+
+		raw, err := os.ReadFile(jsonPath)
+		if err != nil {
+			t.Fatalf("legacy %s should not be removed: %v", jsonPath, err)
+		}
+		if string(raw) != legacyWorkspaceJSON {
+			t.Errorf("legacy json was modified:\n%s", raw)
+		}
+
+		// later reads come from the yaml
+		cfg, err = GetWorkSpaceFromFilePath(dir)
+		if err != nil {
+			t.Fatalf("unexpected error on the second read: %v", err)
+		}
+		assertFullWorkspaceConfig(t, cfg, "proj-123")
+	})
+
+	t.Run("falls back to the legacy json when the yaml can't be created", func(t *testing.T) {
+		dir := t.TempDir()
+		jsonPath := filepath.Join(dir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+		writeTestFile(t, jsonPath, legacyWorkspaceJSON)
+		makeDirReadOnly(t, dir)
+
+		cfg, err := GetWorkSpaceFromFilePath(dir)
+		if err != nil {
+			t.Fatalf("a failed yaml creation should not fail the read: %v", err)
+		}
+		assertFullWorkspaceConfig(t, cfg, "proj-123")
+		if fileExists(filepath.Join(dir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)) {
+			t.Error("yaml should not exist in a read-only directory")
+		}
 		if !fileExists(jsonPath) {
 			t.Errorf("legacy %s should not be removed", jsonPath)
-		}
-		if fileExists(filepath.Join(dir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)) {
-			t.Error("yaml should not be created when reading the legacy json")
 		}
 	})
 
@@ -259,16 +305,20 @@ func TestGetWorkSpaceFromFileReadsParentLegacyConfig(t *testing.T) {
 	if !fileExists(jsonPath) {
 		t.Errorf("legacy %s should not be removed", jsonPath)
 	}
-	if fileExists(filepath.Join(root, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)) {
-		t.Error("yaml should not be created when reading the legacy json")
+	yamlPath := filepath.Join(root, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
+	if !fileExists(yamlPath) {
+		t.Error("yaml should be created next to the legacy json, not in the current directory")
+	}
+	if fileExists(filepath.Join(nested, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)) {
+		t.Error("yaml should not be created in the current directory")
 	}
 
 	found, err := FindWorkspaceConfigFile()
 	if err != nil {
 		t.Fatalf("FindWorkspaceConfigFile: %v", err)
 	}
-	if filepath.Base(found) != INFISICAL_WORKSPACE_CONFIG_FILE_NAME {
-		t.Errorf("FindWorkspaceConfigFile = %q, want the legacy json file", found)
+	if filepath.Base(found) != INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME {
+		t.Errorf("FindWorkspaceConfigFile = %q, want the created yaml file", found)
 	}
 }
 
@@ -279,8 +329,8 @@ func TestConvertLegacyWorkspaceConfigToYaml(t *testing.T) {
 		yamlPath := filepath.Join(dir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
 		writeTestFile(t, jsonPath, legacyWorkspaceJSON)
 
-		if err := ConvertLegacyWorkspaceConfigToYaml(jsonPath, yamlPath); err != nil {
-			t.Fatalf("ConvertLegacyWorkspaceConfigToYaml: %v", err)
+		if err := convertLegacyWorkspaceConfigToYaml(jsonPath, yamlPath); err != nil {
+			t.Fatalf("convertLegacyWorkspaceConfigToYaml: %v", err)
 		}
 
 		cfg, err := readWorkspaceConfigYaml(yamlPath)
@@ -297,7 +347,7 @@ func TestConvertLegacyWorkspaceConfigToYaml(t *testing.T) {
 			t.Errorf("yaml perm = %o, want 600", info.Mode().Perm())
 		}
 		if !fileExists(jsonPath) {
-			t.Error("the legacy json should be left for the caller to remove")
+			t.Error("the legacy json should be left in place")
 		}
 	})
 
@@ -309,7 +359,7 @@ func TestConvertLegacyWorkspaceConfigToYaml(t *testing.T) {
 		const existingYAML = "secrets-management:\n  project-id: proj-existing\n"
 		writeTestFile(t, yamlPath, existingYAML)
 
-		if err := ConvertLegacyWorkspaceConfigToYaml(jsonPath, yamlPath); err == nil {
+		if err := convertLegacyWorkspaceConfigToYaml(jsonPath, yamlPath); err == nil {
 			t.Fatal("expected an error when the yaml already exists")
 		}
 		raw, err := os.ReadFile(yamlPath)
@@ -327,7 +377,7 @@ func TestConvertLegacyWorkspaceConfigToYaml(t *testing.T) {
 		yamlPath := filepath.Join(dir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
 		writeTestFile(t, jsonPath, "{not json")
 
-		if err := ConvertLegacyWorkspaceConfigToYaml(jsonPath, yamlPath); err == nil {
+		if err := convertLegacyWorkspaceConfigToYaml(jsonPath, yamlPath); err == nil {
 			t.Fatal("expected an error for invalid json")
 		}
 		if fileExists(yamlPath) {
