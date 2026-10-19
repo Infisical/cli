@@ -42,16 +42,15 @@ func TestWorkspaceConfigMigrationNoticeShownForLegacyJSON(t *testing.T) {
 	projectDir := setupWorkspaceConfigMigrationNoticeTest(t)
 	jsonPath := filepath.Join(projectDir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 	writeTestFile(t, jsonPath, legacyWorkspaceJSON)
-	makeDirReadOnly(t, projectDir)
 
 	var buf bytes.Buffer
 	DisplayWorkspaceConfigMigrationNoticeWithWriter(false, "", &buf)
 
 	out := buf.String()
 	for _, want := range []string{
-		"Important: unable to create .infisical.yaml",
+		"Important: .infisical.json is deprecated",
 		jsonPath,
-		"could not write it in " + projectDir,
+		"infisical migrate-config",
 		workspaceConfigMigrationGuideURL,
 	} {
 		if !strings.Contains(out, want) {
@@ -77,44 +76,11 @@ func TestWorkspaceConfigMigrationNoticeShownForLegacyJSONInParentDir(t *testing.
 		t.Fatalf("mkdir: %v", err)
 	}
 	t.Chdir(nested)
-	makeDirReadOnly(t, projectDir)
 
 	var buf bytes.Buffer
 	DisplayWorkspaceConfigMigrationNoticeWithWriter(false, "", &buf)
 	if !strings.Contains(buf.String(), "Important:") {
 		t.Errorf("expected the notice for a legacy json in a parent dir, got:\n%s", buf.String())
-	}
-}
-
-func TestWorkspaceConfigMigrationNoticeCreatesYamlInsteadOfWarning(t *testing.T) {
-	projectDir := setupWorkspaceConfigMigrationNoticeTest(t)
-	jsonPath := filepath.Join(projectDir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
-	writeTestFile(t, jsonPath, legacyWorkspaceJSON)
-	stderr := captureStderr(t)
-	enableWorkspaceConfigMessages(t)
-	startNewRun()
-
-	var buf bytes.Buffer
-	DisplayWorkspaceConfigMigrationNoticeWithWriter(false, "", &buf)
-	if buf.Len() != 0 {
-		t.Errorf("expected no notice once the yaml is created, got:\n%s", buf.String())
-	}
-
-	// the command reading the new yaml in the same run must not repeat that the json can be removed
-	if _, err := GetWorkSpaceFromFile(); err != nil {
-		t.Fatalf("GetWorkSpaceFromFile: %v", err)
-	}
-	if got := strings.Count(stderr.String(), "you can remove"); got != 1 {
-		t.Errorf("expected the removal message once, got it %d times:\n%s", got, stderr.String())
-	}
-	if fileExists(migrationNoticeCachePathForTest(t)) {
-		t.Error("expected no notice cache file to be written")
-	}
-	if !fileExists(filepath.Join(projectDir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)) {
-		t.Error("expected the yaml to be created next to the legacy json")
-	}
-	if !fileExists(jsonPath) {
-		t.Errorf("legacy %s should not be removed", jsonPath)
 	}
 }
 
@@ -205,9 +171,6 @@ func TestWorkspaceConfigMigrationNoticeHonorsProjectConfigDir(t *testing.T) {
 		if fileExists(migrationNoticeCachePathForTest(t)) {
 			t.Error("expected no notice cache file to be written")
 		}
-		if fileExists(filepath.Join(repoDir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)) {
-			t.Error("the repo root json is not the file the run reads, so no yaml should be created for it")
-		}
 	})
 
 	t.Run("legacy json in project config dir, yaml above cwd", func(t *testing.T) {
@@ -215,15 +178,14 @@ func TestWorkspaceConfigMigrationNoticeHonorsProjectConfigDir(t *testing.T) {
 		writeTestFile(t, filepath.Join(repoDir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME), workspaceYAML)
 		apiJSONPath := filepath.Join(apiDir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 		writeTestFile(t, apiJSONPath, legacyWorkspaceJSON)
-		makeDirReadOnly(t, apiDir)
 
 		var buf bytes.Buffer
 		DisplayWorkspaceConfigMigrationNoticeWithWriter(false, projectConfigDir, &buf)
 		out := buf.String()
 		for _, want := range []string{
-			"Important: unable to create .infisical.yaml",
+			"Important: .infisical.json is deprecated",
 			"File in use: " + apiJSONPath,
-			"could not write it in " + apiDir,
+			"run `infisical migrate-config` in " + apiDir,
 		} {
 			if !strings.Contains(out, want) {
 				t.Errorf("notice missing %q, got:\n%s", want, out)
@@ -242,9 +204,6 @@ func TestWorkspaceConfigMigrationNoticeHonorsProjectConfigDir(t *testing.T) {
 		DisplayWorkspaceConfigMigrationNoticeWithWriter(false, projectConfigDir, &buf)
 		if buf.Len() != 0 {
 			t.Errorf("expected no notice when the project config dir has no config, got:\n%s", buf.String())
-		}
-		if fileExists(filepath.Join(repoDir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)) {
-			t.Error("the repo root json is not the file the run reads, so no yaml should be created for it")
 		}
 	})
 }

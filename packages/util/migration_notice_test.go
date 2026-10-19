@@ -30,8 +30,8 @@ func TestDisplayMigrationNotice(t *testing.T) {
 		}, &buf)
 
 		want := "Important: X is deprecated.\n" +
-			"What's happening: X goes away.\nWhat to do: use Y.\n\n" +
-			"You can read more here: https://infisical.com/docs/x-to-y\n\n"
+			"What's happening: X goes away.\nWhat to do: use Y.\n" +
+			"Migration steps: https://infisical.com/docs/x-to-y\n\n"
 		if buf.String() != want {
 			t.Errorf("notice = %q, want %q", buf.String(), want)
 		}
@@ -46,7 +46,7 @@ func TestDisplayMigrationNotice(t *testing.T) {
 		var buf bytes.Buffer
 		DisplayMigrationNoticeWithWriter(MigrationNotice{ID: "test-notice", Title: "Important: X is deprecated.", Message: "What to do: use Y."}, &buf)
 
-		if strings.Contains(buf.String(), "You can read more here:") {
+		if strings.Contains(buf.String(), "Migration steps:") {
 			t.Errorf("expected no docs line, got:\n%s", buf.String())
 		}
 	})

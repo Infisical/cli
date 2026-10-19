@@ -15,8 +15,8 @@ import (
 const migrationNoticeCacheTTL = 24 * time.Hour
 
 type MigrationNotice struct {
-	ID      string
-	Title   string
+	ID string
+	Title string
 	Message string
 	DocsURL string
 }
@@ -25,7 +25,7 @@ type migrationNoticeCache struct {
 	LastShownTimes map[string]time.Time `json:"lastShownTimes"`
 }
 
-// migrationNoticeCacheSingleton is the one cache map for this process.
+// migrationNoticeCacheSingleton is the one cache map for this process. 
 var migrationNoticeCacheSingleton = migrationNoticeCache{LastShownTimes: map[string]time.Time{}}
 
 var migrationNoticeCachePath string
@@ -104,7 +104,7 @@ func DisplayMigrationNoticeWithWriter(notice MigrationNotice, w io.Writer) {
 
 	body := notice.Message
 	if notice.DocsURL != "" {
-		body += "\n\nYou can read more here: " + notice.DocsURL
+		body += "\nMigration steps: " + notice.DocsURL
 	}
 
 	fmt.Fprintln(w, bold(notice.Title))

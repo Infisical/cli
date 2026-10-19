@@ -36,9 +36,6 @@ func TestWriteWorkspaceFile(t *testing.T) {
 		if err := yaml.Unmarshal(raw, &written); err != nil {
 			t.Fatalf("%s is not valid yaml: %v\n%s", yamlPath, err, raw)
 		}
-		if written.Version != util.INFISICAL_WORKSPACE_CONFIG_YAML_VERSION {
-			t.Errorf("version = %d, want %d", written.Version, util.INFISICAL_WORKSPACE_CONFIG_YAML_VERSION)
-		}
 		if written.SecretsManagement.ProjectID != "proj-new" {
 			t.Errorf("secrets-management.project-id = %q, want proj-new", written.SecretsManagement.ProjectID)
 		}

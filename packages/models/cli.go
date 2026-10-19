@@ -196,7 +196,6 @@ type SecretsManagementConfigSection struct {
 }
 
 type WorkspaceConfigFileYaml struct {
-	Version           int                            `yaml:"version"`
 	General           GeneralConfigSection           `yaml:"general"`
 	SecretsManagement SecretsManagementConfigSection `yaml:"secrets-management"`
 }

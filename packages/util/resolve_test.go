@@ -142,7 +142,7 @@ func TestResolveEnvironmentName(t *testing.T) {
 		}
 	})
 
-	t.Run("legacy json is read and a yaml is created beside it", func(t *testing.T) {
+	t.Run("legacy json is read without being migrated", func(t *testing.T) {
 		writeWorkspace(t, `{"defaultEnvironment":"fromfile"}`)
 		t.Setenv(INFISICAL_ENVIRONMENT_NAME, "")
 		if got := ResolveEnvironmentName(newResolveTestCmd(t)); got != "fromfile" {
@@ -151,10 +151,10 @@ func TestResolveEnvironmentName(t *testing.T) {
 		if !fileExists(INFISICAL_WORKSPACE_CONFIG_FILE_NAME) {
 			t.Fatalf("legacy %s should not be removed", INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 		}
-		if !fileExists(INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME) {
-			t.Fatalf("%s should be created", INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
+		if fileExists(INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME) {
+			t.Fatalf("%s should not be created", INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
 		}
-		// the second resolve reads the created yaml
+		// the second resolve still reads the legacy json
 		if got := ResolveEnvironmentName(newResolveTestCmd(t)); got != "fromfile" {
 			t.Fatalf("got %q on the second resolve, want fromfile", got)
 		}
