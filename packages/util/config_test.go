@@ -1,9 +1,12 @@
 package util
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/Infisical/infisical-merge/packages/models"
@@ -181,6 +184,64 @@ func makeDirReadOnly(t *testing.T, dir string) {
 		t.Fatalf("chmod %s: %v", dir, err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+}
+
+// captureStderr sends what the CLI prints to stderr into the returned buffer for the rest of the test.
+func captureStderr(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	original := GetStderrWriter
+	GetStderrWriter = func() io.Writer { return &buf }
+	t.Cleanup(func() { GetStderrWriter = original })
+	return &buf
+}
+
+func TestLegacyWorkspaceConfigRemovalMessage(t *testing.T) {
+	dir := t.TempDir()
+	jsonPath := filepath.Join(dir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+	yamlPath := filepath.Join(dir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
+	writeTestFile(t, jsonPath, legacyWorkspaceJSON)
+	stderr := captureStderr(t)
+
+	readWorkspaceConfig := func(t *testing.T) string {
+		t.Helper()
+		stderr.Reset()
+		cfg, err := GetWorkSpaceFromFilePath(dir)
+		if err != nil {
+			t.Fatalf("GetWorkSpaceFromFilePath: %v", err)
+		}
+		assertFullWorkspaceConfig(t, cfg, "proj-123")
+		return stderr.String()
+	}
+	assertContains := func(t *testing.T, out string, wants ...string) {
+		t.Helper()
+		for _, want := range wants {
+			if !strings.Contains(out, want) {
+				t.Errorf("output missing %q, got:\n%s", want, out)
+			}
+		}
+	}
+
+	bothFilesExist := []string{"Both .infisical.yaml and .infisical.json exist in " + dir, "the legacy " + jsonPath + " is no longer used and you can remove it"}
+
+	// the read that creates the yaml says both files exist
+	out := readWorkspaceConfig(t)
+	assertContains(t, out, append([]string{"Created " + yamlPath}, bothFilesExist...)...)
+
+	// later reads keep saying it while both files exist, without creating the yaml again
+	out = readWorkspaceConfig(t)
+	assertContains(t, out, bothFilesExist...)
+	if strings.Contains(out, "Created ") {
+		t.Errorf("the yaml already exists, so it should not be created again, got:\n%s", out)
+	}
+
+	// nothing to say once the json is gone
+	if err := os.Remove(jsonPath); err != nil {
+		t.Fatalf("remove %s: %v", jsonPath, err)
+	}
+	if out := readWorkspaceConfig(t); out != "" {
+		t.Errorf("expected no message once the legacy json is removed, got:\n%s", out)
+	}
 }
 
 func TestGetWorkSpaceFromFilePath(t *testing.T) {

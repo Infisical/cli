@@ -70,6 +70,9 @@ func GetWorkSpaceFromFilePath(configFileDir string) (models.WorkspaceConfigFile,
 
 	// the yaml file takes precedence over the legacy json file when both exist
 	if workspaceConfigFile, exists, err := readWorkspaceConfigYamlIfExists(yamlConfigFilePath); exists {
+		if err == nil {
+			RemindToRemoveLegacyWorkspaceConfig(configFileDir)
+		}
 		return workspaceConfigFile, err
 	}
 
@@ -93,8 +96,21 @@ func createWorkspaceConfigYamlFromLegacy(jsonConfigFilePath string, yamlConfigFi
 		return false
 	}
 
-	PrintlnStderr(fmt.Sprintf("Created %s from the legacy %s, which was left in place. %s now takes precedence, so future changes belong there; commit it and delete the legacy file when ready.", yamlConfigFilePath, jsonConfigFilePath, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME))
+	PrintlnStderr(fmt.Sprintf("Created %s from the legacy %s (commit it if this project is under version control).", yamlConfigFilePath, jsonConfigFilePath))
+	RemindToRemoveLegacyWorkspaceConfig(filepath.Dir(jsonConfigFilePath))
 	return true
+}
+
+func RemindToRemoveLegacyWorkspaceConfig(configFileDir string) {
+	if absDir, err := filepath.Abs(configFileDir); err == nil {
+		configFileDir = absDir
+	}
+	jsonConfigFilePath := filepath.Join(configFileDir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+	if _, err := os.Stat(jsonConfigFilePath); err != nil {
+		return
+	}
+
+	PrintWarning(fmt.Sprintf("Both %s and %s exist in %s. %s takes precedence, so the legacy %s is no longer used and you can remove it.", INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_WORKSPACE_CONFIG_FILE_NAME, configFileDir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, jsonConfigFilePath))
 }
 
 func readWorkspaceConfigYamlIfExists(path string) (workspaceConfigFile models.WorkspaceConfigFile, exists bool, err error) {

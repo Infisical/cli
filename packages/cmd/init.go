@@ -353,9 +353,7 @@ func writeWorkspaceFile(selectedWorkspace models.Workspace) error {
 	}
 
 	// the legacy file is left in place; .infisical.yaml takes precedence over it from now on
-	if _, err := os.Stat(util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME); err == nil {
-		util.PrintWarning(fmt.Sprintf("The legacy %s in this directory is no longer used because %s takes precedence. You can delete it.", util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME, util.INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME))
-	}
+	util.RemindToRemoveLegacyWorkspaceConfig(".")
 
 	return nil
 }
