@@ -42,6 +42,10 @@ jobs:
         run: go test -race -count=1 ./packages/agentvault/ ./packages/api/
       - name: Race-check the PAM gateway packages
         run: go test -race -count=1 ./packages/gateway-v2/... ./packages/pam/handlers/clickhouse/
+      - name: Race-check telemetry
+        run: |
+          go test -race -count=1 ./packages/telemetry/
+          go test -race -count=1 -run 'Telemetry' ./packages/cmd/
       - name: Test with the Go CLI
         env:
           CLI_TESTS_UA_CLIENT_ID: ${{ secrets.CLI_TESTS_UA_CLIENT_ID }}
