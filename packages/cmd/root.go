@@ -148,7 +148,7 @@ func topLevelCommandName(cmd *cobra.Command) string {
 func init() {
 	util.GetStderrWriter = RootCmdStderrWriter
 	util.GetStdoutWriter = RootCmdStdoutWriter
-	cobra.OnInitialize(initLog, initLogOutput)
+	cobra.OnInitialize(initLog, initLogOutput, initTelemetry)
 	RootCmd.PersistentFlags().StringP("log-level", "l", "", "log level (trace, debug, info, warn, error, fatal)")
 	RootCmd.PersistentFlags().StringVar(&logFormat, "log-format", "", "log output format: console (default, colored), plain (no color), json (structured). Set NO_COLOR=1 to disable colors in console mode. Can also set via LOG_FORMAT env var.")
 	RootCmd.PersistentFlags().StringVar(&logDestination, "log-destination", "", "log output destination: stderr (default), stdout. Can also set via LOG_DESTINATION env var.")
@@ -222,8 +222,19 @@ func init() {
 		}
 	}
 
-	isTelemetryOn, _ := RootCmd.PersistentFlags().GetBool("telemetry")
-	Telemetry = telemetry.NewTelemetry(isTelemetryOn)
+	// Enabled until initTelemetry applies the flag: argv is not parsed yet here.
+	Telemetry = telemetry.NewTelemetry(true)
+}
+
+// initTelemetry applies --telemetry. It runs as a cobra initializer, so after flag parsing and for every
+// command, including one that replaces the root's PersistentPreRun.
+func initTelemetry() {
+	isTelemetryOn, err := RootCmd.PersistentFlags().GetBool("telemetry")
+	if err != nil {
+		util.HandleError(err)
+	}
+	util.TelemetryOptedOut = !isTelemetryOn
+	Telemetry.SetEnabled(isTelemetryOn)
 }
 
 func initLog() {

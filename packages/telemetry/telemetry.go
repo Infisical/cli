@@ -35,49 +35,68 @@ func (NoOpLogger) Errorf(format string, args ...interface{}) {
 }
 
 func NewTelemetry(telemetryIsEnabled bool) *Telemetry {
-	if POSTHOG_API_KEY_FOR_CLI != "" {
-		client, _ := posthog.NewWithConfig(
-			POSTHOG_API_KEY_FOR_CLI,
-			posthog.Config{
-				Logger: NoOpLogger{},
-			},
-		)
+	return newTelemetry(POSTHOG_API_KEY_FOR_CLI, "", telemetryIsEnabled)
+}
 
-		return &Telemetry{isEnabled: telemetryIsEnabled, posthogClient: client}
-	} else {
+// newTelemetry takes the endpoint so tests can point the client at a local server; empty means PostHog's.
+func newTelemetry(apiKey string, endpoint string, telemetryIsEnabled bool) *Telemetry {
+	if apiKey == "" {
 		return &Telemetry{isEnabled: false}
 	}
+
+	client, _ := posthog.NewWithConfig(
+		apiKey,
+		posthog.Config{
+			Endpoint: endpoint,
+			Logger:   NoOpLogger{},
+		},
+	)
+
+	return &Telemetry{isEnabled: telemetryIsEnabled, posthogClient: client}
+}
+
+// SetEnabled applies the opt-out once flags are parsed. A build without a PostHog key has no client, so it
+// stays disabled whatever is passed.
+func (t *Telemetry) SetEnabled(enabled bool) {
+	t.isEnabled = enabled && t.posthogClient != nil
+}
+
+func (t *Telemetry) IsEnabled() bool {
+	return t.isEnabled
 }
 
 func (t *Telemetry) CaptureEvent(eventName string, properties posthog.Properties) {
+	// Checked first, so a run that opted out never reads the machine ID or the config file.
+	if !t.isEnabled {
+		return
+	}
+
 	userIdentity, err := t.GetDistinctId()
 	if err != nil {
 		return
 	}
 
-	if t.isEnabled {
-		// Lazily issue the PostHog Identify/Alias for the current logged-in
-		// user before capturing the event. This catches the case where the
-		// user logged in on an older CLI version that predates IdentifyUser
-		// (so their PostHog person record was never enriched with `email`),
-		// as well as profile switches via `infisical user switch`. The call
-		// is idempotent and persists its state in the local config file.
-		t.IdentifyUserIfNeeded()
+	// Lazily issue the PostHog Identify/Alias for the current logged-in
+	// user before capturing the event. This catches the case where the
+	// user logged in on an older CLI version that predates IdentifyUser
+	// (so their PostHog person record was never enriched with `email`),
+	// as well as profile switches via `infisical user switch`. The call
+	// is idempotent and persists its state in the local config file.
+	t.IdentifyUserIfNeeded()
 
-		capture := posthog.Capture{
-			DistinctId: userIdentity,
-			Event:      eventName,
-			Properties: properties,
-		}
-
-		if orgId := t.resolveOrganizationId(); orgId != "" {
-			capture.Groups = posthog.NewGroups().Set("organization", orgId)
-		}
-
-		t.posthogClient.Enqueue(capture)
-
-		defer t.posthogClient.Close()
+	capture := posthog.Capture{
+		DistinctId: userIdentity,
+		Event:      eventName,
+		Properties: properties,
 	}
+
+	if orgId := t.resolveOrganizationId(); orgId != "" {
+		capture.Groups = posthog.NewGroups().Set("organization", orgId)
+	}
+
+	t.posthogClient.Enqueue(capture)
+
+	t.posthogClient.Close()
 }
 
 // SetActor records who the command is acting as, for commands that resolve their
