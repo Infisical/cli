@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/Infisical/infisical-merge/packages/models"
@@ -38,6 +39,12 @@ func TestWriteWorkspaceFile(t *testing.T) {
 		}
 		if written.SecretsManagement.ProjectID != "proj-new" {
 			t.Errorf("secrets-management.project-id = %q, want proj-new", written.SecretsManagement.ProjectID)
+		}
+		// a fresh config carries no environment settings, so neither the deprecated keys nor the environment section are written
+		for _, key := range []string{"default-environment", "mappings", "environment:"} {
+			if strings.Contains(string(raw), key) {
+				t.Errorf("a fresh config should not contain %q, got:\n%s", key, raw)
+			}
 		}
 
 		cfg, err := util.GetWorkSpaceFromFile()

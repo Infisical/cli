@@ -142,6 +142,46 @@ func TestResolveEnvironmentName(t *testing.T) {
 		}
 	})
 
+	t.Run("yaml environment.default used when flag and env unset", func(t *testing.T) {
+		writeWorkspaceYaml(t, "secrets-management:\n  environment:\n    default: fromyaml\n")
+		t.Setenv(INFISICAL_ENVIRONMENT_NAME, "")
+		if got := ResolveEnvironmentName(newResolveTestCmd(t)); got != "fromyaml" {
+			t.Fatalf("got %q, want fromyaml", got)
+		}
+	})
+
+	t.Run("yaml git-branch override wins over environment.default", func(t *testing.T) {
+		mockCurrentBranch(t, "main")
+		writeWorkspaceYaml(t, `secrets-management:
+  environment:
+    default: fromyaml
+    overrides:
+      git-branch:
+        - branch: main
+          environment: frombranch
+`)
+		t.Setenv(INFISICAL_ENVIRONMENT_NAME, "")
+		if got := ResolveEnvironmentName(newResolveTestCmd(t)); got != "frombranch" {
+			t.Fatalf("got %q, want frombranch", got)
+		}
+	})
+
+	t.Run("yaml environment.default used when the branch has no override", func(t *testing.T) {
+		mockCurrentBranch(t, "feature")
+		writeWorkspaceYaml(t, `secrets-management:
+  environment:
+    default: fromyaml
+    overrides:
+      git-branch:
+        - branch: main
+          environment: frombranch
+`)
+		t.Setenv(INFISICAL_ENVIRONMENT_NAME, "")
+		if got := ResolveEnvironmentName(newResolveTestCmd(t)); got != "fromyaml" {
+			t.Fatalf("got %q, want fromyaml", got)
+		}
+	})
+
 	t.Run("legacy json is read without being migrated", func(t *testing.T) {
 		writeWorkspace(t, `{"defaultEnvironment":"fromfile"}`)
 		t.Setenv(INFISICAL_ENVIRONMENT_NAME, "")

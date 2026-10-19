@@ -1,9 +1,9 @@
 package util
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/Infisical/infisical-merge/packages/models"
@@ -241,6 +241,122 @@ func TestGetWorkSpaceFromFilePath(t *testing.T) {
 	})
 }
 
+const workspaceYAMLWithEnvironment = `general:
+  domain: https://eu.infisical.com
+secrets-management:
+  project-id: proj-123
+  default-secret-path: /backend
+  environment:
+    default: dev
+    overrides:
+      git-branch:
+        - branch: main
+          environment: prod
+        - branch: staging
+          environment: staging
+`
+
+func TestWorkspaceConfigYamlEnvironmentSchemas(t *testing.T) {
+	readYaml := func(t *testing.T, contents string) (models.WorkspaceConfigFile, error) {
+		t.Helper()
+		dir := t.TempDir()
+		yamlPath := filepath.Join(dir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
+		writeTestFile(t, yamlPath, contents)
+		cfg, err := GetWorkSpaceFromFilePath(dir)
+
+		raw, readErr := os.ReadFile(yamlPath)
+		if readErr != nil {
+			t.Fatalf("read %s: %v", yamlPath, readErr)
+		}
+		if string(raw) != contents {
+			t.Errorf("%s should not be modified when read, got:\n%s", yamlPath, raw)
+		}
+		return cfg, err
+	}
+
+	t.Run("reads the environment section", func(t *testing.T) {
+		cfg, err := readYaml(t, workspaceYAMLWithEnvironment)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertFullWorkspaceConfig(t, cfg, "proj-123")
+		if got := cfg.GitBranchToEnvironmentMapping["staging"]; got != "staging" {
+			t.Errorf("GitBranchToEnvironmentMapping[staging] = %q, want staging", got)
+		}
+	})
+
+	t.Run("reads the deprecated default-environment and mappings", func(t *testing.T) {
+		cfg, err := readYaml(t, workspaceYAML)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertFullWorkspaceConfig(t, cfg, "proj-123")
+	})
+
+	t.Run("the environment section wins over the deprecated fields", func(t *testing.T) {
+		cfg, err := readYaml(t, `secrets-management:
+  project-id: proj-123
+  default-environment: old-default
+  mappings:
+    git-branch-to-environment:
+      main: old-main
+      feature: old-feature
+  environment:
+    default: dev
+    overrides:
+      git-branch:
+        - branch: main
+          environment: prod
+`)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.DefaultEnvironment != "dev" {
+			t.Errorf("DefaultEnvironment = %q, want dev", cfg.DefaultEnvironment)
+		}
+		// the deprecated mappings are ignored, not merged with the overrides
+		want := map[string]string{"main": "prod"}
+		if !maps.Equal(cfg.GitBranchToEnvironmentMapping, want) {
+			t.Errorf("GitBranchToEnvironmentMapping = %v, want %v", cfg.GitBranchToEnvironmentMapping, want)
+		}
+	})
+
+	t.Run("an empty environment section falls back to the deprecated fields", func(t *testing.T) {
+		cfg, err := readYaml(t, `secrets-management:
+  project-id: proj-123
+  default-environment: dev
+  environment: {}
+`)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.DefaultEnvironment != "dev" {
+			t.Errorf("DefaultEnvironment = %q, want dev", cfg.DefaultEnvironment)
+		}
+	})
+
+	t.Run("first override for a branch wins and entries without a branch are skipped", func(t *testing.T) {
+		cfg, err := readYaml(t, `secrets-management:
+  project-id: proj-123
+  environment:
+    overrides:
+      git-branch:
+        - environment: orphan
+        - branch: main
+          environment: prod
+        - branch: main
+          environment: staging
+`)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := map[string]string{"main": "prod"}
+		if !maps.Equal(cfg.GitBranchToEnvironmentMapping, want) {
+			t.Errorf("GitBranchToEnvironmentMapping = %v, want %v", cfg.GitBranchToEnvironmentMapping, want)
+		}
+	})
+}
+
 func TestGetWorkSpaceFromFileReadsParentLegacyConfig(t *testing.T) {
 	root := t.TempDir()
 	jsonPath := filepath.Join(root, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
@@ -270,126 +386,4 @@ func TestGetWorkSpaceFromFileReadsParentLegacyConfig(t *testing.T) {
 	if filepath.Base(found) != INFISICAL_WORKSPACE_CONFIG_FILE_NAME {
 		t.Errorf("FindWorkspaceConfigFile = %q, want the legacy json file", found)
 	}
-}
-
-func TestConvertLegacyWorkspaceConfigToYaml(t *testing.T) {
-	t.Run("carries every field over and leaves the json in place", func(t *testing.T) {
-		dir := t.TempDir()
-		jsonPath := filepath.Join(dir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
-		yamlPath := filepath.Join(dir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
-		writeTestFile(t, jsonPath, legacyWorkspaceJSON)
-
-		if err := ConvertLegacyWorkspaceConfigToYaml(jsonPath, yamlPath); err != nil {
-			t.Fatalf("ConvertLegacyWorkspaceConfigToYaml: %v", err)
-		}
-
-		cfg, err := readWorkspaceConfigYaml(yamlPath)
-		if err != nil {
-			t.Fatalf("readWorkspaceConfigYaml: %v", err)
-		}
-		assertFullWorkspaceConfig(t, cfg, "proj-123")
-
-		info, err := os.Stat(yamlPath)
-		if err != nil {
-			t.Fatalf("stat %s: %v", yamlPath, err)
-		}
-		if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
-			t.Errorf("yaml perm = %o, want 600", info.Mode().Perm())
-		}
-		if !fileExists(jsonPath) {
-			t.Error("the legacy json should be left for the caller to remove")
-		}
-	})
-
-	t.Run("refuses to overwrite an existing yaml", func(t *testing.T) {
-		dir := t.TempDir()
-		jsonPath := filepath.Join(dir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
-		yamlPath := filepath.Join(dir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
-		writeTestFile(t, jsonPath, legacyWorkspaceJSON)
-		const existingYAML = "secrets-management:\n  project-id: proj-existing\n"
-		writeTestFile(t, yamlPath, existingYAML)
-
-		if err := ConvertLegacyWorkspaceConfigToYaml(jsonPath, yamlPath); err == nil {
-			t.Fatal("expected an error when the yaml already exists")
-		}
-		raw, err := os.ReadFile(yamlPath)
-		if err != nil {
-			t.Fatalf("read %s: %v", yamlPath, err)
-		}
-		if string(raw) != existingYAML {
-			t.Errorf("existing yaml was modified:\n%s", raw)
-		}
-	})
-
-	t.Run("invalid json leaves no yaml behind", func(t *testing.T) {
-		dir := t.TempDir()
-		jsonPath := filepath.Join(dir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
-		yamlPath := filepath.Join(dir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
-		writeTestFile(t, jsonPath, "{not json")
-
-		if err := ConvertLegacyWorkspaceConfigToYaml(jsonPath, yamlPath); err == nil {
-			t.Fatal("expected an error for invalid json")
-		}
-		if fileExists(yamlPath) {
-			t.Error("no yaml should be written when the json cannot be read")
-		}
-	})
-}
-
-func TestResolveWorkspaceConfigFile(t *testing.T) {
-	t.Run("empty dir walks up from cwd", func(t *testing.T) {
-		root := t.TempDir()
-		jsonPath := filepath.Join(root, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
-		writeTestFile(t, jsonPath, legacyWorkspaceJSON)
-		nested := filepath.Join(root, "a", "b")
-		if err := os.MkdirAll(nested, 0o700); err != nil {
-			t.Fatalf("mkdir: %v", err)
-		}
-		t.Chdir(nested)
-
-		got, err := ResolveWorkspaceConfigFile("")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if got != jsonPath {
-			t.Errorf("got %q, want %q", got, jsonPath)
-		}
-	})
-
-	t.Run("explicit dir does not walk up", func(t *testing.T) {
-		root := t.TempDir()
-		writeTestFile(t, filepath.Join(root, INFISICAL_WORKSPACE_CONFIG_FILE_NAME), legacyWorkspaceJSON)
-		empty := filepath.Join(root, "empty")
-		if err := os.MkdirAll(empty, 0o700); err != nil {
-			t.Fatalf("mkdir: %v", err)
-		}
-		t.Chdir(root)
-
-		if _, err := ResolveWorkspaceConfigFile("empty"); err == nil {
-			t.Error("expected an error when the explicit dir has no config")
-		}
-	})
-
-	t.Run("explicit dir prefers yaml and returns an absolute path", func(t *testing.T) {
-		root := t.TempDir()
-		cfgDir := filepath.Join(root, "cfg")
-		if err := os.MkdirAll(cfgDir, 0o700); err != nil {
-			t.Fatalf("mkdir: %v", err)
-		}
-		writeTestFile(t, filepath.Join(cfgDir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME), legacyWorkspaceJSON)
-		yamlPath := filepath.Join(cfgDir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
-		writeTestFile(t, yamlPath, workspaceYAML)
-		t.Chdir(root)
-
-		got, err := ResolveWorkspaceConfigFile("cfg")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if !filepath.IsAbs(got) {
-			t.Errorf("expected an absolute path, got %q", got)
-		}
-		if filepath.Base(got) != INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME {
-			t.Errorf("expected the yaml to win, got %q", got)
-		}
-	})
 }
