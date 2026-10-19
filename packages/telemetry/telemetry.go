@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/denisbrodbeck/machineid"
@@ -110,7 +111,7 @@ func (t *Telemetry) CaptureEvent(eventName string, properties posthog.Properties
 
 	t.posthogClient.Enqueue(capture)
 
-	t.posthogClient.Close()
+	t.closeWithin(flushTimeout)
 }
 
 // SetActor records who the command is acting as, for commands that resolve their
@@ -322,4 +323,24 @@ func (t *Telemetry) GetDistinctId() (string, error) {
 	}
 
 	return distinctId, nil
+}
+
+// flushTimeout caps how long a command waits for PostHog before giving up on the event. Without it, an
+// unreachable PostHog holds the command for the client's full 10s timeout.
+var flushTimeout = 3 * time.Second
+
+// closeWithin sends what is queued and waits at most timeout for it. On timeout the send carries on in the
+// background until the process exits.
+func (t *Telemetry) closeWithin(timeout time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		t.posthogClient.Close()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		log.Debug().Msgf("PostHog did not answer within %s, dropping the telemetry event", timeout)
+	}
 }
