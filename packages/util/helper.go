@@ -10,7 +10,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path"
 	"runtime"
 	"sort"
 	"strconv"
@@ -454,7 +453,7 @@ func getCurrentBranch() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return path.Base(strings.TrimSpace(out.String())), nil
+	return strings.TrimSpace(out.String()), nil
 }
 
 // DomainEnvNames lists the env vars that configure the Infisical domain, in

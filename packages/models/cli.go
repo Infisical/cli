@@ -180,6 +180,9 @@ type WorkspaceConfigFile struct {
 	GitBranchToEnvironmentMapping map[string]string `json:"gitBranchToEnvironmentMapping"`
 	DefaultSecretPath             string            `json:"defaultSecretPath,omitempty"`
 	Domain                        string            `json:"domain,omitempty"`
+	// GitBranchOverrides comes from the .infisical.yaml environment.overrides.git-branch list and is matched
+	// against the full branch name, while GitBranchToEnvironmentMapping only matches its last segment.
+	GitBranchOverrides map[string]string `json:"-"`
 }
 
 type GeneralConfigSection struct {

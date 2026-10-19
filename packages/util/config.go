@@ -122,7 +122,8 @@ func workspaceConfigFromYaml(workspaceConfigYaml models.WorkspaceConfigFileYaml)
 	environment := secretsManagement.Environment
 	if environment != nil && (environment.Default != "" || len(environment.Overrides.GitBranch) > 0) {
 		workspaceConfigFile.DefaultEnvironment = environment.Default
-		workspaceConfigFile.GitBranchToEnvironmentMapping = gitBranchMapFromOverrides(environment.Overrides.GitBranch)
+		workspaceConfigFile.GitBranchToEnvironmentMapping = nil
+		workspaceConfigFile.GitBranchOverrides = gitBranchMapFromOverrides(environment.Overrides.GitBranch)
 	}
 
 	return workspaceConfigFile

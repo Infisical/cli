@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path"
 	"strings"
 	"unicode"
 
@@ -543,7 +544,10 @@ func GetEnvelopmentBasedOnGitBranch(workspaceFile models.WorkspaceConfigFile) st
 		log.Debug().Msgf("getEnvelopmentBasedOnGitBranch: [err=%s]", err)
 	}
 
-	envBasedOnGitBranch, ok := workspaceFile.GitBranchToEnvironmentMapping[branch]
+	envBasedOnGitBranch, ok := workspaceFile.GitBranchOverrides[branch]
+	if workspaceFile.GitBranchOverrides == nil {
+		envBasedOnGitBranch, ok = workspaceFile.GitBranchToEnvironmentMapping[path.Base(branch)]
+	}
 
 	log.Debug().Msgf("GetEnvelopmentBasedOnGitBranch: [envBasedOnGitBranch=%s] [ok=%t]", envBasedOnGitBranch, ok)
 

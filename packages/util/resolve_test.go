@@ -182,6 +182,63 @@ func TestResolveEnvironmentName(t *testing.T) {
 		}
 	})
 
+	t.Run("yaml git-branch override matches the full branch name", func(t *testing.T) {
+		mockCurrentBranch(t, "feature/login")
+		writeWorkspaceYaml(t, `secrets-management:
+  environment:
+    default: fromyaml
+    overrides:
+      git-branch:
+        - branch: login
+          environment: fromlastsegment
+        - branch: feature/login
+          environment: frombranch
+`)
+		t.Setenv(INFISICAL_ENVIRONMENT_NAME, "")
+		if got := ResolveEnvironmentName(newResolveTestCmd(t)); got != "frombranch" {
+			t.Fatalf("got %q, want frombranch", got)
+		}
+	})
+
+	t.Run("yaml git-branch override does not match only the last segment of the branch", func(t *testing.T) {
+		mockCurrentBranch(t, "feature/login")
+		writeWorkspaceYaml(t, `secrets-management:
+  environment:
+    default: fromyaml
+    overrides:
+      git-branch:
+        - branch: login
+          environment: frombranch
+`)
+		t.Setenv(INFISICAL_ENVIRONMENT_NAME, "")
+		if got := ResolveEnvironmentName(newResolveTestCmd(t)); got != "fromyaml" {
+			t.Fatalf("got %q, want fromyaml", got)
+		}
+	})
+
+	t.Run("deprecated yaml mapping still matches the last segment of the branch", func(t *testing.T) {
+		mockCurrentBranch(t, "feature/login")
+		writeWorkspaceYaml(t, `secrets-management:
+  default-environment: fromyaml
+  mappings:
+    git-branch-to-environment:
+      login: frombranch
+`)
+		t.Setenv(INFISICAL_ENVIRONMENT_NAME, "")
+		if got := ResolveEnvironmentName(newResolveTestCmd(t)); got != "frombranch" {
+			t.Fatalf("got %q, want frombranch", got)
+		}
+	})
+
+	t.Run("legacy json mapping still matches the last segment of the branch", func(t *testing.T) {
+		mockCurrentBranch(t, "feature/login")
+		writeWorkspace(t, `{"defaultEnvironment":"fromfile","gitBranchToEnvironmentMapping":{"login":"frombranch"}}`)
+		t.Setenv(INFISICAL_ENVIRONMENT_NAME, "")
+		if got := ResolveEnvironmentName(newResolveTestCmd(t)); got != "frombranch" {
+			t.Fatalf("got %q, want frombranch", got)
+		}
+	})
+
 	t.Run("legacy json is read without being migrated", func(t *testing.T) {
 		writeWorkspace(t, `{"defaultEnvironment":"fromfile"}`)
 		t.Setenv(INFISICAL_ENVIRONMENT_NAME, "")
