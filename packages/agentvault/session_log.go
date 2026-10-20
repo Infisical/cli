@@ -545,7 +545,8 @@ func (r *sessionLogRecorder) sendShipment(ctx context.Context, next shipment, pa
 		}
 		res.posted = true
 		res.postedURL = created.UploadURL
-		res.postedExpires = r.now().Add(time.Duration(created.ExpiresInSeconds) * time.Second)
+		// Round(0): the link expires by the wall clock, which keeps running while the machine sleeps.
+		res.postedExpires = r.now().Add(time.Duration(created.ExpiresInSeconds) * time.Second).Round(0)
 		uploadURL = created.UploadURL
 	}
 

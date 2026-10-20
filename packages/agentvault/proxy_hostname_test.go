@@ -61,3 +61,19 @@ func TestOneHostMintsOneLeafWhateverTheCase(t *testing.T) {
 		}
 	}
 }
+
+// == rather than Equal: Equal ignores the monotonic reading, which pauses while the machine sleeps.
+func TestALeafExpiryIgnoresTheSleepingClock(t *testing.T) {
+	key, cert, err := generateRootCa()
+	if err != nil {
+		t.Fatalf("generateRootCa: %v", err)
+	}
+	ca := newCaManager(key, cert)
+
+	if _, err := ca.mintLeaf("api.example.com"); err != nil {
+		t.Fatalf("mintLeaf: %v", err)
+	}
+	if exp := ca.leafCache["api.example.com"].expiration; exp != exp.Round(0) {
+		t.Fatal("the cached leaf expiry carries a monotonic reading, so time asleep would not count toward it")
+	}
+}

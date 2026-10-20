@@ -135,7 +135,9 @@ func (c *caManager) mintLeaf(hostname string) (tls.Certificate, error) {
 		return tls.Certificate{}, err
 	}
 
-	notAfter := time.Now().Add(leafTTL)
+	// Round(0) keeps the wall clock only: the monotonic clock pauses while the machine sleeps,
+	// which kept serving leaves past their NotAfter.
+	notAfter := time.Now().Add(leafTTL).Round(0)
 	// A leaf must never outlive its issuer, or clients reject the chain as the root nears expiry.
 	if notAfter.After(rootCert.NotAfter) {
 		notAfter = rootCert.NotAfter
