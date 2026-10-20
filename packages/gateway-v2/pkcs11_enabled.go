@@ -464,16 +464,15 @@ func (m *pkcs11ModuleImpl) Sign(slotLabel string, pin []byte, key KeyRef, mechan
 		if err != nil {
 			return mapPkcs11SignError(err)
 		}
-		if !attrsReadable {
-			if expectedPublicKey != nil {
-				if err := verifySignature(expectedPublicKey, mechanism, isDigest, data, out); err != nil {
-					return err
-				}
-			}
-			result = SignResult{Signature: out, KeyID: key.ID}
-			return nil
+		var readKeyID []byte
+		if attrsReadable {
+			readKeyID = attrs[1].Value
 		}
-		result = SignResult{Signature: out, KeyID: attrs[1].Value}
+		signed, err := completeSign(out, attrsReadable, readKeyID, key, expectedPublicKey, mechanism, isDigest, data)
+		if err != nil {
+			return err
+		}
+		result = signed
 		return nil
 	})
 	log.Debug().Bool("ok", err == nil).Int("sigLen", len(result.Signature)).Msg("pkcs11.Sign: done")
@@ -486,12 +485,12 @@ func (m *pkcs11ModuleImpl) FindPrivateKeys(slotLabel string, pin []byte, keyLabe
 		handles, err := findAllObjects(m.ctx, session, []*pkcs11.Attribute{
 			pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PRIVATE_KEY),
 			pkcs11.NewAttribute(pkcs11.CKA_LABEL, []byte(keyLabel)),
-		}, maxFoundKeys)
+		}, maxFoundKeys+1)
 		if err != nil {
 			return err
 		}
-		if len(handles) == maxFoundKeys {
-			log.Warn().Str("keyLabel", keyLabel).Int("limit", maxFoundKeys).Msg("pkcs11: key lookup hit its limit, more keys with this label may exist")
+		if len(handles) > maxFoundKeys {
+			return &Pkcs11Error{Code: Pkcs11ErrBadRequest, Message: fmt.Sprintf("More than %d private keys in the slot have this label", maxFoundKeys)}
 		}
 		for _, handle := range handles {
 			var keyID string

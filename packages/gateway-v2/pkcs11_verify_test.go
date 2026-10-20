@@ -147,3 +147,32 @@ func spkiDer(t *testing.T, pub any) []byte {
 	}
 	return der
 }
+
+func TestCompleteSignWithUnreadableAttributes(t *testing.T) {
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	other, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	data := []byte("release artifact")
+	sig := rawEcdsa(t, key, digestOf(crypto.SHA256, data))
+	ref := KeyRef{Label: "release-key", ID: []byte{0x0a}}
+
+	result, err := completeSign(sig, false, nil, ref, spki(t, &key.PublicKey), "CKM_ECDSA_SHA256", false, data)
+	if err != nil || len(result.Signature) == 0 || string(result.KeyID) != string(ref.ID) {
+		t.Fatalf("matching key must return the signature and the requested key ID, got %+v, %v", result, err)
+	}
+
+	result, err = completeSign(sig, false, nil, ref, spki(t, &other.PublicKey), "CKM_ECDSA_SHA256", false, data)
+	expectCode(t, err, Pkcs11ErrSignatureMismatch)
+	if len(result.Signature) != 0 {
+		t.Fatal("a mismatch must not return a signature")
+	}
+
+	result, err = completeSign(sig, false, nil, ref, nil, "CKM_ECDSA_SHA256", false, data)
+	if err != nil || len(result.Signature) == 0 {
+		t.Fatalf("without an expected key the signature is returned as before, got %+v, %v", result, err)
+	}
+
+	result, err = completeSign(sig, true, []byte{0x0b}, ref, spki(t, &other.PublicKey), "CKM_ECDSA_SHA256", false, data)
+	if err != nil || string(result.KeyID) != "\x0b" {
+		t.Fatalf("readable attributes return the key's own ID, got %+v, %v", result, err)
+	}
+}

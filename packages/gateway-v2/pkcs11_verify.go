@@ -45,6 +45,18 @@ func parseExpectedPublicKey(publicKeySpki []byte) (crypto.PublicKey, error) {
 	return pub, nil
 }
 
+func completeSign(signature []byte, attrsReadable bool, readKeyID []byte, key KeyRef, expectedPublicKey crypto.PublicKey, mechanism string, isDigest bool, data []byte) (SignResult, error) {
+	if attrsReadable {
+		return SignResult{Signature: signature, KeyID: readKeyID}, nil
+	}
+	if expectedPublicKey != nil {
+		if err := verifySignature(expectedPublicKey, mechanism, isDigest, data, signature); err != nil {
+			return SignResult{}, err
+		}
+	}
+	return SignResult{Signature: signature, KeyID: key.ID}, nil
+}
+
 func verifySignature(pub crypto.PublicKey, mechanism string, isDigest bool, data, signature []byte) error {
 	hash, err := mechanismHash(mechanism)
 	if err != nil {
