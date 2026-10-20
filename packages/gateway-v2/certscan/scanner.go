@@ -45,6 +45,8 @@ const (
 	maxDeniedFolders    = 1000
 )
 
+var readOutputMarker = []byte{batchMarker, batchOK, '\n'}
+
 var errResponseFull = errors.New("the scan found more certificate data than one response can hold")
 
 type RunResult struct {
@@ -102,8 +104,16 @@ func (s *scanner) commandPrefix(limit time.Duration, sudo bool) string {
 	return prefix
 }
 
-func (s *scanner) listFiles(ctx context.Context, command string, outputLimit int) (RunResult, bool, error) {
-	res, err := s.run(ctx, command, findTimeout, outputLimit)
+func listingTimeout(ctx context.Context) time.Duration {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return findTimeout
+	}
+	return min(findTimeout, max(time.Until(deadline)-commandTimeoutGrace, time.Second))
+}
+
+func (s *scanner) listFiles(ctx context.Context, command string, limit time.Duration, outputLimit int) (RunResult, bool, error) {
+	res, err := s.run(ctx, `printf '\0'; `+command, limit, outputLimit)
 	if errors.Is(err, context.DeadlineExceeded) {
 		return res, true, nil
 	}
@@ -143,8 +153,9 @@ func (s *scanner) probe(ctx context.Context) (HostInfo, error) {
 }
 
 func (s *scanner) find(ctx context.Context) ([]string, []string, TruncatedReason, error) {
-	command := s.commandPrefix(findTimeout, false) + buildFindCommand(s.req.SearchFolderPaths, s.req.SkipFolderPaths, s.req.MaxFolderDepth)
-	res, timedOut, err := s.listFiles(ctx, command, findOutputLimit)
+	limit := listingTimeout(ctx)
+	command := s.commandPrefix(limit, false) + buildFindCommand(s.req.SearchFolderPaths, s.req.SkipFolderPaths, s.req.MaxFolderDepth)
+	res, timedOut, err := s.listFiles(ctx, command, limit, findOutputLimit)
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("failed to list files: %w", err)
 	}
@@ -210,8 +221,9 @@ func (s *scanner) sudoListFolder(ctx context.Context, folder string, outputLimit
 	if depth < 0 {
 		return sudoListing{ran: true}
 	}
-	command := s.commandPrefix(findTimeout, true) + buildFindCommand([]string{folder}, s.req.SkipFolderPaths, depth)
-	res, timedOut, err := s.listFiles(ctx, command, outputLimit)
+	limit := listingTimeout(ctx)
+	command := s.commandPrefix(limit, true) + buildFindCommand([]string{folder}, s.req.SkipFolderPaths, depth)
+	res, timedOut, err := s.listFiles(ctx, command, limit, outputLimit)
 	if err != nil {
 		log.Debug().Err(err).Str("folder", folder).Msg("certscan: sudo folder listing did not complete")
 		return sudoListing{ran: true, failed: true}
@@ -280,7 +292,7 @@ func classifyReadFailure(stderr []byte) FileStatus {
 
 func readCommand(p string, limit int, prefix string) string {
 	quoted := util.ShellQuote(p)
-	return fmt.Sprintf("%shead -c 0 -- %s && %sreadlink -f -- %s && %shead -c %d -- %s",
+	return fmt.Sprintf("%shead -c 0 -- %s && printf '\\036K\\n' && %sreadlink -f -- %s && %shead -c %d -- %s",
 		prefix, quoted, prefix, quoted, prefix, limit+1, quoted)
 }
 
@@ -296,12 +308,13 @@ func (s *scanner) readOnce(ctx context.Context, p string, sudo bool) (readOutcom
 		}
 		return readOutcome{status: status}, nil
 	}
-	newline := bytes.IndexByte(res.Stdout, '\n')
-	if newline < 0 {
+	_, body, found := bytes.Cut(res.Stdout, readOutputMarker)
+	realPath, data, hasRealPath := bytes.Cut(body, []byte{'\n'})
+	if !found || !hasRealPath {
 		log.Debug().Str("path", p).Msg("certscan: unexpected read output")
 		return readOutcome{status: StatusReadFailed}, nil
 	}
-	return readOutcome{realPath: string(res.Stdout[:newline]), data: res.Stdout[newline+1:], status: StatusOK}, nil
+	return readOutcome{realPath: string(realPath), data: data, status: StatusOK}, nil
 }
 
 func (s *scanner) read(ctx context.Context, p string, sudo bool) readOutcome {
@@ -329,6 +342,16 @@ func readFailure(ctx context.Context, p string, err error) readOutcome {
 	return readOutcome{status: StatusReadFailed}
 }
 
+func parseRecovered(data []byte, password *string) (result ParseResult) {
+	defer func() {
+		if value := recover(); value != nil {
+			log.Warn().Str("panic", fmt.Sprint(value)).Msg("certscan: recovered from a panic while parsing a file")
+			result = ParseResult{Status: StatusParseError, Err: "the file could not be parsed"}
+		}
+	}()
+	return Parse(data, password)
+}
+
 func (s *scanner) complete(p string, outcome readOutcome) readOutcome {
 	if outcome.realPath == "" {
 		outcome.realPath = p
@@ -337,7 +360,7 @@ func (s *scanner) complete(p string, outcome readOutcome) readOutcome {
 		outcome.status = StatusTooLarge
 	}
 	if outcome.status == StatusOK {
-		outcome.parsed = Parse(outcome.data, s.passwords[outcome.realPath])
+		outcome.parsed = parseRecovered(outcome.data, s.passwords[outcome.realPath])
 	}
 	outcome.data = nil
 	if !s.claimRealPath(outcome.realPath) {
@@ -424,6 +447,14 @@ func (r *Response) markTruncated(reason TruncatedReason) {
 	}
 }
 
+func listingContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return context.WithCancel(ctx)
+	}
+	return context.WithDeadline(ctx, time.Now().Add(time.Until(deadline)/2))
+}
+
 func Scan(ctx context.Context, runner Runner, req Request) (Response, error) {
 	s := &scanner{runner: runner, req: req, sudoPaths: map[string]bool{}, passwords: map[string]*string{}, claimed: map[string]bool{}}
 	for _, kp := range req.KeystorePasswords {
@@ -439,7 +470,9 @@ func Scan(ctx context.Context, runner Runner, req Request) (Response, error) {
 	explicit := len(req.FilePaths) > 0
 	candidates := req.FilePaths
 	if !explicit {
-		found, denied, truncatedReason, findErr := s.find(ctx)
+		listCtx, cancelList := listingContext(ctx)
+		found, denied, truncatedReason, findErr := s.find(listCtx)
+		cancelList()
 		if findErr != nil {
 			return Response{}, findErr
 		}

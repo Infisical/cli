@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"math/big"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -97,7 +98,7 @@ func (f *fakeRunner) Run(ctx context.Context, command string, _ int) (RunResult,
 			if file.rootOnly && !sudo {
 				return RunResult{Stderr: []byte("head: cannot open: Permission denied"), ExitCode: 1}, nil
 			}
-			return RunResult{Stdout: append([]byte(file.realPath+"\n"), file.data...)}, nil
+			return RunResult{Stdout: append([]byte("\x1eK\n"+file.realPath+"\n"), file.data...)}, nil
 		}
 		return RunResult{Stderr: []byte("readlink: No such file or directory"), ExitCode: 1}, nil
 	}
@@ -314,7 +315,7 @@ func TestNormalizeRejectsBadInput(t *testing.T) {
 func TestReadCommandOpensFileBeforeResolvingIt(t *testing.T) {
 	s := &scanner{hasTimeout: true}
 	cmd := readCommand("/etc/ssl/private/a b.pem", 1024, s.commandPrefix(readTimeout, true))
-	want := `sudo -n timeout -s KILL 20 head -c 0 -- '/etc/ssl/private/a b.pem' && sudo -n timeout -s KILL 20 readlink -f -- '/etc/ssl/private/a b.pem' && sudo -n timeout -s KILL 20 head -c 1025 -- '/etc/ssl/private/a b.pem'`
+	want := `sudo -n timeout -s KILL 20 head -c 0 -- '/etc/ssl/private/a b.pem' && printf '\036K\n' && sudo -n timeout -s KILL 20 readlink -f -- '/etc/ssl/private/a b.pem' && sudo -n timeout -s KILL 20 head -c 1025 -- '/etc/ssl/private/a b.pem'`
 	if cmd != want {
 		t.Fatalf("got %s", cmd)
 	}
@@ -387,8 +388,12 @@ func TestScanReportsReadFailuresWithoutRawTransportText(t *testing.T) {
 		t.Fatalf("expected every explicit file to be reported, got %+v", resp.Files)
 	}
 	for _, f := range resp.Files {
-		if f.Status != StatusReadFailed {
-			t.Fatalf("expected readFailed, got %+v", f)
+		want := StatusReadFailed
+		if f.Path == "/opt/e.pem" {
+			want = StatusParseError
+		}
+		if f.Status != want {
+			t.Fatalf("expected %s, got %+v", want, f)
 		}
 	}
 	encoded, _ := json.Marshal(resp)
@@ -398,7 +403,7 @@ func TestScanReportsReadFailuresWithoutRawTransportText(t *testing.T) {
 	if resp.TruncatedReason != "" {
 		t.Fatalf("read failures must not mark the scan truncated, got %q", resp.TruncatedReason)
 	}
-	if !strings.Contains(logs.String(), "recovered from panic while reading a file") || !strings.Contains(logs.String(), "boom from read") || !strings.Contains(logs.String(), "index out of range") {
+	if !strings.Contains(logs.String(), "recovered from panic while reading a file") || !strings.Contains(logs.String(), "boom from read") || !strings.Contains(logs.String(), "recovered from a panic while parsing a file") || !strings.Contains(logs.String(), "index out of range") {
 		t.Fatalf("expected the panic to be logged, got %q", logs.String())
 	}
 }
@@ -651,7 +656,7 @@ func TestScanFallsBackToPerFileReadsForIncompleteBatchRecords(t *testing.T) {
 			return res, nil
 		}, 2},
 		{"unexpected framing", func(_ context.Context, res RunResult) (RunResult, error) {
-			return RunResult{Stdout: append([]byte("noise\n"), res.Stdout...)}, nil
+			return RunResult{Stdout: bytes.Replace(res.Stdout, []byte("\x1eF0\n"), []byte("\x1eF0\nnoise\n"), 1)}, nil
 		}, 3},
 	}
 	for _, tc := range cases {
@@ -817,5 +822,78 @@ func TestEstimateSizeStopsAtTheResponseCap(t *testing.T) {
 	size := estimateSize(FileResult{Path: "/a.pem", RealPath: "/a.pem", ParseResult: ParseResult{Chains: chains}})
 	if size <= maxResponseBytes || size > 2*maxResponseBytes {
 		t.Fatalf("expected the estimate to stop just past the cap, got %d", size)
+	}
+}
+
+type loginMessageRunner struct{ Runner }
+
+func (r loginMessageRunner) Run(ctx context.Context, command string, outputLimit int) (RunResult, error) {
+	res, err := r.Runner.Run(ctx, command, outputLimit)
+	prefix := "Welcome to web-01. Authorized use only.\n"
+	if strings.Contains(command, `printf '\0'; `) {
+		prefix += "\x00"
+	}
+	res.Stdout = append([]byte(prefix), res.Stdout...)
+	return res, err
+}
+
+func TestScanIgnoresALoginMessage(t *testing.T) {
+	p := newTestPKI(t)
+	leafPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: p.leaf.Raw})
+	runner := &fakeRunner{
+		sudo: true,
+		files: map[string]fakeFile{
+			"/etc/ssl/api.pem":                 {realPath: "/etc/ssl/api.pem", data: leafPEM},
+			"/etc/ssl/web.pem":                 {realPath: "/etc/ssl/web.pem", data: leafPEM},
+			"/etc/letsencrypt/live/x/cert.pem": {realPath: "/etc/letsencrypt/live/x/cert.pem", data: leafPEM, rootOnly: true},
+			"/etc/letsencrypt/live/y/cert.pem": {realPath: "/etc/letsencrypt/live/y/cert.pem", data: leafPEM, rootOnly: true},
+		},
+		find:     "/etc/ssl/api.pem\x00/etc/ssl/web.pem\x00",
+		findErr:  "find: '/etc/letsencrypt/live': Permission denied\n",
+		sudoFind: "/etc/letsencrypt/live/x/cert.pem\x00/etc/letsencrypt/live/y/cert.pem\x00",
+	}
+	resp, err := normalizedScan(t, context.Background(), loginMessageRunner{runner}, Request{
+		SearchFolderPaths: []string{"/etc/ssl", "/etc/letsencrypt"},
+		MaxFileSizeBytes:  1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var realPaths []string
+	for _, f := range resp.Files {
+		realPaths = append(realPaths, f.RealPath)
+	}
+	want := []string{"/etc/letsencrypt/live/x/cert.pem", "/etc/letsencrypt/live/y/cert.pem", "/etc/ssl/api.pem", "/etc/ssl/web.pem"}
+	if !slices.Equal(realPaths, want) {
+		t.Fatalf("expected %v, got %v", want, realPaths)
+	}
+	for _, c := range runner.commands {
+		if strings.Contains(c, perFileRead) && !strings.Contains(c, "sudo -n ") {
+			t.Fatalf("expected the batch read to cover every readable file, got a per-file read %q", c)
+		}
+	}
+}
+
+func TestScanKeepsTimeToReadAfterASlowListing(t *testing.T) {
+	p := newTestPKI(t)
+	leafPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: p.leaf.Raw})
+	runner := &fakeRunner{
+		files: map[string]fakeFile{"/etc/ssl/api.pem": {realPath: "/etc/ssl/api.pem", data: leafPEM}},
+		findHook: func(ctx context.Context) (RunResult, error) {
+			<-ctx.Done()
+			return RunResult{Stdout: []byte("/etc/ssl/api.pem\x00")}, fmt.Errorf("command did not finish: %w", context.Cause(ctx))
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+	resp, err := normalizedScan(t, ctx, runner, Request{SearchFolderPaths: []string{"/etc/ssl"}, MaxFileSizeBytes: 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.TruncatedReason != TruncatedTimeLimit {
+		t.Fatalf("expected a timeLimit truncation, got %q", resp.TruncatedReason)
+	}
+	if len(resp.Files) != 1 || resp.Files[0].Status != StatusOK {
+		t.Fatalf("expected the files listed before the cutoff to be read, got %+v", resp.Files)
 	}
 }

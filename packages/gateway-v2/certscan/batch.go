@@ -114,6 +114,9 @@ const (
 )
 
 func parseReadBatch(stdout []byte, count int, onRecord func(int, batchRecord)) {
+	if start := bytes.IndexByte(stdout, batchMarker); start > 0 {
+		stdout = stdout[start:]
+	}
 	end := bytes.LastIndexByte(stdout, '\n')
 	if end < 0 {
 		return
