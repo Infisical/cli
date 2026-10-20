@@ -174,7 +174,7 @@ func fileExists(path string) bool {
 func TestGetWorkSpaceFromFilePath(t *testing.T) {
 	t.Run("reads yaml when only yaml exists", func(t *testing.T) {
 		dir := t.TempDir()
-		writeTestFile(t, filepath.Join(dir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME), workspaceYAML)
+		writeTestFile(t, filepath.Join(dir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME), workspaceYAML)
 
 		cfg, err := GetWorkSpaceFromFilePath(dir)
 		if err != nil {
@@ -185,7 +185,7 @@ func TestGetWorkSpaceFromFilePath(t *testing.T) {
 
 	t.Run("reads legacy json when only json exists", func(t *testing.T) {
 		dir := t.TempDir()
-		jsonPath := filepath.Join(dir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+		jsonPath := filepath.Join(dir, LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 		writeTestFile(t, jsonPath, legacyWorkspaceJSON)
 
 		cfg, err := GetWorkSpaceFromFilePath(dir)
@@ -197,16 +197,16 @@ func TestGetWorkSpaceFromFilePath(t *testing.T) {
 		if !fileExists(jsonPath) {
 			t.Errorf("legacy %s should not be removed", jsonPath)
 		}
-		if fileExists(filepath.Join(dir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)) {
+		if fileExists(filepath.Join(dir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)) {
 			t.Error("yaml should not be created when reading the legacy json")
 		}
 	})
 
 	t.Run("prefers yaml and leaves json untouched when both exist", func(t *testing.T) {
 		dir := t.TempDir()
-		jsonPath := filepath.Join(dir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+		jsonPath := filepath.Join(dir, LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 		writeTestFile(t, jsonPath, `{"workspaceId":"from-json"}`)
-		writeTestFile(t, filepath.Join(dir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME), workspaceYAML)
+		writeTestFile(t, filepath.Join(dir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME), workspaceYAML)
 
 		cfg, err := GetWorkSpaceFromFilePath(dir)
 		if err != nil {
@@ -220,7 +220,7 @@ func TestGetWorkSpaceFromFilePath(t *testing.T) {
 
 	t.Run("malformed json returns an error and keeps the json", func(t *testing.T) {
 		dir := t.TempDir()
-		jsonPath := filepath.Join(dir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+		jsonPath := filepath.Join(dir, LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 		writeTestFile(t, jsonPath, `{not json`)
 
 		if _, err := GetWorkSpaceFromFilePath(dir); err == nil {
@@ -229,7 +229,7 @@ func TestGetWorkSpaceFromFilePath(t *testing.T) {
 		if !fileExists(jsonPath) {
 			t.Errorf("legacy %s should not be removed", jsonPath)
 		}
-		if fileExists(filepath.Join(dir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)) {
+		if fileExists(filepath.Join(dir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)) {
 			t.Error("yaml should not be created from malformed json")
 		}
 	})
@@ -260,7 +260,7 @@ func TestWorkspaceConfigYamlEnvironmentSchemas(t *testing.T) {
 	readYaml := func(t *testing.T, contents string) (models.WorkspaceConfigFile, error) {
 		t.Helper()
 		dir := t.TempDir()
-		yamlPath := filepath.Join(dir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
+		yamlPath := filepath.Join(dir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 		writeTestFile(t, yamlPath, contents)
 		cfg, err := GetWorkSpaceFromFilePath(dir)
 
@@ -406,7 +406,7 @@ func TestWorkspaceConfigYamlEnvironmentSchemas(t *testing.T) {
 
 func TestGetWorkSpaceFromFileReadsParentLegacyConfig(t *testing.T) {
 	root := t.TempDir()
-	jsonPath := filepath.Join(root, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+	jsonPath := filepath.Join(root, LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 	writeTestFile(t, jsonPath, legacyWorkspaceJSON)
 	nested := filepath.Join(root, "a", "b")
 	if err := os.MkdirAll(nested, 0o700); err != nil {
@@ -422,7 +422,7 @@ func TestGetWorkSpaceFromFileReadsParentLegacyConfig(t *testing.T) {
 	if !fileExists(jsonPath) {
 		t.Errorf("legacy %s should not be removed", jsonPath)
 	}
-	if fileExists(filepath.Join(root, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)) {
+	if fileExists(filepath.Join(root, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)) {
 		t.Error("yaml should not be created when reading the legacy json")
 	}
 
@@ -430,7 +430,7 @@ func TestGetWorkSpaceFromFileReadsParentLegacyConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindWorkspaceConfigFile: %v", err)
 	}
-	if filepath.Base(found) != INFISICAL_WORKSPACE_CONFIG_FILE_NAME {
+	if filepath.Base(found) != LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME {
 		t.Errorf("FindWorkspaceConfigFile = %q, want the legacy json file", found)
 	}
 }

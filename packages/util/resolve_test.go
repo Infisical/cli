@@ -37,7 +37,7 @@ func writeWorkspaceYaml(t *testing.T, contents string) {
 	t.Helper()
 	dir := t.TempDir()
 	t.Chdir(dir)
-	if err := os.WriteFile(filepath.Join(dir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME), []byte(contents), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME), []byte(contents), 0o600); err != nil {
 		t.Fatalf("write workspace yaml: %v", err)
 	}
 }
@@ -243,11 +243,11 @@ func TestResolveEnvironmentName(t *testing.T) {
 		if got := ResolveEnvironmentName(newResolveTestCmd(t)); got != "fromfile" {
 			t.Fatalf("got %q, want fromfile", got)
 		}
-		if !fileExists(INFISICAL_WORKSPACE_CONFIG_FILE_NAME) {
-			t.Fatalf("legacy %s should not be removed", INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+		if !fileExists(LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME) {
+			t.Fatalf("legacy %s should not be removed", LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 		}
-		if fileExists(INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME) {
-			t.Fatalf("%s should not be created", INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
+		if fileExists(INFISICAL_WORKSPACE_CONFIG_FILE_NAME) {
+			t.Fatalf("%s should not be created", INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 		}
 		// the second resolve still reads the legacy json
 		if got := ResolveEnvironmentName(newResolveTestCmd(t)); got != "fromfile" {
@@ -257,7 +257,7 @@ func TestResolveEnvironmentName(t *testing.T) {
 
 	t.Run("yaml file wins over legacy json in the same directory", func(t *testing.T) {
 		writeWorkspaceYaml(t, "secrets-management:\n  default-environment: fromyaml\n")
-		writeTestFile(t, INFISICAL_WORKSPACE_CONFIG_FILE_NAME, `{"defaultEnvironment":"fromjson"}`)
+		writeTestFile(t, LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME, `{"defaultEnvironment":"fromjson"}`)
 		t.Setenv(INFISICAL_ENVIRONMENT_NAME, "")
 		if got := ResolveEnvironmentName(newResolveTestCmd(t)); got != "fromyaml" {
 			t.Fatalf("got %q, want fromyaml", got)

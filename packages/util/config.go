@@ -30,7 +30,7 @@ func ConfigFileExists() bool {
 }
 
 func WorkspaceConfigFileExistsInCurrentPath() bool {
-	for _, fileName := range []string{INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_WORKSPACE_CONFIG_FILE_NAME} {
+	for _, fileName := range []string{INFISICAL_WORKSPACE_CONFIG_FILE_NAME, LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME} {
 		if _, err := os.Stat(fileName); err == nil {
 			return true
 		} else {
@@ -65,8 +65,8 @@ func GetDomainFromFile() (domain string, valid bool) {
 }
 
 func GetWorkSpaceFromFilePath(configFileDir string) (models.WorkspaceConfigFile, error) {
-	yamlConfigFilePath := filepath.Join(configFileDir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
-	jsonConfigFilePath := filepath.Join(configFileDir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+	yamlConfigFilePath := filepath.Join(configFileDir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+	jsonConfigFilePath := filepath.Join(configFileDir, LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 
 	// the yaml file takes precedence over the legacy json file when both exist
 	if workspaceConfigFile, exists, err := readWorkspaceConfigYamlIfExists(yamlConfigFilePath); exists {
@@ -74,7 +74,7 @@ func GetWorkSpaceFromFilePath(configFileDir string) (models.WorkspaceConfigFile,
 	}
 
 	if _, err := os.Stat(jsonConfigFilePath); os.IsNotExist(err) {
-		return models.WorkspaceConfigFile{}, fmt.Errorf("no %s or %s found in %s", INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_WORKSPACE_CONFIG_FILE_NAME, configFileDir)
+		return models.WorkspaceConfigFile{}, fmt.Errorf("no %s or %s found in %s", INFISICAL_WORKSPACE_CONFIG_FILE_NAME, LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME, configFileDir)
 	}
 
 	return GetWorkspaceConfigByPath(jsonConfigFilePath)
@@ -159,7 +159,7 @@ func gitBranchMapFromOverrides(gitBranchOverrides []models.GitBranchEnvironmentO
 // findWorkspaceConfigFileInDir looks for a .infisical.yaml (or legacy .infisical.json) in exactly
 // the given directory, without walking up. The YAML file takes precedence.
 func findWorkspaceConfigFileInDir(dir string) (string, bool) {
-	for _, fileName := range []string{INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_WORKSPACE_CONFIG_FILE_NAME} {
+	for _, fileName := range []string{INFISICAL_WORKSPACE_CONFIG_FILE_NAME, LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME} {
 		path := filepath.Join(dir, fileName)
 		if _, err := os.Stat(path); err == nil {
 			return path, true
@@ -192,7 +192,7 @@ func FindWorkspaceConfigFile() (string, error) {
 	}
 
 	// file not found
-	return "", fmt.Errorf("file not found: %s or %s", INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+	return "", fmt.Errorf("file not found: %s or %s", INFISICAL_WORKSPACE_CONFIG_FILE_NAME, LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 
 }
 

@@ -7,12 +7,15 @@ import (
 )
 
 const (
-	CONFIG_FILE_NAME                           = "infisical-config.json"
-	CONFIG_FOLDER_NAME                         = ".infisical"
-	INFISICAL_DEFAULT_US_URL                   = "https://app.infisical.com"
-	INFISICAL_DEFAULT_EU_URL                   = "https://eu.infisical.com"
-	INFISICAL_WORKSPACE_CONFIG_FILE_NAME       = ".infisical.json"
-	INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME   = ".infisical.yaml"
+	CONFIG_FILE_NAME         = "infisical-config.json"
+	CONFIG_FOLDER_NAME       = ".infisical"
+	INFISICAL_DEFAULT_US_URL = "https://app.infisical.com"
+	INFISICAL_DEFAULT_EU_URL = "https://eu.infisical.com"
+
+	// Legacy workspace config file name, still supported for backwards compatibility.
+	LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME = ".infisical.json"
+	INFISICAL_WORKSPACE_CONFIG_FILE_NAME        = ".infisical.yaml"
+
 	INFISICAL_WORKSPACE_CONFIG_YAML_VERSION    = 1
 	INFISICAL_TOKEN_NAME                       = "INFISICAL_TOKEN"
 	INFISICAL_PROJECT_ID_NAME                  = "INFISICAL_PROJECT_ID"

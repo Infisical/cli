@@ -30,7 +30,7 @@ func TestWriteWorkspaceFile(t *testing.T) {
 			t.Fatalf("writeWorkspaceFile: %v", err)
 		}
 
-		yamlPath := filepath.Join(dir, util.INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
+		yamlPath := filepath.Join(dir, util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 		raw, err := os.ReadFile(yamlPath)
 		if err != nil {
 			t.Fatalf("read %s: %v", yamlPath, err)
@@ -67,14 +67,14 @@ func TestWriteWorkspaceFile(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read dir: %v", err)
 		}
-		if len(entries) != 1 || entries[0].Name() != util.INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME {
-			t.Errorf("expected only %s in dir, got %v", util.INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, entries)
+		if len(entries) != 1 || entries[0].Name() != util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME {
+			t.Errorf("expected only %s in dir, got %v", util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME, entries)
 		}
 	})
 
 	t.Run("leaves a legacy json config in place", func(t *testing.T) {
 		dir := isolateWorkspaceDir(t)
-		jsonPath := filepath.Join(dir, util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+		jsonPath := filepath.Join(dir, util.LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 		if err := os.WriteFile(jsonPath, []byte(`{"workspaceId":"proj-old"}`), 0o600); err != nil {
 			t.Fatalf("write json: %v", err)
 		}
@@ -110,7 +110,7 @@ func TestWriteWorkspaceFile(t *testing.T) {
 		for _, showMessages := range []bool{false, true} {
 			stderr.Reset()
 			dir := isolateWorkspaceDir(t)
-			if err := os.WriteFile(filepath.Join(dir, util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME), []byte(`{"workspaceId":"proj-old"}`), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, util.LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME), []byte(`{"workspaceId":"proj-old"}`), 0o600); err != nil {
 				t.Fatalf("write json: %v", err)
 			}
 
@@ -118,7 +118,7 @@ func TestWriteWorkspaceFile(t *testing.T) {
 				t.Fatalf("writeWorkspaceFile: %v", err)
 			}
 
-			warned := strings.Contains(stderr.String(), util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+			warned := strings.Contains(stderr.String(), util.LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 			if warned != showMessages {
 				t.Errorf("showMessages=%t: warned = %t, stderr:\n%s", showMessages, warned, stderr.String())
 			}
