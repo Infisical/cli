@@ -103,7 +103,8 @@ type sessionResolver interface {
 // Implemented by the Infisical resolver. Kept apart from sessionResolver so resolvers that never broker an
 // OAuth credential need not stub it.
 type credentialRefresher interface {
-	refreshCredential(sessionToken, serviceID, hostPattern, rejectedHash string, requiredScopes []string) (credential, string, error)
+	refreshCredential(sessionToken, serviceID, hostPattern, rejectedHash string) (credential, string, error)
+	reportMissingScopes(sessionToken, serviceID, hostPattern, rejectedHash string, requiredScopes []string) error
 }
 
 type sessionCache struct {
@@ -451,11 +452,10 @@ func credentialHash(cred *credential) string {
 }
 
 // refreshCredential asks Infisical for a replacement of the token the upstream rejected and swaps it into
-// the session's entry, so later requests inject it. With requiredScopes it reports a 403 insufficient_scope
-// instead, and Infisical answers with the current token unrefreshed. hostPattern is that of the cached
-// service whose credential the rejected request carried: a token minted for wherever the service points now
-// must never be sent to where it used to point.
-func (c *sessionCache) refreshCredential(sessionToken, serviceID, hostPattern string, rejected *credential, requiredScopes []string) (credential, error) {
+// the session's entry, so later requests inject it. hostPattern is that of the cached service whose
+// credential the rejected request carried: a token minted for wherever the service points now must never be
+// sent to where it used to point.
+func (c *sessionCache) refreshCredential(sessionToken, serviceID, hostPattern string, rejected *credential) (credential, error) {
 	refresher, ok := c.resolver.(credentialRefresher)
 	if !ok {
 		return credential{}, errCredentialNotRefreshable
@@ -463,15 +463,13 @@ func (c *sessionCache) refreshCredential(sessionToken, serviceID, hostPattern st
 	key := sessionKey(sessionToken)
 	rejectedHash := credentialHash(rejected)
 
-	result, err, _ := c.credentialFlights.Do(credentialFlightKey(key, serviceID, hostPattern, rejectedHash, requiredScopes), func() (any, error) {
+	result, err, _ := c.credentialFlights.Do(credentialFlightKey(key, serviceID, hostPattern, rejectedHash, nil), func() (any, error) {
 		// Checked inside the flight so a caller that arrives after another refresh finished also reuses
 		// its replacement instead of asking Infisical again.
-		if len(requiredScopes) == 0 {
-			if current, ok := c.currentCredential(key, serviceID, hostPattern); ok && current.refreshable && credentialHash(&current) != rejectedHash {
-				return current, nil
-			}
+		if current, ok := c.currentCredential(key, serviceID, hostPattern); ok && current.refreshable && credentialHash(&current) != rejectedHash {
+			return current, nil
 		}
-		fresh, status, err := refresher.refreshCredential(sessionToken, serviceID, hostPattern, rejectedHash, requiredScopes)
+		fresh, status, err := refresher.refreshCredential(sessionToken, serviceID, hostPattern, rejectedHash)
 		if err != nil {
 			return nil, err
 		}
@@ -488,6 +486,20 @@ func (c *sessionCache) refreshCredential(sessionToken, serviceID, hostPattern st
 		return credential{}, err
 	}
 	return result.(credential), nil
+}
+
+// reportMissingScopes tells Infisical which scopes the upstream's 403 insufficient_scope challenge asked for,
+// so the service shows what reauthorizing has to request. Nothing is refreshed, so the cache is left alone.
+func (c *sessionCache) reportMissingScopes(sessionToken, serviceID, hostPattern string, rejected *credential, requiredScopes []string) error {
+	refresher, ok := c.resolver.(credentialRefresher)
+	if !ok {
+		return errCredentialNotRefreshable
+	}
+	rejectedHash := credentialHash(rejected)
+	_, err, _ := c.credentialFlights.Do(credentialFlightKey(sessionKey(sessionToken), serviceID, hostPattern, rejectedHash, requiredScopes), func() (any, error) {
+		return nil, refresher.reportMissingScopes(sessionToken, serviceID, hostPattern, rejectedHash, requiredScopes)
+	})
+	return err
 }
 
 // Scope reports are bound to the rejected token, so neither different tokens nor different scope sets may

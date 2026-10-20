@@ -86,16 +86,23 @@ func (r *infisicalResolver) resolve(sessionToken string, held *sessionLogGrant) 
 
 // Bounded by the resolver client's timeout, so a stalled control plane fails the refresh rather than
 // holding the agent's request open.
-func (r *infisicalResolver) refreshCredential(sessionToken, serviceID, hostPattern, rejectedHash string, requiredScopes []string) (credential, string, error) {
+func (r *infisicalResolver) refreshCredential(sessionToken, serviceID, hostPattern, rejectedHash string) (credential, string, error) {
 	res, err := api.CallRefreshAgentVaultServiceCredential(r.client, sessionToken, serviceID, api.RefreshAgentVaultServiceCredentialRequest{
 		HostPattern:       hostPattern,
 		RejectedTokenHash: rejectedHash,
-		RequiredScopes:    requiredScopes,
 	})
 	if err != nil {
 		return credential{}, "", err
 	}
 	return toCredential(res.Credential), res.Status, nil
+}
+
+func (r *infisicalResolver) reportMissingScopes(sessionToken, serviceID, hostPattern, rejectedHash string, requiredScopes []string) error {
+	return api.CallReportAgentVaultServiceMissingScopes(r.client, sessionToken, serviceID, api.ReportAgentVaultServiceMissingScopesRequest{
+		HostPattern:       hostPattern,
+		RejectedTokenHash: rejectedHash,
+		RequiredScopes:    requiredScopes,
+	})
 }
 
 func toSessionLogGrant(sessionID string, wire api.AgentVaultSessionLogGrant, held *sessionLogGrant) *sessionLogGrant {

@@ -56,17 +56,27 @@ func (r *oauthResolver) setServices(services ...*resolvedService) {
 	r.services = services
 }
 
-func (r *oauthResolver) refreshCredential(sessionToken, serviceID, hostPattern, rejectedHash string, requiredScopes []string) (credential, string, error) {
+func (r *oauthResolver) refreshCredential(sessionToken, serviceID, hostPattern, rejectedHash string) (credential, string, error) {
+	if r.gate != nil {
+		<-r.gate
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, refreshCall{sessionToken, serviceID, hostPattern, rejectedHash, nil})
+	if r.err != nil {
+		return credential{}, "", r.err
+	}
+	return r.issue, r.status, nil
+}
+
+func (r *oauthResolver) reportMissingScopes(sessionToken, serviceID, hostPattern, rejectedHash string, requiredScopes []string) error {
 	if r.gate != nil {
 		<-r.gate
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, refreshCall{sessionToken, serviceID, hostPattern, rejectedHash, requiredScopes})
-	if r.err != nil {
-		return credential{}, "", r.err
-	}
-	return r.issue, r.status, nil
+	return r.err
 }
 
 func (r *oauthResolver) refreshCalls() []refreshCall {
@@ -535,30 +545,48 @@ func TestRefreshCredentialCallsTheContractEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cred, status, err := resolver.refreshCredential("tok", "svc-1", "mcp.example", tokenHash("stale"), []string{"read"})
+	cred, status, err := resolver.refreshCredential("tok", "svc-1", "mcp.example", tokenHash("stale"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if gotPath != "/api/v1/agent-vault/proxy/services/svc-1/credential-refresh" || gotSession != "tok" || gotAuth != "Bearer ptok" {
 		t.Fatalf("path %q session %q auth %q", gotPath, gotSession, gotAuth)
 	}
-	want := map[string]any{"hostPattern": "mcp.example", "rejectedTokenHash": tokenHash("stale"), "requiredScopes": []any{"read"}}
+	want := map[string]any{"hostPattern": "mcp.example", "rejectedTokenHash": tokenHash("stale")}
 	if !reflect.DeepEqual(gotBody, want) {
 		t.Fatalf("body = %v", gotBody)
 	}
 	if string(cred.value) != "fresh" || !cred.refreshable || status != "connected" {
 		t.Fatalf("credential %+v status %q", cred, status)
 	}
+}
 
-	gotBody = nil
-	if _, _, err := resolver.refreshCredential("tok", "svc-1", "mcp.example", tokenHash("stale"), nil); err != nil {
+func TestReportMissingScopesCallsTheContractEndpoint(t *testing.T) {
+	var gotPath, gotSession, gotAuth string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotSession, gotAuth = r.URL.Path, r.Header.Get(api.AgentVaultSessionHeader), r.Header.Get("Authorization")
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	old := config.INFISICAL_URL
+	config.INFISICAL_URL = srv.URL + "/api"
+	defer func() { config.INFISICAL_URL = old }()
+
+	resolver, err := newInfisicalResolver(func() string { return "ptok" })
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, present := gotBody["requiredScopes"]; present {
-		t.Fatal("a 401 refresh sent requiredScopes")
+	if err := resolver.reportMissingScopes("tok", "svc-1", "mcp.example", tokenHash("stale"), []string{"read"}); err != nil {
+		t.Fatal(err)
 	}
-	if gotBody["hostPattern"] != "mcp.example" {
-		t.Fatalf("a 401 refresh sent hostPattern %v", gotBody["hostPattern"])
+	if gotPath != "/api/v1/agent-vault/proxy/services/svc-1/missing-scopes" || gotSession != "tok" || gotAuth != "Bearer ptok" {
+		t.Fatalf("path %q session %q auth %q", gotPath, gotSession, gotAuth)
+	}
+	want := map[string]any{"hostPattern": "mcp.example", "rejectedTokenHash": tokenHash("stale"), "requiredScopes": []any{"read"}}
+	if !reflect.DeepEqual(gotBody, want) {
+		t.Fatalf("body = %v", gotBody)
 	}
 }
 
@@ -584,8 +612,12 @@ func (r *pollRaceResolver) resolve(string, *sessionLogGrant) (*resolveResult, er
 	return &resolveResult{SessionID: "s1", Services: []*resolvedService{svc}}, nil
 }
 
-func (r *pollRaceResolver) refreshCredential(string, string, string, string, []string) (credential, string, error) {
+func (r *pollRaceResolver) refreshCredential(string, string, string, string) (credential, string, error) {
 	return r.issue, oauthStatusConnected, nil
+}
+
+func (r *pollRaceResolver) reportMissingScopes(string, string, string, string, []string) error {
+	return nil
 }
 
 func (r *pollRaceResolver) setPolled(value string) {
@@ -622,7 +654,7 @@ func TestAPollThatStartedBeforeASwapDoesNotRestoreTheReplacedToken(t *testing.T)
 	<-resolver.entered
 
 	old := oauthToken("old-token")
-	if _, err := cache.refreshCredential("tok", "svc-1", "mcp.example", &old, nil); err != nil {
+	if _, err := cache.refreshCredential("tok", "svc-1", "mcp.example", &old); err != nil {
 		t.Fatal(err)
 	}
 	close(release)
@@ -644,9 +676,14 @@ type scopeReportRefresher struct {
 	entered chan []string
 }
 
-func (r *scopeReportRefresher) refreshCredential(sessionToken, serviceID, hostPattern, rejectedHash string, requiredScopes []string) (credential, string, error) {
+func (r *scopeReportRefresher) refreshCredential(sessionToken, serviceID, hostPattern, rejectedHash string) (credential, string, error) {
+	r.entered <- nil
+	return r.oauthResolver.refreshCredential(sessionToken, serviceID, hostPattern, rejectedHash)
+}
+
+func (r *scopeReportRefresher) reportMissingScopes(sessionToken, serviceID, hostPattern, rejectedHash string, requiredScopes []string) error {
 	r.entered <- requiredScopes
-	return r.oauthResolver.refreshCredential(sessionToken, serviceID, hostPattern, rejectedHash, requiredScopes)
+	return r.oauthResolver.reportMissingScopes(sessionToken, serviceID, hostPattern, rejectedHash, requiredScopes)
 }
 
 func TestConcurrentScopeReportsEachReachInfisicalWhenTheirTokenOrScopesDiffer(t *testing.T) {
@@ -677,7 +714,7 @@ func TestConcurrentScopeReportsEachReachInfisicalWhenTheirTokenOrScopesDiffer(t 
 				go func() {
 					defer wg.Done()
 					sent := oauthToken(token)
-					if _, err := cache.refreshCredential("tok", "svc-1", "mcp.example", &sent, scopes); err != nil {
+					if err := cache.reportMissingScopes("tok", "svc-1", "mcp.example", &sent, scopes); err != nil {
 						t.Error(err)
 					}
 				}()
@@ -773,7 +810,7 @@ func TestARefreshedTokenIsRefusedWhenAPollRemovedTheAccessMeanwhile(t *testing.T
 			sent := oauthToken("old-token")
 			done := make(chan error, 1)
 			go func() {
-				_, err := cache.refreshCredential("tok", "svc-1", "mcp.example", &sent, nil)
+				_, err := cache.refreshCredential("tok", "svc-1", "mcp.example", &sent)
 				done <- err
 			}()
 
@@ -798,7 +835,7 @@ func TestARefreshedTokenIsDroppedWhenAPollMovedTheServiceMeanwhile(t *testing.T)
 	sent := oauthToken("a-token")
 	done := make(chan error, 1)
 	go func() {
-		_, err := cache.refreshCredential("tok", "svc-1", "a.example", &sent, nil)
+		_, err := cache.refreshCredential("tok", "svc-1", "a.example", &sent)
 		done <- err
 	}()
 
@@ -853,7 +890,7 @@ func TestA409FromCredentialRefreshLeavesTheCacheAlone(t *testing.T) {
 	}
 
 	sent := oauthToken("a-token")
-	_, err = cache.refreshCredential("tok", "svc-1", "a.example", &sent, nil)
+	_, err = cache.refreshCredential("tok", "svc-1", "a.example", &sent)
 	var apiErr *api.APIError
 	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusConflict {
 		t.Fatalf("err = %v, want the 409", err)
@@ -872,16 +909,14 @@ func TestA409FromCredentialRefreshLeavesTheCacheAlone(t *testing.T) {
 func TestALateCredentialResponseKeepsThePolledCredential(t *testing.T) {
 	cases := []struct {
 		name   string
-		scopes []string
 		issue  credential
 		polled credential
 		err    error
 	}{
-		{"reauthorized", nil, oauthToken("refreshed-old-token"), oauthToken("reauthorized-token"), nil},
-		{"scope report", []string{"write"}, oauthToken("old-token"), oauthToken("new-token"), nil},
-		{"static bearer", nil, oauthToken("refreshed-old-token"), credential{kind: credentialBearer, headerName: "X-Api-Key", value: []byte("old-token")}, errCredentialNotRefreshable},
-		{"basic", nil, oauthToken("refreshed-old-token"), credential{kind: credentialBasic, username: "user", password: []byte("password")}, errCredentialNotRefreshable},
-		{"passthrough", nil, oauthToken("refreshed-old-token"), credential{kind: credentialPassthrough}, errCredentialNotRefreshable},
+		{"reauthorized", oauthToken("refreshed-old-token"), oauthToken("reauthorized-token"), nil},
+		{"static bearer", oauthToken("refreshed-old-token"), credential{kind: credentialBearer, headerName: "X-Api-Key", value: []byte("old-token")}, errCredentialNotRefreshable},
+		{"basic", oauthToken("refreshed-old-token"), credential{kind: credentialBasic, username: "user", password: []byte("password")}, errCredentialNotRefreshable},
+		{"passthrough", oauthToken("refreshed-old-token"), credential{kind: credentialPassthrough}, errCredentialNotRefreshable},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -907,7 +942,7 @@ func TestALateCredentialResponseKeepsThePolledCredential(t *testing.T) {
 			done := make(chan result, 1)
 			sent := oauthToken("old-token")
 			go func() {
-				cred, err := cache.refreshCredential("tok", "svc-1", "mcp.example", &sent, tc.scopes)
+				cred, err := cache.refreshCredential("tok", "svc-1", "mcp.example", &sent)
 				done <- result{cred, err}
 			}()
 			<-resolver.entered
@@ -946,7 +981,7 @@ func TestALateScopeReportKeepsAConcurrentRefresh(t *testing.T) {
 	sent := oauthToken("old-token")
 	done := make(chan error, 1)
 	go func() {
-		_, err := cache.refreshCredential("tok", "svc-1", "mcp.example", &sent, []string{"write"})
+		err := cache.reportMissingScopes("tok", "svc-1", "mcp.example", &sent, []string{"write"})
 		done <- err
 	}()
 	<-resolver.entered

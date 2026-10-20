@@ -143,9 +143,8 @@ func CallResolveAgentVaultSession(httpClient *resty.Client, sessionToken string,
 }
 
 type RefreshAgentVaultServiceCredentialRequest struct {
-	HostPattern       string   `json:"hostPattern"`
-	RejectedTokenHash string   `json:"rejectedTokenHash"`
-	RequiredScopes    []string `json:"requiredScopes,omitempty"`
+	HostPattern       string `json:"hostPattern"`
+	RejectedTokenHash string `json:"rejectedTokenHash"`
 }
 
 type RefreshAgentVaultServiceCredentialResponse struct {
@@ -170,6 +169,29 @@ func CallRefreshAgentVaultServiceCredential(httpClient *resty.Client, sessionTok
 		return RefreshAgentVaultServiceCredentialResponse{}, NewAPIErrorWithResponse("CallRefreshAgentVaultServiceCredential", response, nil)
 	}
 	return res, nil
+}
+
+type ReportAgentVaultServiceMissingScopesRequest struct {
+	HostPattern       string   `json:"hostPattern"`
+	RejectedTokenHash string   `json:"rejectedTokenHash"`
+	RequiredScopes    []string `json:"requiredScopes"`
+}
+
+func CallReportAgentVaultServiceMissingScopes(httpClient *resty.Client, sessionToken, serviceID string, request ReportAgentVaultServiceMissingScopesRequest) error {
+	response, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		SetHeader(AgentVaultSessionHeader, sessionToken).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/agent-vault/proxy/services/%s/missing-scopes", config.INFISICAL_URL, url.PathEscape(serviceID)))
+
+	if err != nil {
+		return NewGenericRequestError("CallReportAgentVaultServiceMissingScopes", err)
+	}
+	if response.IsError() {
+		return NewAPIErrorWithResponse("CallReportAgentVaultServiceMissingScopes", response, nil)
+	}
+	return nil
 }
 
 type CreateAgentVaultSessionLogChunkRequest struct {

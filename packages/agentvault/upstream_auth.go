@@ -42,7 +42,7 @@ func (ps *proxyServer) handleUpstreamAuth(req *http.Request, resp *http.Response
 	case http.StatusUnauthorized:
 		// An auth-error body can stay open indefinitely; draining it would stall the refresh.
 		_ = resp.Body.Close()
-		fresh, err := ps.cache.refreshCredential(sessionToken, svc.id, svc.hostPattern, sent, nil)
+		fresh, err := ps.cache.refreshCredential(sessionToken, svc.id, svc.hostPattern, sent)
 		if err != nil {
 			log.Warn().Err(err).Str("service", svc.name).Str("serviceId", svc.id).
 				Msg("agent-vault: the upstream rejected the OAuth token and Infisical could not refresh it")
@@ -101,7 +101,7 @@ func (ps *proxyServer) reportInsufficientScope(resp *http.Response, sessionToken
 	if len(scopes) == 0 {
 		return true
 	}
-	if _, err := ps.cache.refreshCredential(sessionToken, svc.id, svc.hostPattern, sent, scopes); err != nil {
+	if err := ps.cache.reportMissingScopes(sessionToken, svc.id, svc.hostPattern, sent, scopes); err != nil {
 		log.Warn().Err(err).Str("service", svc.name).Str("serviceId", svc.id).
 			Msg("agent-vault: could not report the upstream's required scopes to Infisical")
 	}
