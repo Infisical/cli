@@ -13,6 +13,7 @@ import (
 	"encoding/asn1"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 	"sort"
@@ -336,14 +337,14 @@ func detectKeyAlgorithm(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, handle pk
 		pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, nil),
 	})
 	if err != nil || len(attrs) == 0 {
-		return "", &Pkcs11Error{Code: Pkcs11ErrInternal, Message: "Failed to read CKA_KEY_TYPE"}
+		return "", keyAttributeReadError(err)
 	}
 	keyType := decodeUlong(attrs[0].Value)
 	switch keyType {
 	case pkcs11.CKK_RSA:
 		modAttrs, err := ctx.GetAttributeValue(session, handle, []*pkcs11.Attribute{pkcs11.NewAttribute(pkcs11.CKA_MODULUS, nil)})
 		if err != nil || len(modAttrs) == 0 {
-			return "", &Pkcs11Error{Code: Pkcs11ErrInternal, Message: "Failed to read CKA_MODULUS"}
+			return "", keyAttributeReadError(err)
 		}
 		modulusLen := len(bytes.TrimLeft(modAttrs[0].Value, "\x00"))
 		switch modulusLen {
@@ -358,7 +359,7 @@ func detectKeyAlgorithm(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, handle pk
 	case pkcs11.CKK_EC:
 		paramsAttrs, err := ctx.GetAttributeValue(session, handle, []*pkcs11.Attribute{pkcs11.NewAttribute(pkcs11.CKA_EC_PARAMS, nil)})
 		if err != nil || len(paramsAttrs) == 0 {
-			return "", &Pkcs11Error{Code: Pkcs11ErrInternal, Message: "Failed to read CKA_EC_PARAMS"}
+			return "", keyAttributeReadError(err)
 		}
 		if bytes.Equal(paramsAttrs[0].Value, ecParamsP256) {
 			return KeyAlgorithmECCP256, nil
@@ -369,6 +370,24 @@ func detectKeyAlgorithm(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, handle pk
 		return "", &Pkcs11Error{Code: Pkcs11ErrMechanismInvalid, Message: "Unsupported EC curve"}
 	}
 	return "", &Pkcs11Error{Code: Pkcs11ErrMechanismInvalid, Message: fmt.Sprintf("Unsupported PKCS#11 key type: %d", keyType)}
+}
+
+var errKeyAttributeUnreadable = &Pkcs11Error{Code: Pkcs11ErrInternal, Message: "The HSM does not reveal this key attribute"}
+
+func keyAttributeReadError(err error) error {
+	e, ok := err.(pkcs11.Error)
+	if err == nil || (ok && (e == pkcs11.CKR_ATTRIBUTE_TYPE_INVALID || e == pkcs11.CKR_ATTRIBUTE_SENSITIVE)) {
+		return errKeyAttributeUnreadable
+	}
+	if ok && (e == pkcs11.CKR_TOKEN_NOT_PRESENT || e == pkcs11.CKR_DEVICE_REMOVED || e == pkcs11.CKR_DEVICE_ERROR) {
+		return &Pkcs11Error{Code: Pkcs11ErrDriverUnavailable, Message: "Driver unavailable"}
+	}
+	return &Pkcs11Error{Code: Pkcs11ErrInternal, Message: fmt.Sprintf("Failed to read key attributes: %v", err)}
+}
+
+func isTolerableKeyLookupError(err error) bool {
+	var p11Err *Pkcs11Error
+	return err == errKeyAttributeUnreadable || (errors.As(err, &p11Err) && p11Err.Code == Pkcs11ErrMechanismInvalid)
 }
 
 func findObject(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, key KeyRef, class uint) (pkcs11.ObjectHandle, bool, error) {
@@ -479,13 +498,22 @@ func (m *pkcs11ModuleImpl) FindPrivateKeys(slotLabel string, pin []byte, keyLabe
 			attrs, err := m.ctx.GetAttributeValue(session, handle, []*pkcs11.Attribute{
 				pkcs11.NewAttribute(pkcs11.CKA_ID, nil),
 			})
-			if err == nil && len(attrs) == 1 {
+			switch {
+			case err == nil && len(attrs) == 1 && len(attrs[0].Value) <= maxKeyIDBytes:
 				keyID = hex.EncodeToString(attrs[0].Value)
-			} else {
+			case err == nil && len(attrs) == 1:
+				log.Warn().Str("keyLabel", keyLabel).Int("keyIdBytes", len(attrs[0].Value)).Msg("pkcs11: CKA_ID of a matching private key is longer than a request can carry, reporting it without an ID")
+			default:
+				if readErr := keyAttributeReadError(err); readErr != errKeyAttributeUnreadable {
+					return readErr
+				}
 				log.Warn().Err(err).Str("keyLabel", keyLabel).Msg("pkcs11: CKA_ID of a matching private key cannot be read")
 			}
 			keyAlgorithm, err := detectKeyAlgorithm(m.ctx, session, handle)
 			if err != nil {
+				if !isTolerableKeyLookupError(err) {
+					return err
+				}
 				log.Warn().Err(err).Str("keyLabel", keyLabel).Msg("pkcs11: algorithm of a matching private key cannot be read")
 			}
 			keys = append(keys, KeyInfo{Label: keyLabel, KeyID: keyID, KeyAlgorithm: keyAlgorithm})

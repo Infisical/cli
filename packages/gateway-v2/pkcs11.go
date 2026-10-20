@@ -38,7 +38,7 @@ type SignResult struct {
 }
 
 type KeyInfo struct {
-	Label        string `json:"label"`
+	Label        string `json:"keyLabel"`
 	KeyID        string `json:"keyId"`
 	KeyAlgorithm string `json:"keyAlgorithm"`
 }

@@ -8,6 +8,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"errors"
+	"math/big"
 	"testing"
 )
 
@@ -115,4 +116,34 @@ func TestVerifySignatureRejectsWrongKeyTypeAndBadInput(t *testing.T) {
 	expectCode(t, verifySignature(spki(t, &rsaKey.PublicKey), "CKM_ECDSA_SHA256", false, data, sig), Pkcs11ErrSignatureMismatch)
 	_, err := parseExpectedPublicKey([]byte("not a key"))
 	expectCode(t, err, Pkcs11ErrBadRequest)
+}
+
+func TestParseExpectedPublicKeyLimits(t *testing.T) {
+	_, err := parseExpectedPublicKey(make([]byte, maxPublicKeySpkiBytes+1))
+	expectCode(t, err, Pkcs11ErrBadRequest)
+
+	oversized := &rsa.PublicKey{N: new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), 5000), big.NewInt(1)), E: 65537}
+	der, err := x509.MarshalPKIXPublicKey(oversized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(der) > maxPublicKeySpkiBytes {
+		t.Fatalf("test key must stay under the size cap to reach the modulus check, got %d bytes", len(der))
+	}
+	_, err = parseExpectedPublicKey(der)
+	expectCode(t, err, Pkcs11ErrBadRequest)
+
+	key, _ := rsa.GenerateKey(rand.Reader, 4096)
+	if _, err := parseExpectedPublicKey(spkiDer(t, &key.PublicKey)); err != nil {
+		t.Fatalf("RSA-4096 must be accepted: %v", err)
+	}
+}
+
+func spkiDer(t *testing.T, pub any) []byte {
+	t.Helper()
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return der
 }

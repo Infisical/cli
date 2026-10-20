@@ -26,10 +26,21 @@ func mechanismHash(mechanism string) (crypto.Hash, error) {
 	return 0, &Pkcs11Error{Code: Pkcs11ErrMechanismInvalid, Message: fmt.Sprintf("Unsupported mechanism %q", mechanism)}
 }
 
+const (
+	maxPublicKeySpkiBytes = 1024
+	maxRsaModulusBits     = 4096
+)
+
 func parseExpectedPublicKey(publicKeySpki []byte) (crypto.PublicKey, error) {
+	if len(publicKeySpki) > maxPublicKeySpkiBytes {
+		return nil, &Pkcs11Error{Code: Pkcs11ErrBadRequest, Message: "publicKey is too large"}
+	}
 	pub, err := x509.ParsePKIXPublicKey(publicKeySpki)
 	if err != nil {
 		return nil, &Pkcs11Error{Code: Pkcs11ErrBadRequest, Message: "publicKey is not a valid SubjectPublicKeyInfo"}
+	}
+	if rsaKey, ok := pub.(*rsa.PublicKey); ok && rsaKey.N.BitLen() > maxRsaModulusBits {
+		return nil, &Pkcs11Error{Code: Pkcs11ErrBadRequest, Message: "publicKey RSA modulus is larger than 4096 bits"}
 	}
 	return pub, nil
 }
