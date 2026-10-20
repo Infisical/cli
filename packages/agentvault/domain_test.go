@@ -22,7 +22,9 @@ func setDomainGlobals(t *testing.T, url string, explicit bool) {
 	t.Cleanup(func() { config.INFISICAL_URL, config.INFISICAL_DOMAIN_EXPLICITLY_SET = prevURL, prevExplicit })
 }
 
-func TestEnrollRecordsTheInstanceItEnrolledWith(t *testing.T) {
+// Enrolls against a stub and returns its URL and the domain the state file recorded.
+func enrollAgainstStub(t *testing.T, explicit bool, workspaceYaml func(stubURL string) string) (string, string) {
+	t.Helper()
 	body, err := json.Marshal(api.LoginAgentVaultProxyResponse{
 		ProxyID:     "p1",
 		AccessToken: "tok",
@@ -36,7 +38,15 @@ func TestEnrollRecordsTheInstanceItEnrolledWith(t *testing.T) {
 		_, _ = w.Write(body)
 	}))
 	t.Cleanup(srv.Close)
-	setDomainGlobals(t, srv.URL+"/api", true)
+	setDomainGlobals(t, srv.URL+"/api", explicit)
+
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if workspaceYaml != nil {
+		if err := os.WriteFile(filepath.Join(dir, ".infisical.yaml"), []byte(workspaceYaml(srv.URL)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	st := newStore(t.TempDir())
 	if _, _, err := enroll(st, "avp_tok"); err != nil {
@@ -46,8 +56,23 @@ func TestEnrollRecordsTheInstanceItEnrolledWith(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if back.Domain != srv.URL {
-		t.Fatalf("enrolled against %s but recorded %q", srv.URL, back.Domain)
+	return srv.URL, back.Domain
+}
+
+func TestEnrollRecordsTheInstanceItEnrolledWith(t *testing.T) {
+	url, recorded := enrollAgainstStub(t, true, nil)
+	if recorded != url {
+		t.Fatalf("enrolled against %s but recorded %q", url, recorded)
+	}
+}
+
+// Enrolling once inside a checkout must not send every later run to the server its .infisical.yaml names.
+func TestEnrollDoesNotRecordADomainFromTheWorkspaceFile(t *testing.T) {
+	_, recorded := enrollAgainstStub(t, false, func(stubURL string) string {
+		return "general:\n  domain: " + stubURL + "\n"
+	})
+	if recorded != "" {
+		t.Fatalf("recorded %q, which came from .infisical.yaml", recorded)
 	}
 }
 

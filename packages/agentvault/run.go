@@ -59,8 +59,12 @@ func enroll(st *store, enrollmentToken string) (persistedState, *caManager, erro
 		ProxyName:       res.Name,
 		AccessToken:     res.AccessToken,
 		EnrollmentToken: enrollmentToken,
-		Domain:          currentDomain(),
 		Config:          config,
+	}
+	// Not from .infisical.yaml, for the same reason tick does not record one: enrolling once inside a checkout
+	// would otherwise send every later run to whatever server its file names.
+	if domainIsRecordable() {
+		state.Domain = currentDomain()
 	}
 
 	if err := st.saveCa(key, cert); err != nil {
