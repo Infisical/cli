@@ -65,6 +65,8 @@ type resolvedService struct {
 }
 
 // lastSeen and fetchedAt are wall-clock (Round(0)) so time asleep counts toward the grace and idle windows.
+// Trade-off: a wall-clock step moves them too (forward re-resolves early, backward stretches grace while
+// Infisical is unreachable), which is rarer and milder than sleep.
 type sessionEntry struct {
 	sessionID  string
 	expiresAt  *time.Time
