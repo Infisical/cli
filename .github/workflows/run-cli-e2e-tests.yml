@@ -179,24 +179,24 @@ jobs:
 
           # a config under /home is refused, since the service could not read it
           cp "$dir/agent-config.yaml" "$RUNNER_TEMP/agent-config.yaml"
-          if sudo ./infisical-cli agent systemd install ci-agent --config "$RUNNER_TEMP/agent-config.yaml"; then
+          if sudo ./infisical-cli agent service install ci-agent --config "$RUNNER_TEMP/agent-config.yaml"; then
             echo "install accepted a config under /home"
             exit 1
           fi
 
           # a name systemd already uses would override that service
-          if sudo ./infisical-cli agent systemd install systemd-journald --config "$dir/agent-config.yaml"; then
+          if sudo ./infisical-cli agent service install systemd-journald --config "$dir/agent-config.yaml"; then
             echo "install accepted the name of a system service"
             exit 1
           fi
           test ! -e /etc/systemd/system/systemd-journald.service
 
-          sudo ./infisical-cli agent systemd install ci-agent --config "$dir/agent-config.yaml"
+          sudo ./infisical-cli agent service install ci-agent --config "$dir/agent-config.yaml"
           # the service runs as root, so it runs its own copy of the config that only root can change
           test "$(sudo stat -c '%U %a' /etc/infisical/agents/ci-agent.service-config.yaml)" = "root 600"
           sudo cmp "$dir/agent-config.yaml" /etc/infisical/agents/ci-agent.service-config.yaml
           # Type=notify: start only returns once the agent reported it is ready
-          sudo ./infisical-cli agent systemd start ci-agent
+          sudo ./infisical-cli agent service start ci-agent
           systemctl is-active --quiet ci-agent
 
           for _ in $(seq 1 60); do
@@ -210,13 +210,13 @@ jobs:
             exit 1
           fi
 
-          sudo ./infisical-cli agent systemd stop ci-agent
+          sudo ./infisical-cli agent service stop ci-agent
           if systemctl is-active --quiet ci-agent; then
             echo "service is still active after stop"
             exit 1
           fi
 
-          sudo ./infisical-cli agent systemd uninstall ci-agent
+          sudo ./infisical-cli agent service uninstall ci-agent
           test ! -e /etc/systemd/system/ci-agent.service
           test ! -e /etc/infisical/agents/ci-agent.env.conf
           test ! -e /etc/infisical/agents/ci-agent.service-config.yaml

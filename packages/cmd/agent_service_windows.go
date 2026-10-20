@@ -192,7 +192,7 @@ func setAgentServiceLogOutput(name string, extra ...io.Writer) {
 	log.Logger = log.Output(zerolog.MultiLevelWriter(writers...))
 }
 
-func checkAgentServiceAdministrator() error {
+func checkAgentServiceSupport() error {
 	if !windows.GetCurrentProcessToken().IsElevated() {
 		return errors.New("managing the agent service requires Administrator rights, re-run the command from an elevated prompt (Run as administrator)")
 	}

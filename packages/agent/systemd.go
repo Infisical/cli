@@ -56,14 +56,14 @@ func CheckPathsVisibleToSystemd(paths []string) error {
 	return nil
 }
 
-// EnsureAgentSystemdService fails unless name is a service installed by `infisical agent systemd install`
+// EnsureAgentSystemdService fails unless name is a service installed by `infisical agent service install`
 // (only those have an agent environment file), so start, stop and uninstall never touch other units.
 func EnsureAgentSystemdService(name string) error {
 	if _, err := os.Stat(agentServiceFilePath(name)); os.IsNotExist(err) {
 		return fmt.Errorf("no agent service found for '%s'", name)
 	}
 	if _, err := os.Stat(agentEnvFilePath(name)); os.IsNotExist(err) {
-		return fmt.Errorf("'%s' was not installed by 'infisical agent systemd install', refusing to manage it", name)
+		return fmt.Errorf("'%s' was not installed by 'infisical agent service install', refusing to manage it", name)
 	}
 	return nil
 }
@@ -89,7 +89,7 @@ func InstallAgentSystemdService(name string, configPath string, configData []byt
 		return "", fmt.Errorf("failed to check for an existing '%s' unit: %v", name, err)
 	}
 	if strings.TrimSpace(string(out)) != "LoadState=not-found" {
-		return "", fmt.Errorf("a systemd unit named '%s' already exists. Pick another name, or if 'infisical agent systemd install' created it, uninstall it first with: sudo infisical agent systemd uninstall %s", name, name)
+		return "", fmt.Errorf("a systemd unit named '%s' already exists. Pick another name, or if 'infisical agent service install' created it, uninstall it first with: sudo infisical agent service uninstall %s", name, name)
 	}
 
 	if err := os.MkdirAll(agentsConfigDir, 0755); err != nil {
