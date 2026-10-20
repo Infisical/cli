@@ -1,9 +1,12 @@
 package cmd
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/Infisical/infisical-merge/packages/models"
@@ -23,7 +26,7 @@ func TestWriteWorkspaceFile(t *testing.T) {
 	t.Run("fresh directory gets only a yaml config", func(t *testing.T) {
 		dir := isolateWorkspaceDir(t)
 
-		if err := writeWorkspaceFile(models.Workspace{ID: "proj-new"}); err != nil {
+		if err := writeWorkspaceFile(models.Workspace{ID: "proj-new"}, true); err != nil {
 			t.Fatalf("writeWorkspaceFile: %v", err)
 		}
 
@@ -76,7 +79,7 @@ func TestWriteWorkspaceFile(t *testing.T) {
 			t.Fatalf("write json: %v", err)
 		}
 
-		if err := writeWorkspaceFile(models.Workspace{ID: "proj-new"}); err != nil {
+		if err := writeWorkspaceFile(models.Workspace{ID: "proj-new"}, true); err != nil {
 			t.Fatalf("writeWorkspaceFile: %v", err)
 		}
 
@@ -95,6 +98,30 @@ func TestWriteWorkspaceFile(t *testing.T) {
 		}
 		if cfg.WorkspaceId != "proj-new" {
 			t.Errorf("WorkspaceId = %q, want proj-new", cfg.WorkspaceId)
+		}
+	})
+
+	t.Run("legacy json warning is shown only when messages are enabled", func(t *testing.T) {
+		var stderr bytes.Buffer
+		originalStderrWriter := util.GetStderrWriter
+		util.GetStderrWriter = func() io.Writer { return &stderr }
+		t.Cleanup(func() { util.GetStderrWriter = originalStderrWriter })
+
+		for _, showMessages := range []bool{false, true} {
+			stderr.Reset()
+			dir := isolateWorkspaceDir(t)
+			if err := os.WriteFile(filepath.Join(dir, util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME), []byte(`{"workspaceId":"proj-old"}`), 0o600); err != nil {
+				t.Fatalf("write json: %v", err)
+			}
+
+			if err := writeWorkspaceFile(models.Workspace{ID: "proj-new"}, showMessages); err != nil {
+				t.Fatalf("writeWorkspaceFile: %v", err)
+			}
+
+			warned := strings.Contains(stderr.String(), util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+			if warned != showMessages {
+				t.Errorf("showMessages=%t: warned = %t, stderr:\n%s", showMessages, warned, stderr.String())
+			}
 		}
 	})
 }

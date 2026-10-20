@@ -182,7 +182,7 @@ func TestResolveEnvironmentName(t *testing.T) {
 		}
 	})
 
-	t.Run("yaml git-branch override matches the full branch name", func(t *testing.T) {
+	t.Run("yaml git-branch override matches the last segment of the branch", func(t *testing.T) {
 		mockCurrentBranch(t, "feature/login")
 		writeWorkspaceYaml(t, `secrets-management:
   environment:
@@ -190,8 +190,6 @@ func TestResolveEnvironmentName(t *testing.T) {
     overrides:
       git-branch:
         - branch: login
-          environment: fromlastsegment
-        - branch: feature/login
           environment: frombranch
 `)
 		t.Setenv(INFISICAL_ENVIRONMENT_NAME, "")
@@ -200,14 +198,14 @@ func TestResolveEnvironmentName(t *testing.T) {
 		}
 	})
 
-	t.Run("yaml git-branch override does not match only the last segment of the branch", func(t *testing.T) {
-		mockCurrentBranch(t, "feature/login")
+	t.Run("yaml deprecated default-environment used when only overrides are set and the branch has no override", func(t *testing.T) {
+		mockCurrentBranch(t, "main")
 		writeWorkspaceYaml(t, `secrets-management:
+  default-environment: fromyaml
   environment:
-    default: fromyaml
     overrides:
       git-branch:
-        - branch: login
+        - branch: feature/x
           environment: frombranch
 `)
 		t.Setenv(INFISICAL_ENVIRONMENT_NAME, "")

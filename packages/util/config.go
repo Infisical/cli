@@ -108,7 +108,9 @@ func readWorkspaceConfigYaml(path string) (models.WorkspaceConfigFile, error) {
 }
 
 // workspaceConfigFromYaml accepts both the environment section and the deprecated default-environment /
-// mappings fields. When the environment section has any value it wins, and the deprecated fields are ignored.
+// mappings fields. Each field is resolved on its own: environment.default wins over default-environment when
+// set, and environment.overrides.git-branch wins over the mappings when present, so a partial migration keeps
+// the deprecated value for whichever field has not been moved yet.
 func workspaceConfigFromYaml(workspaceConfigYaml models.WorkspaceConfigFileYaml) models.WorkspaceConfigFile {
 	secretsManagement := workspaceConfigYaml.SecretsManagement
 	workspaceConfigFile := models.WorkspaceConfigFile{
@@ -120,10 +122,16 @@ func workspaceConfigFromYaml(workspaceConfigYaml models.WorkspaceConfigFileYaml)
 	}
 
 	environment := secretsManagement.Environment
-	if environment != nil && (environment.Default != "" || len(environment.Overrides.GitBranch) > 0) {
+	if environment == nil {
+		return workspaceConfigFile
+	}
+
+	if environment.Default != "" {
 		workspaceConfigFile.DefaultEnvironment = environment.Default
-		workspaceConfigFile.GitBranchToEnvironmentMapping = nil
-		workspaceConfigFile.GitBranchOverrides = gitBranchMapFromOverrides(environment.Overrides.GitBranch)
+	}
+
+	if len(environment.Overrides.GitBranch) > 0 {
+		workspaceConfigFile.GitBranchToEnvironmentMapping = gitBranchMapFromOverrides(environment.Overrides.GitBranch)
 	}
 
 	return workspaceConfigFile

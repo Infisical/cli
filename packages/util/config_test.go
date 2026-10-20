@@ -279,15 +279,9 @@ func TestWorkspaceConfigYamlEnvironmentSchemas(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if cfg.WorkspaceId != "proj-123" || cfg.DefaultEnvironment != "dev" || cfg.DefaultSecretPath != "/backend" || cfg.Domain != "https://eu.infisical.com" {
-			t.Errorf("unexpected config %+v", cfg)
-		}
-		want := map[string]string{"main": "prod", "staging": "staging"}
-		if !maps.Equal(cfg.GitBranchOverrides, want) {
-			t.Errorf("GitBranchOverrides = %v, want %v", cfg.GitBranchOverrides, want)
-		}
-		if cfg.GitBranchToEnvironmentMapping != nil {
-			t.Errorf("GitBranchToEnvironmentMapping = %v, want nil", cfg.GitBranchToEnvironmentMapping)
+		assertFullWorkspaceConfig(t, cfg, "proj-123")
+		if got := cfg.GitBranchToEnvironmentMapping["staging"]; got != "staging" {
+			t.Errorf("GitBranchToEnvironmentMapping[staging] = %q, want staging", got)
 		}
 	})
 
@@ -297,9 +291,6 @@ func TestWorkspaceConfigYamlEnvironmentSchemas(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		assertFullWorkspaceConfig(t, cfg, "proj-123")
-		if cfg.GitBranchOverrides != nil {
-			t.Errorf("GitBranchOverrides = %v, want nil", cfg.GitBranchOverrides)
-		}
 	})
 
 	t.Run("the environment section wins over the deprecated fields", func(t *testing.T) {
@@ -325,11 +316,55 @@ func TestWorkspaceConfigYamlEnvironmentSchemas(t *testing.T) {
 		}
 		// the deprecated mappings are ignored, not merged with the overrides
 		want := map[string]string{"main": "prod"}
-		if !maps.Equal(cfg.GitBranchOverrides, want) {
-			t.Errorf("GitBranchOverrides = %v, want %v", cfg.GitBranchOverrides, want)
+		if !maps.Equal(cfg.GitBranchToEnvironmentMapping, want) {
+			t.Errorf("GitBranchToEnvironmentMapping = %v, want %v", cfg.GitBranchToEnvironmentMapping, want)
 		}
-		if cfg.GitBranchToEnvironmentMapping != nil {
-			t.Errorf("GitBranchToEnvironmentMapping = %v, want nil", cfg.GitBranchToEnvironmentMapping)
+	})
+
+	t.Run("environment.overrides alone keeps the deprecated default-environment", func(t *testing.T) {
+		cfg, err := readYaml(t, `secrets-management:
+  project-id: proj-123
+  default-environment: prod
+  mappings:
+    git-branch-to-environment:
+      main: old-main
+  environment:
+    overrides:
+      git-branch:
+        - branch: feature/x
+          environment: staging
+`)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.DefaultEnvironment != "prod" {
+			t.Errorf("DefaultEnvironment = %q, want prod", cfg.DefaultEnvironment)
+		}
+		want := map[string]string{"feature/x": "staging"}
+		if !maps.Equal(cfg.GitBranchToEnvironmentMapping, want) {
+			t.Errorf("GitBranchToEnvironmentMapping = %v, want %v", cfg.GitBranchToEnvironmentMapping, want)
+		}
+	})
+
+	t.Run("environment.default alone keeps the deprecated mappings", func(t *testing.T) {
+		cfg, err := readYaml(t, `secrets-management:
+  project-id: proj-123
+  default-environment: old-default
+  mappings:
+    git-branch-to-environment:
+      main: prod
+  environment:
+    default: dev
+`)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.DefaultEnvironment != "dev" {
+			t.Errorf("DefaultEnvironment = %q, want dev", cfg.DefaultEnvironment)
+		}
+		want := map[string]string{"main": "prod"}
+		if !maps.Equal(cfg.GitBranchToEnvironmentMapping, want) {
+			t.Errorf("GitBranchToEnvironmentMapping = %v, want %v", cfg.GitBranchToEnvironmentMapping, want)
 		}
 	})
 
@@ -363,8 +398,8 @@ func TestWorkspaceConfigYamlEnvironmentSchemas(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		want := map[string]string{"main": "prod"}
-		if !maps.Equal(cfg.GitBranchOverrides, want) {
-			t.Errorf("GitBranchOverrides = %v, want %v", cfg.GitBranchOverrides, want)
+		if !maps.Equal(cfg.GitBranchToEnvironmentMapping, want) {
+			t.Errorf("GitBranchToEnvironmentMapping = %v, want %v", cfg.GitBranchToEnvironmentMapping, want)
 		}
 	})
 }
