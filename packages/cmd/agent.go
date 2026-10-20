@@ -4142,6 +4142,9 @@ var agentStartCmd = &cobra.Command{
 			util.HandleError(err, "Unable to change to the config directory")
 		}
 
+		// a service runs the config it was installed with, which INFISICAL_AGENT_CONFIG_BASE64 would replace
+		os.Unsetenv("INFISICAL_AGENT_CONFIG_BASE64")
+
 		os.Exit(runAgent(configPath, nil, nil))
 	},
 }

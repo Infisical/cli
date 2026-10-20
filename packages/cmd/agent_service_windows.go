@@ -523,6 +523,9 @@ func (s *agentWindowsService) Execute(args []string, requests <-chan svc.ChangeR
 		log.Error().Msgf("unable to change to the config directory: %v", err)
 	}
 
+	// the service runs the config it was installed with, which a machine-wide INFISICAL_AGENT_CONFIG_BASE64 would replace
+	os.Unsetenv("INFISICAL_AGENT_CONFIG_BASE64")
+
 	stop := make(chan struct{})
 	ready := make(chan struct{}, 1)
 	exited := make(chan int, 1)
