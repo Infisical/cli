@@ -112,6 +112,8 @@ func listingTimeout(ctx context.Context) time.Duration {
 	return min(findTimeout, max(time.Until(deadline)-commandTimeoutGrace, time.Second))
 }
 
+var listFramingPrefix = []byte{0}
+
 func (s *scanner) listFiles(ctx context.Context, command string, limit time.Duration, outputLimit int) (RunResult, bool, error) {
 	res, err := s.run(ctx, `printf '\0'; `+command, limit, outputLimit)
 	if errors.Is(err, context.DeadlineExceeded) {
@@ -229,7 +231,7 @@ func (s *scanner) sudoListFolder(ctx context.Context, folder string, outputLimit
 		return sudoListing{ran: true, failed: true}
 	}
 	listing := sudoListing{ran: true, timedOut: timedOut}
-	if res.ExitCode != 0 && len(res.Stdout) == 0 {
+	if res.ExitCode != 0 && len(bytes.TrimPrefix(res.Stdout, listFramingPrefix)) == 0 {
 		if classifyReadFailure(res.Stderr) == StatusAccessDenied {
 			listing.denied = []string{folder}
 		} else {

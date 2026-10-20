@@ -49,10 +49,18 @@ type fakeRunner struct {
 	commands      []string
 }
 
-func (f *fakeRunner) Run(ctx context.Context, command string, _ int) (RunResult, error) {
+func (f *fakeRunner) Run(ctx context.Context, command string, limit int) (RunResult, error) {
 	f.mu.Lock()
 	f.commands = append(f.commands, command)
 	f.mu.Unlock()
+	res, err := f.dispatch(ctx, command, limit)
+	if err == nil && strings.Contains(command, `printf '\0'`) {
+		res.Stdout = append(append([]byte{}, listFramingPrefix...), res.Stdout...)
+	}
+	return res, err
+}
+
+func (f *fakeRunner) dispatch(ctx context.Context, command string, _ int) (RunResult, error) {
 	switch {
 	case strings.Contains(command, "uname -n"):
 		out := "H:web-01\nM:abc\nT:1\n"
