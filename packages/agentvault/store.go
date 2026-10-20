@@ -33,12 +33,14 @@ func DefaultDataDir() (string, error) {
 	return filepath.Join(home, ".infisical", "agent-vault"), nil
 }
 
-// Same keys as the enroll response it was built from, so the file reads like the API did.
+// Same keys as the enroll response it was built from, so the file reads like the API did. Domain is the
+// exception: the response does not carry it, and it is the instance the request went to.
 type persistedState struct {
 	ProxyID         string      `json:"proxyId"`
 	ProxyName       string      `json:"proxyName"`
 	AccessToken     string      `json:"accessToken"`
 	EnrollmentToken string      `json:"enrollmentToken"`
+	Domain          string      `json:"domain,omitempty"`
 	Config          ProxyConfig `json:"config"`
 }
 

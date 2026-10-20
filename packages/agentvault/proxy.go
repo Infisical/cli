@@ -87,6 +87,8 @@ type proxyServer struct {
 	// What Start loaded, so a settings change is persisted from memory. A re-read at that instant could find
 	// the file gone and write it back without the token. Only tick touches it after Start.
 	persisted persistedState
+	// Decided once at Start, from where this run's domain came from. Only tick reads it.
+	domainRecordable bool
 
 	saturationOnce sync.Once
 }
