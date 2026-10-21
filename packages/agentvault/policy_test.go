@@ -352,4 +352,15 @@ func TestPersonalValuesMissing(t *testing.T) {
 	if err := checkServicePolicy(svc, requestTo(t, "GET", "/x")); err != nil {
 		t.Fatalf("a configured service should pass: %v", err)
 	}
+
+	// The setup message wins over the method and path rules, so the owner learns the one thing they can fix.
+	restricted := serviceWithPolicy([]string{"GET"}, []string{"/repos"})
+	restricted.accessBundleName = "on-call"
+	restricted.personalValuesMissing = true
+	for _, req := range []*http.Request{requestTo(t, "POST", "/repos"), requestTo(t, "GET", "/admin")} {
+		err := checkServicePolicy(restricted, req)
+		if err == nil || !strings.Contains(err.Error(), "needs your personal values") {
+			t.Fatalf("%s %s on a service missing personal values should get the setup message, got %v", req.Method, req.URL.Path, err)
+		}
+	}
 }
