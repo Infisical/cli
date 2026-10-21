@@ -31,7 +31,7 @@ require (
 	github.com/h2non/filetype v1.1.3
 	github.com/hashicorp/go-version v1.9.0
 	github.com/infisical/go-sdk v0.7.0
-	github.com/infisical/infisical-kmip v0.3.20
+	github.com/infisical/infisical-kmip v0.3.21
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/jcmturner/gokrb5/v8 v8.4.4
 	github.com/masterzen/winrm v0.0.0-20260407182533-5570be7f80cf
