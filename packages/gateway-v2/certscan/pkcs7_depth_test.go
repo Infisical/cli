@@ -22,3 +22,10 @@ func TestASN1NestingWithinLimitAllowsShallow(t *testing.T) {
 		t.Fatal("expected shallow structure to be within the limit")
 	}
 }
+
+func TestASN1NestingWithinLimitRejectsOutOfBoundsLength(t *testing.T) {
+	overflowing := []byte{0x04, 0x84, 0xff, 0xff, 0xff, 0xfa}
+	if asn1NestingWithinLimit(overflowing, maxPKCS7NestingDepth) {
+		t.Fatal("expected a length larger than the remaining input to be rejected")
+	}
+}

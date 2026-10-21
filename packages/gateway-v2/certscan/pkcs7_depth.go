@@ -76,6 +76,9 @@ func asn1NestingWithinLimit(data []byte, maxDepth int) bool {
 				pos++
 			}
 		}
+		if length < 0 || length > n-pos {
+			return false
+		}
 		if constructed {
 			if len(stack)+1 > maxDepth {
 				return false
