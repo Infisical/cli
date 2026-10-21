@@ -391,8 +391,30 @@ func TestAChunkIsPostedBeforeItIsUploaded(t *testing.T) {
 	}
 }
 
-func TestAFailedUploadRePostsTheSameChunkID(t *testing.T) {
-	shipper := &fakeShipper{putResults: []error{errors.New("connection reset")}}
+func TestAnUploadThatFailsInAnOutageRetriesWithTheSameLink(t *testing.T) {
+	for _, putErr := range []error{errors.New("connection reset"), &s3UploadError{status: 503, code: "SlowDown"}} {
+		shipper := &fakeShipper{putResults: []error{putErr}}
+		log, _, tick := newTestLog(shipper)
+
+		log.record(testGrant("s1"), aRecord("api.github.com"))
+		tick()
+		tick()
+
+		if got := len(shipper.posts()); got != 1 {
+			t.Fatalf("%v: asked for %d upload links, want the first one reused", putErr, got)
+		}
+		puts := shipper.puts()
+		if len(puts) != 2 {
+			t.Fatalf("%v: expected a second upload attempt, saw %d", putErr, len(puts))
+		}
+		if puts[0].url != puts[1].url {
+			t.Fatalf("%v: the retry went to %q, not the link it already had %q", putErr, puts[1].url, puts[0].url)
+		}
+	}
+}
+
+func TestARefusedUploadAsksForANewLinkForTheSameChunk(t *testing.T) {
+	shipper := &fakeShipper{putResults: []error{&s3UploadError{status: 403, code: "AccessDenied"}}}
 	log, _, tick := newTestLog(shipper)
 
 	log.record(testGrant("s1"), aRecord("api.github.com"))
@@ -401,10 +423,10 @@ func TestAFailedUploadRePostsTheSameChunkID(t *testing.T) {
 
 	posts := shipper.posts()
 	if len(posts) != 2 {
-		t.Fatalf("expected the chunk to be re-posted, saw %d posts", len(posts))
+		t.Fatalf("expected a new upload link after the bucket refused, saw %d link requests", len(posts))
 	}
 	if posts[0].chunkID != posts[1].chunkID {
-		t.Fatalf("re-post used a different chunk id: %q then %q", posts[0].chunkID, posts[1].chunkID)
+		t.Fatalf("the new link is for a different chunk id: %q then %q", posts[0].chunkID, posts[1].chunkID)
 	}
 	if len(shipper.puts()) != 2 {
 		t.Fatalf("expected a second upload attempt, saw %d", len(shipper.puts()))

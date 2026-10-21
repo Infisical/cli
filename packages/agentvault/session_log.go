@@ -593,7 +593,9 @@ func (r *sessionLogRecorder) applyShipments(ctx context.Context, results []shipm
 			r.handleCreateFailure(res.spool, res.chunk, res.createErr, res.grantsIssuedAtSend)
 		default:
 			r.mu.Lock()
-			res.chunk.uploadURL = ""
+			if needsFreshUploadLink(res.putErr) {
+				res.chunk.uploadURL = ""
+			}
 			r.hold.s3Down = true
 			r.mu.Unlock()
 			if ctx.Err() == nil {
