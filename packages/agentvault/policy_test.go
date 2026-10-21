@@ -343,8 +343,9 @@ func TestPersonalValuesMissing(t *testing.T) {
 		t.Fatalf("a service missing the owner's personal values should be blocked, got %v", err)
 	}
 	if !strings.Contains(err.Error(), `service "github" needs your personal values`) ||
-		!strings.Contains(err.Error(), "Access Bundles > on-call") {
-		t.Fatalf("the refusal should say what to set up and where: %q", err.Error())
+		!strings.Contains(err.Error(), "Access Bundles > on-call") ||
+		!strings.Contains(err.Error(), "It can take a few minutes to apply") {
+		t.Fatalf("the refusal should say what to set up, where, and that saving takes a poll to apply: %q", err.Error())
 	}
 
 	svc.personalValuesMissing = false
