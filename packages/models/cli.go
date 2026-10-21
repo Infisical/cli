@@ -186,31 +186,29 @@ type GeneralConfigSection struct {
 	Domain string `yaml:"domain,omitempty"`
 }
 
-// GitBranchEnvironmentOverride is one entry of the secrets-management.environment.overrides.git-branch list.
+// GitBranchEnvironmentOverride is one entry of the secrets-management.overrides.git-branch list.
 type GitBranchEnvironmentOverride struct {
 	Branch      string `yaml:"branch"`
 	Environment string `yaml:"environment"`
 }
 
-type EnvironmentOverridesConfigSection struct {
+type OverridesConfigSection struct {
 	GitBranch []GitBranchEnvironmentOverride `yaml:"git-branch,omitempty"`
 }
 
-type EnvironmentConfigSection struct {
-	Default   string                            `yaml:"default,omitempty"`
-	Overrides EnvironmentOverridesConfigSection `yaml:"overrides,omitempty"`
-}
-
 type SecretsManagementConfigSection struct {
-	ProjectID string `yaml:"project-id"`
+	ProjectID   string                 `yaml:"project-id"`
+	Environment string                 `yaml:"environment,omitempty"`
+	SecretPath  string                 `yaml:"secret-path,omitempty"`
+	Overrides   OverridesConfigSection `yaml:"overrides,omitempty"`
 	// Deprecated: superseded by Environment; still read until support for it is removed.
 	DefaultEnvironment string `yaml:"default-environment,omitempty"`
-	DefaultSecretPath  string `yaml:"default-secret-path,omitempty"`
-	// Deprecated: superseded by Environment; still read until support for it is removed.
+	// Deprecated: superseded by SecretPath; still read until support for it is removed.
+	DefaultSecretPath string `yaml:"default-secret-path,omitempty"`
+	// Deprecated: superseded by Overrides.GitBranch; still read until support for it is removed.
 	Mappings struct {
 		GitBranchToEnvironment map[string]string `yaml:"git-branch-to-environment,omitempty"`
 	} `yaml:"mappings,omitempty"`
-	Environment *EnvironmentConfigSection `yaml:"environment,omitempty"`
 }
 
 type WorkspaceConfigFileYaml struct {

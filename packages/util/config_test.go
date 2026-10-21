@@ -241,22 +241,21 @@ func TestGetWorkSpaceFromFilePath(t *testing.T) {
 	})
 }
 
-const workspaceYAMLWithEnvironment = `general:
+const workspaceYAMLCurrent = `general:
   domain: https://eu.infisical.com
 secrets-management:
   project-id: proj-123
-  default-secret-path: /backend
-  environment:
-    default: dev
-    overrides:
-      git-branch:
-        - branch: main
-          environment: prod
-        - branch: staging
-          environment: staging
+  environment: dev
+  secret-path: /backend
+  overrides:
+    git-branch:
+      - branch: main
+        environment: prod
+      - branch: staging
+        environment: staging
 `
 
-func TestWorkspaceConfigYamlEnvironmentSchemas(t *testing.T) {
+func TestWorkspaceConfigYamlSchemas(t *testing.T) {
 	readYaml := func(t *testing.T, contents string) (models.WorkspaceConfigFile, error) {
 		t.Helper()
 		dir := t.TempDir()
@@ -274,8 +273,8 @@ func TestWorkspaceConfigYamlEnvironmentSchemas(t *testing.T) {
 		return cfg, err
 	}
 
-	t.Run("reads the environment section", func(t *testing.T) {
-		cfg, err := readYaml(t, workspaceYAMLWithEnvironment)
+	t.Run("reads the current keys", func(t *testing.T) {
+		cfg, err := readYaml(t, workspaceYAMLCurrent)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -285,7 +284,7 @@ func TestWorkspaceConfigYamlEnvironmentSchemas(t *testing.T) {
 		}
 	})
 
-	t.Run("reads the deprecated default-environment and mappings", func(t *testing.T) {
+	t.Run("reads the deprecated default-environment, default-secret-path and mappings", func(t *testing.T) {
 		cfg, err := readYaml(t, workspaceYAML)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -293,26 +292,30 @@ func TestWorkspaceConfigYamlEnvironmentSchemas(t *testing.T) {
 		assertFullWorkspaceConfig(t, cfg, "proj-123")
 	})
 
-	t.Run("the environment section wins over the deprecated fields", func(t *testing.T) {
+	t.Run("the current keys win over the deprecated ones", func(t *testing.T) {
 		cfg, err := readYaml(t, `secrets-management:
   project-id: proj-123
   default-environment: old-default
+  default-secret-path: /old
   mappings:
     git-branch-to-environment:
       main: old-main
       feature: old-feature
-  environment:
-    default: dev
-    overrides:
-      git-branch:
-        - branch: main
-          environment: prod
+  environment: dev
+  secret-path: /backend
+  overrides:
+    git-branch:
+      - branch: main
+        environment: prod
 `)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if cfg.DefaultEnvironment != "dev" {
 			t.Errorf("DefaultEnvironment = %q, want dev", cfg.DefaultEnvironment)
+		}
+		if cfg.DefaultSecretPath != "/backend" {
+			t.Errorf("DefaultSecretPath = %q, want /backend", cfg.DefaultSecretPath)
 		}
 		// the deprecated mappings are ignored, not merged with the overrides
 		want := map[string]string{"main": "prod"}
@@ -321,18 +324,18 @@ func TestWorkspaceConfigYamlEnvironmentSchemas(t *testing.T) {
 		}
 	})
 
-	t.Run("environment.overrides alone keeps the deprecated default-environment", func(t *testing.T) {
+	t.Run("overrides alone keep the deprecated default-environment and default-secret-path", func(t *testing.T) {
 		cfg, err := readYaml(t, `secrets-management:
   project-id: proj-123
   default-environment: prod
+  default-secret-path: /old
   mappings:
     git-branch-to-environment:
       main: old-main
-  environment:
-    overrides:
-      git-branch:
-        - branch: feature/x
-          environment: staging
+  overrides:
+    git-branch:
+      - branch: feature/x
+        environment: staging
 `)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -340,27 +343,34 @@ func TestWorkspaceConfigYamlEnvironmentSchemas(t *testing.T) {
 		if cfg.DefaultEnvironment != "prod" {
 			t.Errorf("DefaultEnvironment = %q, want prod", cfg.DefaultEnvironment)
 		}
+		if cfg.DefaultSecretPath != "/old" {
+			t.Errorf("DefaultSecretPath = %q, want /old", cfg.DefaultSecretPath)
+		}
 		want := map[string]string{"feature/x": "staging"}
 		if !maps.Equal(cfg.GitBranchToEnvironmentMapping, want) {
 			t.Errorf("GitBranchToEnvironmentMapping = %v, want %v", cfg.GitBranchToEnvironmentMapping, want)
 		}
 	})
 
-	t.Run("environment.default alone keeps the deprecated mappings", func(t *testing.T) {
+	t.Run("environment and secret-path alone keep the deprecated mappings", func(t *testing.T) {
 		cfg, err := readYaml(t, `secrets-management:
   project-id: proj-123
   default-environment: old-default
+  default-secret-path: /old
   mappings:
     git-branch-to-environment:
       main: prod
-  environment:
-    default: dev
+  environment: dev
+  secret-path: /backend
 `)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if cfg.DefaultEnvironment != "dev" {
 			t.Errorf("DefaultEnvironment = %q, want dev", cfg.DefaultEnvironment)
+		}
+		if cfg.DefaultSecretPath != "/backend" {
+			t.Errorf("DefaultSecretPath = %q, want /backend", cfg.DefaultSecretPath)
 		}
 		want := map[string]string{"main": "prod"}
 		if !maps.Equal(cfg.GitBranchToEnvironmentMapping, want) {
@@ -368,31 +378,16 @@ func TestWorkspaceConfigYamlEnvironmentSchemas(t *testing.T) {
 		}
 	})
 
-	t.Run("an empty environment section falls back to the deprecated fields", func(t *testing.T) {
-		cfg, err := readYaml(t, `secrets-management:
-  project-id: proj-123
-  default-environment: dev
-  environment: {}
-`)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if cfg.DefaultEnvironment != "dev" {
-			t.Errorf("DefaultEnvironment = %q, want dev", cfg.DefaultEnvironment)
-		}
-	})
-
 	t.Run("first override for a branch wins and entries without a branch are skipped", func(t *testing.T) {
 		cfg, err := readYaml(t, `secrets-management:
   project-id: proj-123
-  environment:
-    overrides:
-      git-branch:
-        - environment: orphan
-        - branch: main
-          environment: prod
-        - branch: main
-          environment: staging
+  overrides:
+    git-branch:
+      - environment: orphan
+      - branch: main
+        environment: prod
+      - branch: main
+        environment: staging
 `)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)

@@ -579,7 +579,7 @@ func ResolveEnvironmentName(cmd *cobra.Command) string {
 
 // ResolveSecretPath resolves the secret path (folder) for a command, in order:
 // the --path flag (if explicitly set) > INFISICAL_SECRET_PATH > .infisical.yaml
-// default-secret-path > the flag's own default value ("/").
+// secret-path (or the deprecated default-secret-path) > the flag's own default value ("/").
 func ResolveSecretPath(cmd *cobra.Command) string {
 	if cmd.Flags().Changed("path") {
 		value, _ := cmd.Flags().GetString("path")
@@ -597,7 +597,7 @@ func ResolveSecretPath(cmd *cobra.Command) string {
 
 // ResolveSecretPaths is ResolveSecretPath for commands whose --path flag can be repeated
 // (`run`). Explicit flags are returned as given; otherwise the single path from
-// INFISICAL_SECRET_PATH or .infisical.json defaultSecretPath, then the flag's default.
+// INFISICAL_SECRET_PATH or .infisical.yaml secret-path, then the flag's default.
 func ResolveSecretPaths(cmd *cobra.Command) []string {
 	if cmd.Flags().Changed("path") {
 		values, _ := cmd.Flags().GetStringArray("path")

@@ -107,10 +107,11 @@ func readWorkspaceConfigYaml(path string) (models.WorkspaceConfigFile, error) {
 	return workspaceConfigFromYaml(workspaceConfigFileYaml), nil
 }
 
-// workspaceConfigFromYaml accepts both the environment section and the deprecated default-environment /
-// mappings fields. Each field is resolved on its own: environment.default wins over default-environment when
-// set, and environment.overrides.git-branch wins over the mappings when present, so a partial migration keeps
-// the deprecated value for whichever field has not been moved yet.
+// workspaceConfigFromYaml accepts both the current keys and the deprecated default-environment /
+// default-secret-path / mappings ones. Each field is resolved on its own: environment wins over
+// default-environment and secret-path wins over default-secret-path when set, and overrides.git-branch replaces
+// the mappings when present, so a partial migration keeps the deprecated value for whichever field has not been
+// moved yet.
 func workspaceConfigFromYaml(workspaceConfigYaml models.WorkspaceConfigFileYaml) models.WorkspaceConfigFile {
 	secretsManagement := workspaceConfigYaml.SecretsManagement
 	workspaceConfigFile := models.WorkspaceConfigFile{
@@ -121,17 +122,16 @@ func workspaceConfigFromYaml(workspaceConfigYaml models.WorkspaceConfigFileYaml)
 		Domain:                        workspaceConfigYaml.General.Domain,
 	}
 
-	environment := secretsManagement.Environment
-	if environment == nil {
-		return workspaceConfigFile
+	if secretsManagement.Environment != "" {
+		workspaceConfigFile.DefaultEnvironment = secretsManagement.Environment
 	}
 
-	if environment.Default != "" {
-		workspaceConfigFile.DefaultEnvironment = environment.Default
+	if secretsManagement.SecretPath != "" {
+		workspaceConfigFile.DefaultSecretPath = secretsManagement.SecretPath
 	}
 
-	if len(environment.Overrides.GitBranch) > 0 {
-		workspaceConfigFile.GitBranchToEnvironmentMapping = gitBranchMapFromOverrides(environment.Overrides.GitBranch)
+	if len(secretsManagement.Overrides.GitBranch) > 0 {
+		workspaceConfigFile.GitBranchToEnvironmentMapping = gitBranchMapFromOverrides(secretsManagement.Overrides.GitBranch)
 	}
 
 	return workspaceConfigFile
