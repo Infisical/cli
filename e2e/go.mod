@@ -1,6 +1,6 @@
 module github.com/infisical/cli/e2e-tests
 
-go 1.26.9
+go 1.26.10
 
 require (
 	github.com/Infisical/infisical-merge v0.0.0

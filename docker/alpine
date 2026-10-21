@@ -3,7 +3,7 @@ RUN apk add --no-cache tini
 
 ## Upgrade OpenSSL libraries to mitigate known vulnerabilities as the current Alpine image has not been patched yet.
 ## Also upgrade musl/musl-utils to pull the CVE-2026-40200 (qsort stack corruption) fix shipped in 1.2.5-r12.
-RUN apk update && apk upgrade --no-cache libcrypto3 libssl3 musl musl-utils
+RUN apk update && apk upgrade --no-cache libcrypto3 libssl3 musl musl-utils ca-certificates-bundle
 
 
 COPY infisical /bin/infisical
