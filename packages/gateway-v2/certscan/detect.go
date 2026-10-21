@@ -5,8 +5,6 @@ import (
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/pem"
-
-	"go.mozilla.org/pkcs7"
 )
 
 var pemMarker = []byte("-----BEGIN ")
@@ -65,7 +63,7 @@ func parsePEM(data []byte) ParseResult {
 			}
 		case "PKCS7":
 			sawCertificateBlock = true
-			if p7, err := pkcs7.Parse(block.Bytes); err == nil {
+			if p7, err := parsePKCS7(block.Bytes); err == nil {
 				certs = append(certs, p7.Certificates...)
 			}
 		}
@@ -92,7 +90,7 @@ func parseDER(data []byte, password *string) ParseResult {
 	if cert, err := x509.ParseCertificate(data); err == nil {
 		return ParseResult{Format: FormatDER, Status: StatusOK, Chains: buildChains([]*x509.Certificate{cert})}
 	}
-	if p7, err := pkcs7.Parse(data); err == nil && len(p7.Certificates) > 0 {
+	if p7, err := parsePKCS7(data); err == nil && len(p7.Certificates) > 0 {
 		return ParseResult{Format: FormatPKCS7, Status: StatusOK, Chains: buildChains(p7.Certificates)}
 	}
 	if len(data) < 2 || data[0] != asn1SequenceTag || data[1]&asn1LongFormLength == 0 {
