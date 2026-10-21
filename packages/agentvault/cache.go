@@ -64,6 +64,9 @@ type resolvedService struct {
 	substitutions       []substitution
 }
 
+// lastSeen and fetchedAt are wall-clock (Round(0)) so time asleep counts toward the grace and idle windows.
+// Trade-off: a wall-clock step moves them too (forward re-resolves early, backward stretches grace while
+// Infisical is unreachable), which is rarer and milder than sleep.
 type sessionEntry struct {
 	sessionID  string
 	expiresAt  *time.Time
@@ -189,7 +192,7 @@ func (c *sessionCache) lookup(sessionToken string) ([]*resolvedService, *session
 			delete(c.entries, key)
 			delete(c.tokens, key)
 		} else {
-			entry.lastSeen = time.Now()
+			entry.lastSeen = time.Now().Round(0)
 			svcs, grant := entry.services, entry.sessionLog
 			c.mu.Unlock()
 			return svcs, grant, nil
@@ -225,8 +228,8 @@ func (c *sessionCache) lookup(sessionToken string) ([]*resolvedService, *session
 			expiresAt:  result.ExpiresAt,
 			services:   result.Services,
 			sessionLog: result.SessionLog,
-			lastSeen:   time.Now(),
-			fetchedAt:  time.Now(),
+			lastSeen:   time.Now().Round(0),
+			fetchedAt:  time.Now().Round(0),
 		}
 		c.tokens[key] = sessionToken
 		return cacheLookup{services: result.Services, sessionLog: result.SessionLog}, nil
@@ -331,7 +334,7 @@ func (c *sessionCache) refreshOne(key, token string) {
 		entry.expiresAt = result.ExpiresAt
 		entry.services = result.Services
 		entry.sessionLog = result.SessionLog
-		entry.fetchedAt = time.Now()
+		entry.fetchedAt = time.Now().Round(0)
 	}
 }
 

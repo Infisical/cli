@@ -135,7 +135,9 @@ func (c *caManager) mintLeaf(hostname string) (tls.Certificate, error) {
 		return tls.Certificate{}, err
 	}
 
-	notAfter := time.Now().Add(leafTTL)
+	// Truncate drops the monotonic reading, which pauses while the machine sleeps and kept serving leaves
+	// past their NotAfter, and matches the whole seconds NotAfter is encoded in.
+	notAfter := time.Now().Add(leafTTL).Truncate(time.Second)
 	// A leaf must never outlive its issuer, or clients reject the chain as the root nears expiry.
 	if notAfter.After(rootCert.NotAfter) {
 		notAfter = rootCert.NotAfter

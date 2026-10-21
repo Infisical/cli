@@ -1616,3 +1616,14 @@ func TestOneStuckRequestAtShutdownDoesNotHoldBackTheOtherSessions(t *testing.T) 
 		})
 	}
 }
+
+// The real clock, not newTestLog's: its fake times never carry a monotonic reading, so the check would always pass.
+// == rather than Equal: Equal ignores the monotonic reading, which pauses while the machine sleeps.
+func TestIdleCloseIgnoresTheSleepingClock(t *testing.T) {
+	log := newSessionLogRecorder("proxy-1", &fakeShipper{})
+	log.record(testGrant("s1"), aRecord("api.github.com"))
+
+	if at := log.spools["s1"].lastRecordAt; at != at.Round(0) {
+		t.Fatal("lastRecordAt carries a monotonic reading, so time asleep would not count toward idle close")
+	}
+}
