@@ -337,7 +337,7 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "The proxy served a certificate authority that could not be read")
 	}
 	if pinnedFingerprint != "" && !agentVaultFingerprintsEqual(pinnedFingerprint, servedFingerprint) {
-		util.HandleError(fmt.Errorf("the proxy at %s serves a certificate authority with fingerprint %s, not the pinned %s. Nothing was written and the agent was not started. If the proxy was re-enrolled, take the new fingerprint from the Proxies page; otherwise something else is answering at that address", proxyAddr, servedFingerprint, pinnedFingerprint))
+		util.HandleError(fmt.Errorf("the proxy at %s serves a certificate authority with fingerprint %s, not the pinned %s. Nothing was written and the agent was not started. If the proxy's token was rotated, take the new fingerprint from the Proxies page; otherwise something else is answering at that address", proxyAddr, servedFingerprint, pinnedFingerprint))
 	}
 
 	caPath := ""

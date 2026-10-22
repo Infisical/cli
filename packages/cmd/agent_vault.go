@@ -192,7 +192,7 @@ func addAgentVaultProxyFlags(cmd *cobra.Command) {
 	cmd.Flags().String("proxy-token", "",
 		"token from Infisical that starts this proxy; you can run it on as many machines as you need")
 	cmd.Flags().String("data-dir", "",
-		fmt.Sprintf("where the proxy saves its settings and certificate authority for starts while Infisical can't be reached, and where a proxy enrolled before proxy tokens keeps its saved state (default: %s)", defaultDataDirHelp()))
+		fmt.Sprintf("where the proxy saves its settings and certificate authority for starts while Infisical can't be reached (default: %s)", defaultDataDirHelp()))
 	cmd.Flags().String("ca-cert", "", "your own certificate authority to serve, instead of the one Infisical issues: PEM, base64 PEM or file path")
 	cmd.Flags().String("ca-key", "", "private key for --ca-cert: PEM, base64 PEM or file path")
 	cmd.Flags().Int("port", agentvault.DefaultPort, "port to listen on; 0 binds any free port, which the startup line then reports")
@@ -202,6 +202,7 @@ func addAgentVaultProxyFlags(cmd *cobra.Command) {
 	// enrolled proxy down on a CLI upgrade, so it is accepted and ignored. Remove after 2026-12-21.
 	cmd.Flags().String("enrollment-token", "", "no longer used")
 	_ = cmd.Flags().MarkHidden("enrollment-token")
+	_ = cmd.Flags().MarkDeprecated("enrollment-token", "start the proxy with --proxy-token instead")
 }
 
 func defaultDataDirHelp() string {

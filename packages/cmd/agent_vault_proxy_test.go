@@ -118,7 +118,7 @@ func TestAgentVaultProxyKeepsTheDataDirWithAProxyToken(t *testing.T) {
 	}
 }
 
-func TestAgentVaultProxySilentlyIgnoresAnEnrollmentToken(t *testing.T) {
+func TestAgentVaultProxyIgnoresADeprecatedEnrollmentToken(t *testing.T) {
 	in, err := readProxyInputs(t, nil, "--enrollment-token", "avp_old")
 	if err != nil {
 		t.Fatalf("an enrollment token from an old unit file failed the start: %v", err)
@@ -129,8 +129,8 @@ func TestAgentVaultProxySilentlyIgnoresAnEnrollmentToken(t *testing.T) {
 
 	cmd := &cobra.Command{Use: "proxy"}
 	addAgentVaultProxyFlags(cmd)
-	if flag := cmd.Flags().Lookup("enrollment-token"); flag == nil || !flag.Hidden {
-		t.Fatal("--enrollment-token should be registered and hidden")
+	if flag := cmd.Flags().Lookup("enrollment-token"); flag == nil || !flag.Hidden || flag.Deprecated == "" {
+		t.Fatal("--enrollment-token should be registered, hidden and deprecated")
 	}
 }
 
