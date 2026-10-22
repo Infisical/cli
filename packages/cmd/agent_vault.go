@@ -34,8 +34,8 @@ The proxy decides per request whether a host is allowed and attaches the real cr
 so the agent never holds a secret.
 
 Start the proxy with the proxy token shown when it was created or its token was last rotated. You can run
-any number of copies from one token: each loads its settings and certificate authority from Infisical when
-it starts. On a shared host, pass the token in INFISICAL_AGENT_VAULT_PROXY_TOKEN rather than --proxy-token,
+it on as many machines as you need with one token: each loads its settings and certificate authority from
+Infisical when it starts. On a shared host, pass the token in INFISICAL_AGENT_VAULT_PROXY_TOKEN rather than --proxy-token,
 which other users can read from the process list:
 
   INFISICAL_AGENT_VAULT_PROXY_TOKEN=... infisical agent-vault proxy
@@ -49,7 +49,7 @@ Infisical issues the certificate authority the proxy serves. To serve your own i
 and --ca-key, each as a PEM, the base64 of a PEM, or a file path.
 
 A proxy's settings - its traffic policy, the exceptions to it, and how often it refreshes - are set in
-Infisical and arrive on every poll, so they have no flags here. Every HTTPS host is intercepted either way; an exception is not blocked,
+Infisical and reach the proxy while it runs, so they have no flags here. Every HTTPS host is intercepted either way; an exception is not blocked,
 not un-intercepted.`,
 	Example:               "INFISICAL_AGENT_VAULT_PROXY_TOKEN=eyJhb... infisical agent-vault proxy",
 	DisableFlagsInUseLine: true,
@@ -191,7 +191,7 @@ func init() {
 
 func addAgentVaultProxyFlags(cmd *cobra.Command) {
 	cmd.Flags().String("proxy-token", "",
-		"token from Infisical that starts this proxy; any number of copies can run from one token")
+		"token from Infisical that starts this proxy; you can run it on as many machines as you need")
 	cmd.Flags().String("data-dir", "",
 		fmt.Sprintf("where the proxy saves its settings and certificate authority for starts while Infisical can't be reached, and where a proxy enrolled before proxy tokens keeps its saved state (default: %s)", defaultDataDirHelp()))
 	cmd.Flags().String("ca-cert", "", "your own certificate authority to serve, instead of the one Infisical issues: PEM, base64 PEM or file path")
