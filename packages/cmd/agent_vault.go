@@ -40,8 +40,10 @@ which other users can read from the process list:
 
   INFISICAL_AGENT_VAULT_PROXY_TOKEN=... infisical agent-vault proxy
 
-A proxy enrolled before proxy tokens keeps starting from the state saved in --data-dir, with no token,
-until 2026-12-21.
+After each start the proxy saves its settings and certificate authority under --data-dir, when that
+directory is writable, and uses them only if Infisical can't be reached on a later start with the same
+token. A proxy enrolled before proxy tokens keeps starting from the state saved in --data-dir, with no
+token, until 2026-12-21.
 
 Infisical issues the certificate authority the proxy serves. To serve your own instead, pass --ca-cert
 and --ca-key, each as a PEM, the base64 of a PEM, or a file path.
@@ -191,7 +193,7 @@ func addAgentVaultProxyFlags(cmd *cobra.Command) {
 	cmd.Flags().String("proxy-token", "",
 		"token from Infisical that starts this proxy; any number of copies can run from one token")
 	cmd.Flags().String("data-dir", "",
-		fmt.Sprintf("where a proxy enrolled before proxy tokens keeps its saved state (default: %s)", defaultDataDirHelp()))
+		fmt.Sprintf("where the proxy saves its settings and certificate authority for starts while Infisical can't be reached, and where a proxy enrolled before proxy tokens keeps its saved state (default: %s)", defaultDataDirHelp()))
 	cmd.Flags().String("ca-cert", "", "your own certificate authority to serve, instead of the one Infisical issues: PEM, base64 PEM or file path")
 	cmd.Flags().String("ca-key", "", "private key for --ca-cert: PEM, base64 PEM or file path")
 	cmd.Flags().Int("port", agentvault.DefaultPort, "port to listen on; 0 binds any free port, which the startup line then reports")

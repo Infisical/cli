@@ -90,6 +90,9 @@ func TestStartFromSavedStateNeverCallsInfisical(t *testing.T) {
 	if err != nil || string(after) != string(before) {
 		t.Fatalf("starting from saved state rewrote %s: %v", proxyStateFile, err)
 	}
+	if _, err := os.Stat(filepath.Join(st.dir, tokenCacheDir)); !os.IsNotExist(err) {
+		t.Fatalf("starting from saved state created the proxy token cache: %v", err)
+	}
 }
 
 func TestLoadSavedStateAnIntactCaWithoutATokenIsNotAFirstRun(t *testing.T) {

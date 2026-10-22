@@ -102,22 +102,15 @@ func usableProxyConfig(c ProxyConfig) bool {
 }
 
 type startup struct {
-	state  persistedState
-	ca     *caManager
-	saver  stateSaver
-	legacy bool
+	state   persistedState
+	ca      *caManager
+	saver   stateSaver
+	dataDir string
+	legacy  bool
 }
 
 // Start loads the proxy's settings and CA, then serves until interrupted.
 func Start(opts Options, proxyToken string) error {
-	if opts.DataDir == "" {
-		dir, err := DefaultDataDir()
-		if err != nil {
-			return err
-		}
-		opts.DataDir = dir
-	}
-
 	s, err := prepareStart(opts, proxyToken)
 	if err != nil {
 		return err
@@ -129,15 +122,23 @@ func Start(opts Options, proxyToken string) error {
 }
 
 func prepareStart(opts Options, proxyToken string) (startup, error) {
-	if proxyToken != "" {
-		state, ca, err := loadFromProxyToken(proxyToken, opts.OwnCa)
-		if err != nil {
+	dataDir := opts.DataDir
+	if dataDir == "" {
+		dir, err := DefaultDataDir()
+		if err != nil && proxyToken == "" {
 			return startup{}, err
 		}
-		return startup{state: state, ca: ca}, nil
+		if err != nil {
+			log.Debug().Err(err).Msg("agent-vault: no data directory, so this proxy's settings are not saved")
+		}
+		dataDir = dir
 	}
 
-	st := newStore(opts.DataDir)
+	if proxyToken != "" {
+		return startFromProxyToken(proxyToken, opts.OwnCa, dataDir, opts.DataDir != "")
+	}
+
+	st := newStore(dataDir)
 	if !st.hasSavedState() {
 		return startup{}, errProxyTokenRequired
 	}
@@ -146,8 +147,49 @@ func prepareStart(opts Options, proxyToken string) (startup, error) {
 	if err != nil {
 		return startup{}, err
 	}
-	log.Warn().Msgf("agent-vault: starting from the state saved in %s, which stops working after 2026-12-21. Start the proxy with a proxy token from the Proxies page instead", opts.DataDir)
-	return startup{state: state, ca: ca, saver: st, legacy: true}, nil
+	log.Warn().Msgf("agent-vault: starting from the state saved in %s, which stops working after 2026-12-21. Start the proxy with a proxy token from the Proxies page instead", dataDir)
+	return startup{state: state, ca: ca, saver: st, dataDir: dataDir, legacy: true}, nil
+}
+
+// The cache is a fallback for when Infisical can't be reached, never for when it refused the token, so a
+// rotated or revoked token can't keep a proxy serving.
+func startFromProxyToken(proxyToken string, own *OwnCa, dataDir string, dataDirChosen bool) (startup, error) {
+	var cache *tokenCache
+	if dataDir != "" {
+		cache = newTokenCache(dataDir, proxyToken)
+	}
+
+	state, ca, err := loadFromProxyToken(proxyToken, own)
+	if errors.Is(err, errBootstrapUnreachable) && cache != nil {
+		cachedState, cachedCa, cacheErr := cache.load(proxyToken, own)
+		if cacheErr != nil {
+			if errors.Is(cacheErr, os.ErrNotExist) {
+				log.Debug().Err(cacheErr).Msg("agent-vault: no settings saved for this proxy token")
+			} else {
+				log.Warn().Err(cacheErr).Msg("agent-vault: the settings saved for this proxy token can't be used")
+			}
+			return startup{}, err
+		}
+		log.Warn().Str("dataDir", dataDir).Msg("agent-vault: can't reach Infisical, so serving the settings and certificate authority saved on this proxy token's last start. Settings update once Infisical answers")
+		return startup{state: cachedState, ca: cachedCa, saver: cache, dataDir: dataDir}, nil
+	}
+	if err != nil {
+		return startup{}, err
+	}
+
+	if cache == nil {
+		return startup{state: state, ca: ca}, nil
+	}
+	if saveErr := cache.save(state, ca, own != nil); saveErr != nil {
+		// The default directory is often read-only in a container, which is no reason to warn on every start.
+		event := log.Debug()
+		if dataDirChosen {
+			event = log.Warn()
+		}
+		event.Err(saveErr).Str("dataDir", dataDir).Msg("agent-vault: can't save this proxy's settings, so a start while Infisical can't be reached will fail")
+		return startup{state: state, ca: ca}, nil
+	}
+	return startup{state: state, ca: ca, saver: cache, dataDir: dataDir}, nil
 }
 
 // Tests shorten these so that running out of retries takes milliseconds.
@@ -355,7 +397,7 @@ func serve(opts Options, s startup) error {
 		Str("name", state.ProxyName).
 		Str("fingerprint", ca.Fingerprint())
 	if st != nil {
-		listening = listening.Str("dataDir", opts.DataDir)
+		listening = listening.Str("dataDir", s.dataDir)
 	}
 	listening.Msg("agent-vault: proxy listening")
 
