@@ -110,11 +110,11 @@ service:
 infisical run --env=dev -- docker compose up
 ```
 
-The CLI creates a temporary Compose file beside the selected Compose file and
-removes it after the command exits. It never modifies the original file. Values
-already defined in a service's `environment` section take precedence over
-Infisical secrets. Use the direct command form shown above; the Compose
-integration does not apply to commands passed through `--command`.
+The CLI creates a temporary Compose override in the operating system's temporary
+directory and removes it after the command exits. It never modifies the
+original file. Values already defined in a service's `environment` section take
+precedence over Infisical secrets. Use the direct command form shown above; the
+Compose integration does not apply to commands passed through `--command`.
 
 ## Support
 

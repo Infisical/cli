@@ -61,6 +61,12 @@ func TestPrepareComposeCommandInjectsSecretsIntoEveryService(t *testing.T) {
 	if secret, exists := apiEnvironment["SECRET"]; !exists || secret != nil {
 		t.Fatalf("expected SECRET to be present as an unset Compose variable, got %v", secret)
 	}
+	if _, exists := apiEnvironment["EXISTING"]; exists {
+		t.Fatal("expected explicit EXISTING value to stay out of the override")
+	}
+	if _, exists := apiEnvironment["TOKEN"]; exists {
+		t.Fatal("expected explicit TOKEN value to stay out of the override")
+	}
 	workerEnvironment := services["worker"].(map[string]interface{})["environment"].(map[string]interface{})
 	if secret, exists := workerEnvironment["SECRET"]; !exists || secret != nil {
 		t.Fatalf("expected SECRET to be present as an unset Compose variable, got %v", secret)
@@ -173,6 +179,20 @@ func TestPrepareComposeCommandSupportsAttachedFileOptionsAndDockerOptions(t *tes
 	if !strings.HasPrefix(args[4], "--file=") || !strings.HasSuffix(args[4], composePath) {
 		t.Fatalf("expected attached Compose file option to remain unchanged, got %v", args)
 	}
+	if len(args) != 10 {
+		t.Fatalf("expected generated Compose override to be added, got %v", args)
+	}
+	overridePath := args[8]
+	if args[7] != "--file" || overridePath == composePath {
+		t.Fatalf("expected generated override file to be appended, got %v", args)
+	}
+	override, err := os.ReadFile(overridePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(override), "SECRET: null") {
+		t.Fatalf("expected generated override to request SECRET, got %s", override)
+	}
 	if args[len(args)-1] != "up" {
 		t.Fatalf("expected actual Compose subcommand to remain intact, got %v", args)
 	}
@@ -238,6 +258,16 @@ func TestPrepareComposeCommandDoesNotRewriteComposeArgumentValues(t *testing.T) 
 
 	if !slices.Contains(args, "--file") || args[2] != "--project-name" || args[3] != "up" {
 		t.Fatalf("expected Compose option values to remain intact, got %v", args)
+	}
+	if len(args) != 9 || args[6] != "--file" || args[7] == composePath {
+		t.Fatalf("expected generated override file to be inserted before up, got %v", args)
+	}
+	override, err := os.ReadFile(args[7])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(override), "SECRET: null") {
+		t.Fatalf("expected generated override to request SECRET, got %s", override)
 	}
 }
 
