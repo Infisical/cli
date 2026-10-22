@@ -462,7 +462,7 @@ func serve(opts Options, s startup) error {
 const heartbeatRejectionsBeforeExit = 2
 
 var errProxyTokenRejected = errors.New(
-	"Infisical doesn't accept this proxy token. Check that it's the latest token for this Infisical, or generate a new one on the Proxies page")
+	"Infisical doesn't accept this proxy token. Check that it's the latest token for this Infisical, or generate a new one in Infisical")
 
 var errSavedStateTokenRejected = errors.New(
 	"Infisical no longer accepts this proxy's saved access token: its access was revoked or the proxy was deleted. Start the proxy with a proxy token from the Proxies page")
