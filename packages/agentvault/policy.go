@@ -169,10 +169,23 @@ func matchesPrefix(escaped string, prefixes []string) bool {
 		if prefix == "/" {
 			return true
 		}
-		if !strings.HasPrefix(escaped, prefix) {
+		// A trailing $ is an exact path, not a prefix. /drafts$ allows /drafts and
+		// /drafts/, and refuses /drafts/{id}/send. A $ anywhere else stays literal.
+		exact := strings.HasSuffix(prefix, "$") && len(prefix) > 1
+		if exact {
+			prefix = prefix[:len(prefix)-1]
+		}
+		if prefix == "" || !strings.HasPrefix(escaped, prefix) {
 			continue
 		}
-		if rest := escaped[len(prefix):]; rest == "" || rest[0] == '/' {
+		rest := escaped[len(prefix):]
+		if exact {
+			if rest == "" || rest == "/" {
+				return true
+			}
+			continue
+		}
+		if rest == "" || rest[0] == '/' {
 			return true
 		}
 	}

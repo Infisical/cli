@@ -70,6 +70,41 @@ func TestMethodPolicy(t *testing.T) {
 	})
 }
 
+func TestExactPathPolicy(t *testing.T) {
+	svc := serviceWithPolicy([]string{"POST"}, []string{"/gmail/v1/users/me/drafts$"})
+
+	allowed := []string{"/gmail/v1/users/me/drafts", "/gmail/v1/users/me/drafts/"}
+	for _, path := range allowed {
+		t.Run("allows "+path, func(t *testing.T) {
+			if err := checkServicePolicy(svc, requestTo(t, "POST", path)); err != nil {
+				t.Fatalf("%s should be allowed: %v", path, err)
+			}
+		})
+	}
+
+	blocked := []string{
+		"/gmail/v1/users/me/drafts/abc/send",
+		"/gmail/v1/users/me/drafts/send",
+		"/gmail/v1/users/me/messages/send",
+		"/gmail/v1/users/me/drafts-extra",
+	}
+	for _, path := range blocked {
+		t.Run("blocks "+path, func(t *testing.T) {
+			err := checkServicePolicy(svc, requestTo(t, "POST", path))
+			if !errors.Is(err, errPolicyBlocked) {
+				t.Fatalf("%s should be blocked, got %v", path, err)
+			}
+		})
+	}
+
+	t.Run("a dollar that is not trailing stays a prefix", func(t *testing.T) {
+		literal := serviceWithPolicy(nil, []string{"/repo$s"})
+		if err := checkServicePolicy(literal, requestTo(t, "GET", "/repo$s/child")); err != nil {
+			t.Fatalf("a non-trailing dollar should still be a prefix: %v", err)
+		}
+	})
+}
+
 func TestPathPolicy(t *testing.T) {
 	svc := serviceWithPolicy(nil, []string{"/repos"})
 
