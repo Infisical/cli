@@ -111,6 +111,31 @@ func TestEqualHostPolicyFallsThrough(t *testing.T) {
 	}
 }
 
+func TestMethodScopedPath(t *testing.T) {
+	svc := serviceWithPolicy([]string{"GET", "HEAD", "POST"}, []string{
+		"/GET:/gmail/v1/users/me/messages",
+		"/HEAD:/gmail/v1/users/me/messages",
+		"/GET:/gmail/v1/users/me/drafts",
+		"/POST:/gmail/v1/users/me/drafts$",
+	})
+
+	if err := checkServicePolicy(svc, requestTo(t, "GET", "/gmail/v1/users/me/messages/abc")); err != nil {
+		t.Fatalf("GET message should be allowed: %v", err)
+	}
+	if err := checkServicePolicy(svc, requestTo(t, "POST", "/gmail/v1/users/me/drafts")); err != nil {
+		t.Fatalf("exact draft create should be allowed: %v", err)
+	}
+	for _, path := range []string{
+		"/gmail/v1/users/me/messages/send",
+		"/gmail/v1/users/me/drafts/abc/send",
+	} {
+		err := checkServicePolicy(svc, requestTo(t, "POST", path))
+		if !errors.Is(err, errPolicyBlocked) {
+			t.Fatalf("POST %s should be blocked, got %v", path, err)
+		}
+	}
+}
+
 func TestExactPathPolicy(t *testing.T) {
 	svc := serviceWithPolicy([]string{"POST"}, []string{"/gmail/v1/users/me/drafts$"})
 

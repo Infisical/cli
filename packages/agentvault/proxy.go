@@ -557,7 +557,7 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 		}
 
 		if len(matched.allowedPathPrefixes) > 0 && containsSurface(outcome.substituted, surfacePath) {
-			if !pathAllowedAfterSubstitution(requestPath(req), req.URL.Path, matched.allowedPathPrefixes) {
+			if !pathAllowedAfterSubstitution(requestPath(req), req.URL.Path, applicablePrefixes(req.Method, matched.allowedPathPrefixes)) {
 				// The path now carries the real credential, so it must not reach the body or the log.
 				return nil, matched, outcome, fmt.Errorf(
 					"service %q does not allow the path this request substitutes to: %w",

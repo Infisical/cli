@@ -58,7 +58,7 @@ func checkServicePolicy(svc *resolvedService, req *http.Request) error {
 	}
 	if len(svc.allowedPathPrefixes) > 0 {
 		path := requestPath(req)
-		if !pathAllowed(path, svc.allowedPathPrefixes) {
+		if !pathAllowed(path, applicablePrefixes(req.Method, svc.allowedPathPrefixes)) {
 			return fmt.Errorf("service %q does not allow path %q: %w", svc.name, truncatePath(path), errPolicyBlocked)
 		}
 	}
@@ -199,6 +199,42 @@ func pathAllowedAfterSubstitution(escaped, decoded string, prefixes []string) bo
 		}
 	}
 	return matchesPrefix(escaped, prefixes)
+}
+
+// A prefix may name one method: /POST:/drafts$ applies only to POST. The backend stores it as a
+// path prefix, so one service can split methods without a second host row. An unscoped prefix still
+// applies to every allowed method.
+func applicablePrefixes(method string, prefixes []string) []string {
+	method = strings.ToUpper(method)
+	out := make([]string, 0, len(prefixes))
+	for _, prefix := range prefixes {
+		scoped, path, ok := splitMethodPrefix(prefix)
+		if !ok {
+			out = append(out, prefix)
+			continue
+		}
+		if scoped == method {
+			out = append(out, path)
+		}
+	}
+	return out
+}
+
+func splitMethodPrefix(prefix string) (method, path string, ok bool) {
+	if len(prefix) < 6 || prefix[0] != '/' {
+		return "", "", false
+	}
+	rest := prefix[1:]
+	colon := strings.IndexByte(rest, ':')
+	if colon < 3 || colon+1 >= len(rest) || rest[colon+1] != '/' {
+		return "", "", false
+	}
+	method = rest[:colon]
+	switch method {
+	case "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS":
+		return method, rest[colon+1:], true
+	}
+	return "", "", false
 }
 
 func matchesPrefix(escaped string, prefixes []string) bool {
