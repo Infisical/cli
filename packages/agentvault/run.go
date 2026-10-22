@@ -61,6 +61,11 @@ func enroll(st *store, enrollmentToken string) (persistedState, *caManager, erro
 		EnrollmentToken: enrollmentToken,
 		Config:          config,
 	}
+	// Not from .infisical.yaml, for the same reason tick does not record one: enrolling once inside a checkout
+	// would otherwise send every later run to whatever server its file names.
+	if domainIsRecordable() {
+		state.Domain = currentDomain()
+	}
 
 	if err := st.saveCa(key, cert); err != nil {
 		return persistedState{}, nil, err
@@ -176,6 +181,10 @@ func Start(opts Options, enrollmentToken string) error {
 	if err != nil {
 		return err
 	}
+	// Before any client is built: the resolver and the shipper read the URL once.
+	if err := pinDomain(state); err != nil {
+		return err
+	}
 	if opts.OnReady != nil {
 		opts.OnReady(enrolledNow)
 	}
@@ -191,11 +200,12 @@ func Start(opts Options, enrollmentToken string) error {
 	}
 
 	ps := &proxyServer{
-		opts:      opts,
-		ca:        ca,
-		transport: newUpstreamTransport(),
-		config:    config,
-		persisted: state,
+		opts:             opts,
+		ca:               ca,
+		transport:        newUpstreamTransport(),
+		config:           config,
+		persisted:        state,
+		domainRecordable: state.Domain == "" && domainIsRecordable(),
 	}
 	resolver, err := newInfisicalResolver(opts.ProxyToken)
 	if err != nil {
@@ -241,6 +251,7 @@ func Start(opts Options, enrollmentToken string) error {
 		Int("port", listener.Addr().(*net.TCPAddr).Port).
 		Str("proxyId", state.ProxyID).
 		Str("name", state.ProxyName).
+		Str("domain", currentDomain()).
 		Str("fingerprint", ca.Fingerprint()).
 		Str("dataDir", opts.DataDir).
 		Msg("agent-vault: proxy listening")
@@ -349,17 +360,34 @@ func (ps *proxyServer) tick(st *store) (tokenRejected bool) {
 					Str("trafficPolicy", next.TrafficPolicy).
 					Int("pollInterval", next.PollInterval).
 					Msg("agent-vault: heartbeat returned no usable settings, keeping the current ones")
-			} else if ps.setConfig(next) {
-				log.Info().
-					Str("trafficPolicy", next.TrafficPolicy).
-					Str("allowedHosts", next.AllowedHosts).
-					Int("pollInterval", next.PollInterval).
-					Msg("agent-vault: settings changed")
+			} else {
+				if ps.setConfig(next) {
+					log.Info().
+						Str("trafficPolicy", next.TrafficPolicy).
+						Str("allowedHosts", next.AllowedHosts).
+						Int("pollInterval", next.PollInterval).
+						Msg("agent-vault: settings changed")
+				}
 
 				// Persisted so a restart during an Infisical outage keeps the operator's policy rather than coming back up allowing.
-				ps.persisted.Config = next
-				if saveErr := st.saveState(ps.persisted); saveErr != nil {
-					log.Warn().Err(saveErr).Msg("agent-vault: failed to persist the new settings")
+				wanted := ps.persisted
+				wanted.Config = next
+				// State enrolled before the domain was recorded. A heartbeat with settings in it came from
+				// Infisical and accepted the token, which is what proves the instance; a bare 200 does not.
+				if wanted.Domain == "" && ps.domainRecordable {
+					wanted.Domain = currentDomain()
+				}
+				// Held in memory only once it is on disk, so a failed write is retried on the next tick
+				// instead of being taken as done.
+				if wanted != ps.persisted {
+					if saveErr := st.saveState(wanted); saveErr != nil {
+						log.Warn().Err(saveErr).Msg("agent-vault: failed to persist the proxy state")
+					} else {
+						if wanted.Domain != ps.persisted.Domain {
+							log.Info().Str("domain", wanted.Domain).Msg("agent-vault: recorded the Infisical instance this proxy is enrolled with")
+						}
+						ps.persisted = wanted
+					}
 				}
 			}
 		}

@@ -34,6 +34,9 @@ Enroll once with the token shown when the proxy was created, then run it with no
   infisical agent-vault proxy --enrollment-token avp_...
   infisical agent-vault proxy
 
+Outside the US Cloud, pass --domain when enrolling. The proxy remembers the instance it enrolled with, so a
+restart needs no --domain, and one naming a different instance is refused.
+
 A proxy's settings - its traffic policy, the exceptions to it, and how often it refreshes - are set in
 Infisical and arrive on every poll, so they have no flags here. Every HTTPS host is intercepted either way; an exception is not blocked,
 not un-intercepted.`,
