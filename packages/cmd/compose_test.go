@@ -57,7 +57,7 @@ func TestPrepareComposeCommandInjectsSecretsIntoEveryService(t *testing.T) {
 
 	services := document["services"].(map[string]interface{})
 	apiEnvironment := services["api"].(map[string]interface{})["environment"].(map[string]interface{})
-	if apiEnvironment["SECRET"] != "from-infisical" {
+	if apiEnvironment["SECRET"] != nil {
 		t.Fatalf("expected SECRET in api environment, got %v", apiEnvironment["SECRET"])
 	}
 	if apiEnvironment["EXISTING"] != "explicit" {
@@ -69,7 +69,7 @@ func TestPrepareComposeCommandInjectsSecretsIntoEveryService(t *testing.T) {
 	for _, value := range workerEnvironment {
 		values = append(values, value.(string))
 	}
-	if !slices.Contains(values, "SECRET=from-infisical") {
+	if !slices.Contains(values, "SECRET") {
 		t.Fatalf("expected SECRET in worker environment, got %v", values)
 	}
 	if !slices.Contains(values, "EXISTING=explicit") {
@@ -136,14 +136,79 @@ func TestPrepareComposeCommandLeavesNonComposeCommandsUnchanged(t *testing.T) {
 }
 
 func TestPrepareComposeCommandRejectsMultipleComposeFiles(t *testing.T) {
-	t.Parallel()
+	dir := t.TempDir()
+	for _, name := range []string{"base.yaml", "local.yaml"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("services:\n  app:\n    image: example/app\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 
-	_, _, err := prepareComposeCommand(
-		[]string{"docker", "compose", "--file", "base.yaml", "--file", "local.yaml", "up"},
+	args, cleanup, err := prepareComposeCommand(
+		[]string{"docker", "compose", "--file", filepath.Join(dir, "base.yaml"), "--file", filepath.Join(dir, "local.yaml"), "up"},
 		[]string{"SECRET"},
 		[]string{"SECRET=value"},
 	)
-	if err == nil || !strings.Contains(err.Error(), "multiple Compose files") {
-		t.Fatalf("expected multiple Compose files error, got %v", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	if args[3] == filepath.Join(dir, "base.yaml") || args[5] == filepath.Join(dir, "local.yaml") {
+		t.Fatalf("expected all Compose files to be replaced, got %v", args)
+	}
+}
+
+func TestPrepareComposeCommandSupportsAttachedFileOptionsAndDockerOptions(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	composePath := filepath.Join(dir, "deploy.yaml")
+	if err := os.WriteFile(composePath, []byte("services:\n  app:\n    image: example/app\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	args, cleanup, err := prepareComposeCommand(
+		[]string{"docker", "--context", "prod", "compose", "--file=" + composePath, "--project-name", "up", "up"},
+		[]string{"SECRET"},
+		[]string{"SECRET=value"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	if !strings.HasPrefix(args[4], "--file=") || strings.HasSuffix(args[4], composePath) {
+		t.Fatalf("expected attached Compose file option to be replaced, got %v", args)
+	}
+	if args[len(args)-1] != "up" {
+		t.Fatalf("expected actual Compose subcommand to remain intact, got %v", args)
+	}
+}
+
+func TestPrepareComposeCommandDoesNotWriteSecretValues(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	composePath := filepath.Join(dir, "compose.yaml")
+	if err := os.WriteFile(composePath, []byte("services:\n  app:\n    image: example/app\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	args, cleanup, err := prepareComposeCommand(
+		[]string{"docker", "compose", "--file", composePath, "up"},
+		[]string{"SECRET"},
+		[]string{"SECRET=pa$WORD"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	contents, err := os.ReadFile(args[3])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(contents), "pa$WORD") {
+		t.Fatal("temporary Compose file contains a secret value")
 	}
 }

@@ -230,15 +230,13 @@ func executeSingleCommandWithEnvs(args []string, secretsCount int, env []string,
 	if err != nil {
 		return err
 	}
-	defer cleanup()
-
 	cmd := exec.Command(commandArgs[0], commandArgs[1:]...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = env
 
-	return execBasicCmd(cmd)
+	return execBasicCmd(cmd, cleanup)
 }
 
 func executeMultipleCommandWithEnvs(fullCommand string, secretsCount int, env []string) error {
@@ -264,7 +262,14 @@ func executeMultipleCommandWithEnvs(fullCommand string, secretsCount int, env []
 	return execBasicCmd(cmd)
 }
 
-func execBasicCmd(cmd *exec.Cmd) error {
+func execBasicCmd(cmd *exec.Cmd, cleanups ...func()) error {
+	cleanup := func() {
+		for _, fn := range cleanups {
+			fn()
+		}
+	}
+	defer cleanup()
+
 	sigChannel := make(chan os.Signal, 1)
 	signal.Notify(sigChannel)
 
@@ -285,6 +290,7 @@ func execBasicCmd(cmd *exec.Cmd) error {
 	}
 
 	waitStatus := cmd.ProcessState.Sys().(syscall.WaitStatus)
+	cleanup()
 	os.Exit(waitStatus.ExitStatus())
 	return nil
 }
@@ -416,6 +422,7 @@ func executeCommandWithWatchMode(commandFlag string, args []string, watchModeInt
 					}
 				}
 
+				cleanup()
 				os.Exit(exitCode)
 			}
 		}()

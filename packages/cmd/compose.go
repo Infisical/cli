@@ -12,96 +12,120 @@ import (
 
 var composeFilenames = []string{"compose.yaml", "compose.yml", "docker-compose.yml", "docker-compose.yaml"}
 
-func prepareComposeCommand(args []string, secretNames []string, env []string) ([]string, func(), error) {
+type composeFileInput struct {
+	path       string
+	flagIndex  int
+	valueIndex int
+}
+
+func prepareComposeCommand(args []string, secretNames []string, _ []string) ([]string, func(), error) {
 	composeIndex, subcommandIndex, ok := findComposeUp(args)
 	if !ok {
 		return args, func() {}, nil
 	}
 
-	secretValues := make(map[string]string, len(secretNames))
-	for _, entry := range env {
-		key, value, found := strings.Cut(entry, "=")
-		if found {
-			secretValues[key] = value
-		}
-	}
-
-	composeFile, fileFlagIndex, err := resolveComposeFile(args, composeIndex)
+	files, err := resolveComposeFiles(args, composeIndex, subcommandIndex)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	contents, err := os.ReadFile(composeFile)
-	if err != nil {
-		return nil, nil, fmt.Errorf("could not read Compose file %q: %w", composeFile, err)
-	}
-
-	var document map[string]interface{}
-	if err := yaml.Unmarshal(contents, &document); err != nil {
-		return nil, nil, fmt.Errorf("could not parse Compose file %q: %w", composeFile, err)
-	}
-
-	services, ok := document["services"].(map[string]interface{})
-	if !ok {
-		return nil, nil, errors.New("could not inject secrets: Compose file has no services map")
-	}
-
-	for serviceName, rawService := range services {
-		service, ok := rawService.(map[string]interface{})
-		if !ok {
-			return nil, nil, fmt.Errorf("could not inject secrets: service %q has an invalid definition", serviceName)
-		}
-		if err := addSecretsToService(service, secretNames, secretValues); err != nil {
-			return nil, nil, fmt.Errorf("could not inject secrets into service %q: %w", serviceName, err)
-		}
-	}
-
-	updated, err := yaml.Marshal(document)
-	if err != nil {
-		return nil, nil, fmt.Errorf("could not serialize temporary Compose file: %w", err)
-	}
-
-	tempFile, err := os.CreateTemp(filepath.Dir(composeFile), ".infisical-compose-*.yaml")
-	if err != nil {
-		return nil, nil, fmt.Errorf("could not create temporary Compose file: %w", err)
-	}
-	tempPath := tempFile.Name()
-	cleanup := func() {
-		_ = os.Remove(tempPath)
-	}
-
-	if _, err := tempFile.Write(updated); err != nil {
-		tempFile.Close()
-		cleanup()
-		return nil, nil, fmt.Errorf("could not write temporary Compose file: %w", err)
-	}
-	if err := tempFile.Close(); err != nil {
-		cleanup()
-		return nil, nil, fmt.Errorf("could not close temporary Compose file: %w", err)
-	}
-
 	updatedArgs := append([]string(nil), args...)
-	if fileFlagIndex >= 0 {
-		updatedArgs[fileFlagIndex+1] = tempPath
-	} else {
-		updatedArgs = append(updatedArgs[:subcommandIndex], append([]string{"--file", tempPath}, updatedArgs[subcommandIndex:]...)...)
+	cleanupPaths := make([]string, 0, len(files))
+	cleanup := func() {
+		for _, path := range cleanupPaths {
+			_ = os.Remove(path)
+		}
+	}
+
+	for _, file := range files {
+		updated, err := injectSecrets(file.path, secretNames)
+		if err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+		tempFile, err := os.CreateTemp(filepath.Dir(file.path), ".infisical-compose-*.yaml")
+		if err != nil {
+			cleanup()
+			return nil, nil, fmt.Errorf("could not create temporary Compose file: %w", err)
+		}
+		tempPath := tempFile.Name()
+		cleanupPaths = append(cleanupPaths, tempPath)
+		if _, err := tempFile.Write(updated); err != nil {
+			_ = tempFile.Close()
+			cleanup()
+			return nil, nil, fmt.Errorf("could not write temporary Compose file: %w", err)
+		}
+		if err := tempFile.Close(); err != nil {
+			cleanup()
+			return nil, nil, fmt.Errorf("could not close temporary Compose file: %w", err)
+		}
+
+		if file.flagIndex >= 0 {
+			switch {
+			case strings.HasPrefix(updatedArgs[file.flagIndex], "--file="):
+				updatedArgs[file.valueIndex] = "--file=" + tempPath
+			case strings.HasPrefix(updatedArgs[file.flagIndex], "-f") && len(updatedArgs[file.flagIndex]) > 2:
+				updatedArgs[file.valueIndex] = "-f" + tempPath
+			case updatedArgs[file.valueIndex] == updatedArgs[file.flagIndex]:
+				updatedArgs[file.valueIndex] = "-f" + tempPath
+			default:
+				updatedArgs[file.valueIndex] = tempPath
+			}
+		} else {
+			updatedArgs = append(updatedArgs[:subcommandIndex], append([]string{"--file", tempPath}, updatedArgs[subcommandIndex:]...)...)
+			subcommandIndex += 2
+		}
 	}
 
 	return updatedArgs, cleanup, nil
 }
 
-func findComposeUp(args []string) (int, int, bool) {
-	if len(args) == 0 {
-		return -1, -1, false
+func injectSecrets(composeFile string, secretNames []string) ([]byte, error) {
+	contents, err := os.ReadFile(composeFile)
+	if err != nil {
+		return nil, fmt.Errorf("could not read Compose file %q: %w", composeFile, err)
 	}
 
+	var document map[string]interface{}
+	if err := yaml.Unmarshal(contents, &document); err != nil {
+		return nil, fmt.Errorf("could not parse Compose file %q: %w", composeFile, err)
+	}
+
+	services, ok := document["services"].(map[string]interface{})
+	if !ok {
+		return nil, errors.New("could not inject secrets: Compose file has no services map")
+	}
+	for serviceName, rawService := range services {
+		service, ok := rawService.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("could not inject secrets: service %q has an invalid definition", serviceName)
+		}
+		if err := addSecretsToService(service, secretNames); err != nil {
+			return nil, fmt.Errorf("could not inject secrets into service %q: %w", serviceName, err)
+		}
+	}
+
+	updated, err := yaml.Marshal(document)
+	if err != nil {
+		return nil, fmt.Errorf("could not serialize temporary Compose file: %w", err)
+	}
+	return updated, nil
+}
+
+func findComposeUp(args []string) (int, int, bool) {
 	composeIndex := -1
 	switch filepath.Base(args[0]) {
 	case "docker-compose":
 		composeIndex = 0
 	case "docker", "nerdctl":
-		if len(args) > 1 && args[1] == "compose" {
-			composeIndex = 1
+		for i := 1; i < len(args); i++ {
+			if args[i] == "compose" {
+				composeIndex = i
+				break
+			}
+			if optionTakesValue(args[i]) && !strings.Contains(args[i], "=") {
+				i++
+			}
 		}
 	}
 	if composeIndex < 0 {
@@ -109,51 +133,91 @@ func findComposeUp(args []string) (int, int, bool) {
 	}
 
 	for i := composeIndex + 1; i < len(args); i++ {
-		if args[i] == "up" {
-			return composeIndex, i, true
+		if optionTakesValue(args[i]) && !strings.Contains(args[i], "=") {
+			i++
+			continue
+		}
+		if !strings.HasPrefix(args[i], "-") {
+			return composeIndex, i, args[i] == "up"
 		}
 	}
 	return -1, -1, false
 }
 
-func resolveComposeFile(args []string, composeIndex int) (string, int, error) {
-	fileFlags := 0
-	fileFlagIndex := -1
-	for i := composeIndex + 1; i < len(args)-1; i++ {
-		if args[i] == "--file" || args[i] == "-f" {
-			fileFlags++
-			fileFlagIndex = i
-		}
+func optionTakesValue(arg string) bool {
+	name := strings.SplitN(arg, "=", 2)[0]
+	switch name {
+	case "--context", "--config", "--host", "--log-level", "--tlsverify", "--tlscacert", "--tlscert", "--tlskey",
+		"--file", "-f", "--env-file", "--project-directory", "--project-name", "-p", "--parallel", "--profile", "--progress":
+		return true
+	default:
+		return false
 	}
-	if fileFlags > 1 {
-		return "", -1, errors.New("could not inject secrets into multiple Compose files; use one --file option")
-	}
-	if fileFlagIndex >= 0 {
-		path, err := filepath.Abs(args[fileFlagIndex+1])
-		if err != nil {
-			return "", -1, fmt.Errorf("could not resolve Compose file path: %w", err)
-		}
-		return path, fileFlagIndex, nil
-	}
-
-	for _, filename := range composeFilenames {
-		path := filepath.Join(".", filename)
-		if _, err := os.Stat(path); err == nil {
-			absolutePath, err := filepath.Abs(path)
-			if err != nil {
-				return "", -1, fmt.Errorf("could not resolve Compose file path: %w", err)
-			}
-			return absolutePath, -1, nil
-		}
-	}
-
-	return "", -1, errors.New("could not find a Compose file; pass one with --file")
 }
 
-func addSecretsToService(service map[string]interface{}, secretNames []string, secretValues map[string]string) error {
+func resolveComposeFiles(args []string, composeIndex, subcommandIndex int) ([]composeFileInput, error) {
+	projectDirectory := "."
+	files := make([]composeFileInput, 0)
+	for i := composeIndex + 1; i < subcommandIndex; i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "--project-directory=") {
+			projectDirectory = strings.TrimPrefix(arg, "--project-directory=")
+		} else if arg == "--project-directory" && i+1 < subcommandIndex {
+			projectDirectory = args[i+1]
+			i++
+		} else if arg == "--file" || arg == "-f" {
+			if i+1 >= subcommandIndex {
+				return nil, errors.New("could not inject secrets: Compose file option has no path")
+			}
+			files = append(files, composeFileInput{path: args[i+1], flagIndex: i, valueIndex: i + 1})
+			i++
+		} else if strings.HasPrefix(arg, "--file=") {
+			files = append(files, composeFileInput{path: strings.TrimPrefix(arg, "--file="), flagIndex: i, valueIndex: i})
+		} else if strings.HasPrefix(arg, "-f") && len(arg) > 2 {
+			files = append(files, composeFileInput{path: arg[2:], flagIndex: i, valueIndex: i})
+		}
+	}
+
+	if len(files) == 0 {
+		composeFileEnv := os.Getenv("COMPOSE_FILE")
+		if composeFileEnv != "" {
+			for _, path := range strings.Split(composeFileEnv, string(os.PathListSeparator)) {
+				files = append(files, composeFileInput{path: path, flagIndex: -1})
+			}
+		} else {
+			for _, filename := range composeFilenames {
+				path := filepath.Join(projectDirectory, filename)
+				if _, err := os.Stat(path); err == nil {
+					files = append(files, composeFileInput{path: path, flagIndex: -1})
+					override := filepath.Join(projectDirectory, "compose.override.yaml")
+					if filename != "compose.override.yaml" {
+						if _, err := os.Stat(override); err == nil {
+							files = append(files, composeFileInput{path: override, flagIndex: -1})
+						}
+					}
+					break
+				}
+			}
+		}
+	}
+	if len(files) == 0 {
+		return nil, errors.New("could not find a Compose file; pass one with --file")
+	}
+
+	for i := range files {
+		path, err := filepath.Abs(files[i].path)
+		if err != nil {
+			return nil, fmt.Errorf("could not resolve Compose file path: %w", err)
+		}
+		files[i].path = path
+	}
+	return files, nil
+}
+
+func addSecretsToService(service map[string]interface{}, secretNames []string) error {
 	rawEnvironment, exists := service["environment"]
 	if !exists || rawEnvironment == nil {
-		rawEnvironment = map[string]interface{}{}
+		rawEnvironment = []interface{}{}
 		service["environment"] = rawEnvironment
 	}
 
@@ -161,7 +225,7 @@ func addSecretsToService(service map[string]interface{}, secretNames []string, s
 	case map[string]interface{}:
 		for _, name := range secretNames {
 			if _, exists := environment[name]; !exists {
-				environment[name] = secretValues[name]
+				environment[name] = nil
 			}
 		}
 	case []interface{}:
@@ -176,13 +240,12 @@ func addSecretsToService(service map[string]interface{}, secretNames []string, s
 		}
 		for _, name := range secretNames {
 			if _, exists := existing[name]; !exists {
-				environment = append(environment, name+"="+secretValues[name])
+				environment = append(environment, name)
 			}
 		}
 		service["environment"] = environment
 	default:
 		return errors.New("environment must be a map or list")
 	}
-
 	return nil
 }
