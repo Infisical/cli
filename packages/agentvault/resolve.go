@@ -64,7 +64,9 @@ func (r *infisicalResolver) resolve(sessionToken string, held *sessionLogGrant) 
 		services = append(services, &resolvedService{
 			id:                  wire.ID,
 			name:                wire.Name,
+			kind:                toServiceKind(wire.Type),
 			accessBundleName:    wire.AccessBundleName,
+			hostPattern:         wire.HostPattern,
 			hostPatterns:        parseHostPatterns(wire.HostPattern),
 			allowedMethods:      toMethodSet(wire.AllowedMethods),
 			allowedPathPrefixes: toPathPrefixes(wire.AllowedPathPrefixes),
@@ -80,6 +82,27 @@ func (r *infisicalResolver) resolve(sessionToken string, held *sessionLogGrant) 
 		Services:   services,
 		SessionLog: toSessionLogGrant(res.SessionID, res.SessionLogs, held),
 	}, nil
+}
+
+// Bounded by the resolver client's timeout, so a stalled control plane fails the refresh rather than
+// holding the agent's request open.
+func (r *infisicalResolver) refreshCredential(sessionToken, serviceID, hostPattern, rejectedHash string) (credential, string, error) {
+	res, err := api.CallRefreshAgentVaultServiceCredential(r.client, sessionToken, serviceID, api.RefreshAgentVaultServiceCredentialRequest{
+		HostPattern:       hostPattern,
+		RejectedTokenHash: rejectedHash,
+	})
+	if err != nil {
+		return credential{}, "", err
+	}
+	return toCredential(res.Credential), res.Status, nil
+}
+
+func (r *infisicalResolver) reportMissingScopes(sessionToken, serviceID, hostPattern, rejectedHash string, requiredScopes []string) error {
+	return api.CallReportAgentVaultServiceMissingScopes(r.client, sessionToken, serviceID, api.ReportAgentVaultServiceMissingScopesRequest{
+		HostPattern:       hostPattern,
+		RejectedTokenHash: rejectedHash,
+		RequiredScopes:    requiredScopes,
+	})
 }
 
 func toSessionLogGrant(sessionID string, wire api.AgentVaultSessionLogGrant, held *sessionLogGrant) *sessionLogGrant {
@@ -103,15 +126,27 @@ func toSessionLogGrant(sessionID string, wire api.AgentVaultSessionLogGrant, hel
 	return newSessionLogGrant(sessionID, key)
 }
 
+// Anything unrecognised is http, so a newer backend's type is brokered the way this proxy already knows how.
+func toServiceKind(wire string) string {
+	if wire == serviceKindMCP {
+		return serviceKindMCP
+	}
+	return serviceKindHTTP
+}
+
 func toCredential(wire api.AgentVaultCredential) credential {
 	switch wire.Type {
 	case credentialBearer:
-		return credential{
+		cred := credential{
 			kind:         credentialBearer,
 			headerName:   wire.HeaderName,
 			headerPrefix: wire.HeaderPrefix,
 			value:        []byte(wire.Value),
 		}
+		if wire.Source == credentialSourceOAuth {
+			cred.refreshable = true
+		}
+		return cred
 	case credentialBasic:
 		return credential{
 			kind:     credentialBasic,
