@@ -149,21 +149,41 @@ func explicitEnvironmentNames(composeFile string) (map[string]map[string]struct{
 		return names, nil
 	}
 	for serviceName, rawService := range services {
-		service, ok := rawService.(map[string]interface{})
-		if !ok {
+		if _, ok := rawService.(map[string]interface{}); !ok {
 			return nil, fmt.Errorf("could not inject secrets: service %q has an invalid definition", serviceName)
 		}
-		rawEnvironment, exists := service["environment"]
-		if !exists || rawEnvironment == nil {
-			continue
+		serviceNames, err := collectServiceEnvironmentNames(services, serviceName, make(map[string]bool))
+		if err != nil {
+			return nil, err
 		}
-		if names[serviceName] == nil {
-			names[serviceName] = make(map[string]struct{})
-		}
+		names[serviceName] = serviceNames
+	}
+	return names, nil
+}
+
+func collectServiceEnvironmentNames(services map[string]interface{}, serviceName string, visiting map[string]bool) (map[string]struct{}, error) {
+	if visiting[serviceName] {
+		return nil, fmt.Errorf("could not inspect Compose service %q: extends cycle detected", serviceName)
+	}
+	rawService, exists := services[serviceName]
+	if !exists {
+		return nil, fmt.Errorf("could not inspect Compose service %q: service does not exist", serviceName)
+	}
+	service, ok := rawService.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("could not inject secrets: service %q has an invalid definition", serviceName)
+	}
+
+	visiting[serviceName] = true
+	defer delete(visiting, serviceName)
+
+	names := make(map[string]struct{})
+	rawEnvironment, exists := service["environment"]
+	if exists && rawEnvironment != nil {
 		switch environment := rawEnvironment.(type) {
 		case map[string]interface{}:
 			for name := range environment {
-				names[serviceName][name] = struct{}{}
+				names[name] = struct{}{}
 			}
 		case []interface{}:
 			for _, item := range environment {
@@ -172,11 +192,31 @@ func explicitEnvironmentNames(composeFile string) (map[string]map[string]struct{
 					return nil, errors.New("environment list contains a non-string value")
 				}
 				name, _, _ := strings.Cut(value, "=")
-				names[serviceName][name] = struct{}{}
+				names[name] = struct{}{}
 			}
 		default:
 			return nil, errors.New("environment must be a map or list")
 		}
+	}
+
+	rawExtends, exists := service["extends"]
+	if !exists || rawExtends == nil {
+		return names, nil
+	}
+	extends, ok := rawExtends.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("could not inspect Compose service %q: extends must be a map", serviceName)
+	}
+	parentName, ok := extends["service"].(string)
+	if !ok || parentName == "" {
+		return nil, fmt.Errorf("could not inspect Compose service %q: extends has no service name", serviceName)
+	}
+	parentNames, err := collectServiceEnvironmentNames(services, parentName, visiting)
+	if err != nil {
+		return nil, err
+	}
+	for name := range parentNames {
+		names[name] = struct{}{}
 	}
 	return names, nil
 }

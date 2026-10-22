@@ -264,6 +264,55 @@ func TestPrepareComposeCommandAllowsPartialOverrideFiles(t *testing.T) {
 	cleanup()
 }
 
+func TestPrepareComposeCommandPreservesInheritedEnvironmentValues(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	composePath := filepath.Join(dir, "compose.yaml")
+	contents := `services:
+  api:
+    image: example/api
+    environment:
+      TOKEN: explicit
+  worker:
+    extends:
+      service: api
+    image: example/worker
+`
+	if err := os.WriteFile(composePath, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	args, cleanup, err := prepareComposeCommand(
+		[]string{"docker", "compose", "--file", composePath, "up"},
+		[]string{"TOKEN"},
+		[]string{"TOKEN=from-infisical"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	generated, err := os.ReadFile(args[3])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]interface{}
+	if err := yaml.Unmarshal(generated, &document); err != nil {
+		t.Fatal(err)
+	}
+	worker := document["services"].(map[string]interface{})["worker"].(map[string]interface{})
+	environment, exists := worker["environment"].([]interface{})
+	if !exists {
+		return
+	}
+	for _, item := range environment {
+		if item == "TOKEN" || strings.HasPrefix(item.(string), "TOKEN=") {
+			t.Fatal("expected inherited TOKEN not to be added to the child service")
+		}
+	}
+}
+
 func TestPrepareComposeCommandDoesNotWriteSecretValues(t *testing.T) {
 	t.Parallel()
 
