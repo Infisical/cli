@@ -1,8 +1,12 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"runtime"
+	"strconv"
+	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/agentvault"
 	"github.com/Infisical/infisical-merge/packages/util"
@@ -29,36 +33,34 @@ var agentVaultProxyCmd = &cobra.Command{
 The proxy decides per request whether a host is allowed and attaches the real credential on the way out,
 so the agent never holds a secret.
 
-Enroll once with the token shown when the proxy was created, then run it with no token to serve:
+A proxy runs in the mode it was created with in Infisical.
+
+Standard runs on one machine. Enroll once with the token shown when the proxy was created, then run it
+with no token to serve. The proxy keeps its access token and certificate authority in --data-dir:
 
   infisical agent-vault proxy --enrollment-token avp_...
   infisical agent-vault proxy
 
+HA runs any number of copies (HA boxes, sidecars, containers) from one proxy token. Each copy loads its
+settings and certificate authority from Infisical when it starts and saves nothing to disk. On a shared
+host, pass the token in INFISICAL_AGENT_VAULT_PROXY_TOKEN rather than --proxy-token, which other users
+can read from the process list:
+
+  INFISICAL_AGENT_VAULT_PROXY_TOKEN=... infisical agent-vault proxy
+
+Infisical issues the certificate authority the proxy serves. To serve your own instead, pass --ca-cert
+and --ca-key, each as a PEM, the base64 of a PEM, or a file path.
+
 A proxy's settings - its traffic policy, the exceptions to it, and how often it refreshes - are set in
 Infisical and arrive on every poll, so they have no flags here. Every HTTPS host is intercepted either way; an exception is not blocked,
 not un-intercepted.`,
-	Example:               "infisical agent-vault proxy --enrollment-token avp_7k2mf...",
+	Example:               "infisical agent-vault proxy --enrollment-token avp_7k2mf...\nINFISICAL_AGENT_VAULT_PROXY_TOKEN=eyJhb... infisical agent-vault proxy",
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
-		enrollmentToken, err := util.GetCmdFlagOrEnvWithDefaultValue(
-			cmd, "enrollment-token", []string{"INFISICAL_AGENT_VAULT_ENROLLMENT_TOKEN"}, "")
+		in, err := readAgentVaultProxyInputs(cmd)
 		if err != nil {
-			util.HandleError(err, "Unable to read --enrollment-token")
-		}
-
-		dataDir, err := util.GetCmdFlagOrEnvWithDefaultValue(
-			cmd, "data-dir", []string{"INFISICAL_AGENT_VAULT_DATA_DIR"}, "")
-		if err != nil {
-			util.HandleError(err, "Unable to read --data-dir")
-		}
-
-		port, err := cmd.Flags().GetInt("port")
-		if err != nil {
-			util.HandleError(err, "Unable to read --port")
-		}
-		if port < 0 || port > 65535 {
-			util.HandleError(fmt.Errorf("--port must be between 0 and 65535, got %d. 0 asks for any free port", port))
+			util.HandleError(err)
 		}
 
 		logFormat, err := cmd.Flags().GetString("log-format")
@@ -76,35 +78,138 @@ not un-intercepted.`,
 		}
 		log.Logger = zerolog.New(writer).With().Timestamp().Logger()
 
-		if err := agentvault.Start(agentvault.Options{
-			Port:    port,
-			DataDir: dataDir,
+		for _, warning := range in.warnings {
+			log.Warn().Msg("agent-vault: " + warning)
+		}
+
+		mode := "standard"
+		if in.proxyToken != "" {
+			mode = "ha"
+		}
+		opts := agentvault.Options{
+			Port:    in.port,
+			DataDir: in.dataDir,
+			OwnCa:   in.ownCa,
 			OnReady: func(enrolledNow bool) {
 				Telemetry.CaptureEvent("cli-command:agent-vault proxy", posthog.NewProperties().
 					Set("version", util.CLI_VERSION).
 					Set("platform", runtime.GOOS).
+					Set("mode", mode).
 					Set("enrolledNow", enrolledNow).
-					Set("customPort", port != agentvault.DefaultPort).
-					Set("customDataDir", dataDir != "").
+					Set("customPort", in.port != agentvault.DefaultPort).
+					Set("customDataDir", in.dataDir != "").
+					Set("ownCa", in.ownCa != nil).
 					Set("logFormat", logFormat))
 			},
-		}, enrollmentToken); err != nil {
+		}
+
+		if in.proxyToken != "" {
+			err = agentvault.StartWithProxyToken(opts, in.proxyToken)
+		} else {
+			err = agentvault.Start(opts, in.enrollmentToken)
+		}
+		if err != nil {
 			util.HandleError(err, "Agent Vault proxy failed")
 		}
 	},
 }
 
+type agentVaultProxyInputs struct {
+	enrollmentToken string
+	proxyToken      string
+	dataDir         string
+	port            int
+	ownCa           *agentvault.OwnCa
+	warnings        []string
+}
+
+// Warnings are returned rather than logged because the logger is configured after this runs.
+func readAgentVaultProxyInputs(cmd *cobra.Command) (agentVaultProxyInputs, error) {
+	var in agentVaultProxyInputs
+	var err error
+
+	in.enrollmentToken, err = util.GetCmdFlagOrEnvWithDefaultValue(
+		cmd, "enrollment-token", []string{"INFISICAL_AGENT_VAULT_ENROLLMENT_TOKEN"}, "")
+	if err != nil {
+		return in, fmt.Errorf("unable to read --enrollment-token: %w", err)
+	}
+	in.proxyToken, err = util.GetCmdFlagOrEnvWithDefaultValue(
+		cmd, "proxy-token", []string{"INFISICAL_AGENT_VAULT_PROXY_TOKEN"}, "")
+	if err != nil {
+		return in, fmt.Errorf("unable to read --proxy-token: %w", err)
+	}
+	if in.enrollmentToken != "" && in.proxyToken != "" {
+		return in, errors.New("use either --enrollment-token (Standard) or --proxy-token (HA), not both")
+	}
+
+	in.dataDir, err = util.GetCmdFlagOrEnvWithDefaultValue(
+		cmd, "data-dir", []string{"INFISICAL_AGENT_VAULT_DATA_DIR"}, "")
+	if err != nil {
+		return in, fmt.Errorf("unable to read --data-dir: %w", err)
+	}
+	if in.proxyToken != "" && in.dataDir != "" {
+		in.warnings = append(in.warnings, "--data-dir is ignored with --proxy-token; nothing is saved")
+		in.dataDir = ""
+	}
+
+	in.port, err = cmd.Flags().GetInt("port")
+	if err != nil {
+		return in, fmt.Errorf("unable to read --port: %w", err)
+	}
+	if raw := strings.TrimSpace(os.Getenv("INFISICAL_AGENT_VAULT_PORT")); raw != "" && !cmd.Flags().Changed("port") {
+		in.port, err = strconv.Atoi(raw)
+		if err != nil {
+			return in, fmt.Errorf("INFISICAL_AGENT_VAULT_PORT must be a whole number, got %q", raw)
+		}
+	}
+	if in.port < 0 || in.port > 65535 {
+		return in, fmt.Errorf("--port must be between 0 and 65535, got %d. 0 asks for any free port", in.port)
+	}
+
+	caCert, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "ca-cert", []string{"INFISICAL_AGENT_VAULT_CA_CERT"}, "")
+	if err != nil {
+		return in, fmt.Errorf("unable to read --ca-cert: %w", err)
+	}
+	caKey, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "ca-key", []string{"INFISICAL_AGENT_VAULT_CA_KEY"}, "")
+	if err != nil {
+		return in, fmt.Errorf("unable to read --ca-key: %w", err)
+	}
+	if (caCert == "") != (caKey == "") {
+		return in, errors.New("--ca-cert and --ca-key go together")
+	}
+	if caCert != "" {
+		// Only the key is a secret; the certificate is handed to every agent anyway.
+		if keyFlag, _ := cmd.Flags().GetString("ca-key"); strings.Contains(keyFlag, "-----BEGIN ") {
+			in.warnings = append(in.warnings, "--ca-key is visible in the process list; prefer the env var INFISICAL_AGENT_VAULT_CA_KEY")
+		}
+		in.ownCa, err = agentvault.LoadOwnCa(caCert, caKey)
+		if err != nil {
+			return in, err
+		}
+	}
+
+	return in, nil
+}
+
 func init() {
-	agentVaultProxyCmd.Flags().String("enrollment-token", "",
-		"one-time token from Infisical, used to enroll this proxy. Not needed once enrolled")
-	agentVaultProxyCmd.Flags().String("data-dir", "",
-		fmt.Sprintf("where to keep the certificate authority and proxy token (default: %s)", defaultDataDirHelp()))
-	agentVaultProxyCmd.Flags().Int("port", agentvault.DefaultPort, "port to listen on; 0 binds any free port, which the startup line then reports")
-	agentVaultProxyCmd.Flags().String("log-format", "console", "log output format: console | json")
-	agentVaultProxyCmd.Flags().String("log-file", "", "path to also write logs to")
+	addAgentVaultProxyFlags(agentVaultProxyCmd)
 
 	agentVaultCmd.AddCommand(agentVaultProxyCmd)
 	RootCmd.AddCommand(agentVaultCmd)
+}
+
+func addAgentVaultProxyFlags(cmd *cobra.Command) {
+	cmd.Flags().String("enrollment-token", "",
+		"one-time token from Infisical, used to enroll this proxy. Not needed once enrolled")
+	cmd.Flags().String("proxy-token", "",
+		"token from Infisical that runs a copy of an HA proxy. Nothing is saved to disk")
+	cmd.Flags().String("data-dir", "",
+		fmt.Sprintf("where a Standard proxy keeps its certificate authority and access token (default: %s)", defaultDataDirHelp()))
+	cmd.Flags().String("ca-cert", "", "your own certificate authority to serve, instead of the one Infisical issues: PEM, base64 PEM or file path")
+	cmd.Flags().String("ca-key", "", "private key for --ca-cert: PEM, base64 PEM or file path")
+	cmd.Flags().Int("port", agentvault.DefaultPort, "port to listen on; 0 binds any free port, which the startup line then reports")
+	cmd.Flags().String("log-format", "console", "log output format: console | json")
+	cmd.Flags().String("log-file", "", "path to also write logs to")
 }
 
 func defaultDataDirHelp() string {
