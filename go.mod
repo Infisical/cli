@@ -1,6 +1,6 @@
 module github.com/Infisical/infisical-merge
 
-go 1.26.9
+go 1.26.10
 
 require (
 	cloud.google.com/go/iam v1.1.11
@@ -31,7 +31,7 @@ require (
 	github.com/h2non/filetype v1.1.3
 	github.com/hashicorp/go-version v1.9.0
 	github.com/infisical/go-sdk v0.7.0
-	github.com/infisical/infisical-kmip v0.3.20
+	github.com/infisical/infisical-kmip v0.3.21
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/jcmturner/gokrb5/v8 v8.4.4
 	github.com/masterzen/winrm v0.0.0-20260407182533-5570be7f80cf
@@ -67,11 +67,13 @@ require (
 	golang.org/x/term v0.46.0
 	google.golang.org/api v0.267.0
 	gopkg.in/ini.v1 v1.62.0
+	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gopkg.in/yaml.v2 v2.4.0
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/api v0.31.4
 	k8s.io/apimachinery v0.31.4
 	k8s.io/client-go v0.31.4
+	software.sslmate.com/src/go-pkcs12 v0.7.3
 )
 
 require (
@@ -241,7 +243,6 @@ require (
 	google.golang.org/grpc v1.83.2 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
-	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	k8s.io/klog/v2 v2.130.1 // indirect
 	k8s.io/kube-openapi v0.0.0-20250318190949-c8a335a9a2ff // indirect
 	k8s.io/utils v0.0.0-20241104100929-3ea5e8cea738 // indirect

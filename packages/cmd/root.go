@@ -137,6 +137,9 @@ var profileNoticeExemptCommands = map[string]bool{
 func topLevelCommandName(cmd *cobra.Command) string {
 	current := cmd
 	for current.Parent() != nil && current.Parent() != RootCmd {
+		if current.Parent().Name() == smCommandName && current.Parent().Parent() == RootCmd {
+			break
+		}
 		current = current.Parent()
 	}
 	return current.Name()
@@ -158,6 +161,9 @@ func init() {
 		silent, err := cmd.Flags().GetBool("silent")
 		if err != nil {
 			util.HandleError(err)
+		}
+		if !silent && !isStructuredOutputRequested(cmd) {
+			util.EnableWorkspaceConfigMessages()
 		}
 
 		profileFlag, err := cmd.Flags().GetString("profile")
@@ -191,13 +197,11 @@ func init() {
 
 		if !util.IsRunningInDocker() && !silent && !isStructuredOutputRequested(cmd) {
 			util.CheckForUpdateWithWriter(cmd.ErrOrStderr())
-			if cmd != migrateConfigCmd {
-				projectConfigDir := ""
-				if f := cmd.Flags().Lookup("project-config-dir"); f != nil {
-					projectConfigDir = f.Value.String()
-				}
-				util.DisplayWorkspaceConfigMigrationNoticeWithWriter(silent, projectConfigDir, cmd.ErrOrStderr())
+			projectConfigDir := ""
+			if f := cmd.Flags().Lookup("project-config-dir"); f != nil {
+				projectConfigDir = f.Value.String()
 			}
+			util.DisplayWorkspaceConfigMigrationNoticeWithWriter(silent, projectConfigDir, cmd.ErrOrStderr())
 		}
 
 		loggedInDetails, err := util.GetCurrentLoggedInUserDetails(false)
@@ -205,7 +209,7 @@ func init() {
 		if !silent && err == nil && loggedInDetails.IsUserLoggedIn && !loggedInDetails.LoginExpired {
 			token, err := util.GetInfisicalToken(cmd)
 
-			if err == nil && token != nil {
+			if err == nil && token != nil && !ignoresEnvServiceToken(cmd, token) {
 				util.PrintWarningWithWriter(fmt.Sprintf("Your logged-in session is being overwritten by the token provided from the %s.", token.Source), cmd.ErrOrStderr())
 			}
 		}

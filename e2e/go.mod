@@ -1,6 +1,6 @@
 module github.com/infisical/cli/e2e-tests
 
-go 1.26.9
+go 1.26.10
 
 require (
 	github.com/Infisical/infisical-merge v0.0.0
@@ -182,7 +182,7 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/indece-official/go-ebcdic v1.2.0 // indirect
 	github.com/infisical/go-sdk v0.7.0 // indirect
-	github.com/infisical/infisical-kmip v0.3.20 // indirect
+	github.com/infisical/infisical-kmip v0.3.21 // indirect
 	github.com/inhies/go-bytesize v0.0.0-20220417184213-4913239db9cf // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
@@ -378,6 +378,7 @@ require (
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v4 v4.6.0 // indirect
 	sigs.k8s.io/yaml v1.4.0 // indirect
+	software.sslmate.com/src/go-pkcs12 v0.7.3 // indirect
 	tags.cncf.io/container-device-interface v1.0.1 // indirect
 )
 

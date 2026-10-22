@@ -52,15 +52,18 @@ func configFingerprint(certConfig *AgentCertificateConfig) string {
 		PrivateKeyPath  string
 		ChainPath       string
 		ChainOmitRoot   *bool
+		// Omitted when false so records written before this field existed stay valid.
+		CombineCertificateChain bool `json:",omitempty"`
 	}{
-		ProfileID:       certConfig.ProfileID,
-		ApplicationID:   certConfig.ApplicationID,
-		CSR:             certConfig.CSR,
-		Attributes:      certConfig.Attributes,
-		CertificatePath: output.Certificate.Path,
-		PrivateKeyPath:  output.PrivateKey.Path,
-		ChainPath:       output.Chain.Path,
-		ChainOmitRoot:   output.Chain.OmitRoot,
+		ProfileID:               certConfig.ProfileID,
+		ApplicationID:           certConfig.ApplicationID,
+		CSR:                     certConfig.CSR,
+		Attributes:              certConfig.Attributes,
+		CertificatePath:         output.Certificate.Path,
+		PrivateKeyPath:          output.PrivateKey.Path,
+		ChainPath:               output.Chain.Path,
+		ChainOmitRoot:           output.Chain.OmitRoot,
+		CombineCertificateChain: output.CombineCertificateChain,
 	})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])

@@ -17,8 +17,10 @@ var logoutCmd = &cobra.Command{
 	Long: `End a login session.
 
 The session is revoked on the server and its credentials are removed from this
-machine. The profile itself is kept, so [infisical login --profile <name>] signs
-back in without setting it up again.
+machine, along with the offline backup of fetched secrets. The backup is shared
+by every profile on this machine, so it is removed even when other profiles stay
+logged in. The profile itself is kept, so [infisical login --profile <name>]
+signs back in without setting it up again.
 
 Several profiles for the same account on the same machine share one server
 session. A session another profile still uses is left intact, and only this
@@ -83,6 +85,16 @@ profile's stored credentials are removed.`,
 			if result.LocalErr != nil {
 				util.PrintWarning(fmt.Sprintf("Unable to remove the stored credentials for profile '%s' [err=%s]", result.ProfileName, result.LocalErr))
 			}
+		}
+
+		if err := util.PruneOrgSessionIndex(targetNames); err != nil {
+			util.PrintWarning(fmt.Sprintf("Unable to remove the cached organization sessions from the config file [err=%s]", err))
+		}
+
+		// The backup is not stored per profile, so it goes even when other
+		// profiles stay logged in. Each one writes it again on its next fetch.
+		if err := util.DeleteBackupSecrets(); err != nil {
+			util.PrintWarning(fmt.Sprintf("Unable to remove the offline secrets backup [err=%s]", err))
 		}
 
 		util.PrintlnStderr("\nProfiles are kept so you can sign back in with [infisical login --profile <name>]. Remove one entirely with [infisical profile delete <name>].")

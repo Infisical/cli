@@ -229,6 +229,42 @@ type Project struct {
 	Slug string `json:"slug"`
 }
 
+type ProjectEnvironment struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Slug string `json:"slug"`
+}
+
+// ProjectDetails is a project as the /v1/projects endpoints return it, with its environments.
+type ProjectDetails struct {
+	ID           string               `json:"id"`
+	Name         string               `json:"name"`
+	Slug         string               `json:"slug"`
+	Description  string               `json:"description,omitempty"`
+	Type         string               `json:"type"`
+	OrgID        string               `json:"orgId"`
+	Environments []ProjectEnvironment `json:"environments"`
+}
+
+type ListProjectsResponse struct {
+	Projects []ProjectDetails `json:"projects"`
+}
+
+type GetProjectResponse struct {
+	Project ProjectDetails `json:"project"`
+}
+
+type CreateProjectRequest struct {
+	ProjectName        string `json:"projectName"`
+	ProjectDescription string `json:"projectDescription,omitempty"`
+	Slug               string `json:"slug,omitempty"`
+	Type               string `json:"type"`
+}
+
+type CreateProjectResponse struct {
+	Project ProjectDetails `json:"project"`
+}
+
 type RawSecret struct {
 	SecretKey     string   `json:"secretKey,omitempty"`
 	SecretValue   string   `json:"secretValue,omitempty"`
@@ -1142,23 +1178,23 @@ type AltName struct {
 }
 
 type CertificateAttributes struct {
-	TTL                  string    `json:"ttl,omitempty"`
-	SignatureAlgorithm   string    `json:"signatureAlgorithm,omitempty"`
-	KeyAlgorithm         string    `json:"keyAlgorithm,omitempty"`
-	CommonName           string    `json:"commonName,omitempty"`
-	KeyUsages            []string  `json:"keyUsages,omitempty"`
-	ExtendedKeyUsages    []string  `json:"extendedKeyUsages,omitempty"`
-	NotBefore            string    `json:"notBefore,omitempty"`
-	NotAfter             string    `json:"notAfter,omitempty"`
-	AltNames             []AltName `json:"altNames,omitempty"`
-	RemoveRootsFromChain bool      `json:"removeRootsFromChain,omitempty"`
+	TTL                string    `json:"ttl,omitempty"`
+	SignatureAlgorithm string    `json:"signatureAlgorithm,omitempty"`
+	KeyAlgorithm       string    `json:"keyAlgorithm,omitempty"`
+	CommonName         string    `json:"commonName,omitempty"`
+	KeyUsages          []string  `json:"keyUsages,omitempty"`
+	ExtendedKeyUsages  []string  `json:"extendedKeyUsages,omitempty"`
+	NotBefore          string    `json:"notBefore,omitempty"`
+	NotAfter           string    `json:"notAfter,omitempty"`
+	AltNames           []AltName `json:"altNames,omitempty"`
 }
 
 type IssueCertificateRequest struct {
-	ProfileID     string                 `json:"profileId"`
-	ApplicationID string                 `json:"applicationId,omitempty"`
-	CSR           string                 `json:"csr,omitempty"`
-	Attributes    *CertificateAttributes `json:"attributes,omitempty"`
+	ProfileID            string                 `json:"profileId"`
+	ApplicationID        string                 `json:"applicationId,omitempty"`
+	CSR                  string                 `json:"csr,omitempty"`
+	Attributes           *CertificateAttributes `json:"attributes,omitempty"`
+	RemoveRootsFromChain bool                   `json:"removeRootsFromChain,omitempty"`
 }
 
 type CertificateData struct {
@@ -1208,6 +1244,12 @@ type CertificateBundleResponse struct {
 	Certificate      string `json:"certificate"`
 	CertificateChain string `json:"certificateChain"`
 	PrivateKey       string `json:"privateKey,omitempty"`
+	SerialNumber     string `json:"serialNumber"`
+}
+
+type CertificateBodyResponse struct {
+	Certificate      string `json:"certificate"`
+	CertificateChain string `json:"certificateChain"`
 	SerialNumber     string `json:"serialNumber"`
 }
 

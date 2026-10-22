@@ -12,7 +12,9 @@ const workspaceConfigMigrationNoticeID = "workspace-config-yaml"
 const workspaceConfigMigrationGuideURL = "https://infisical.com/docs/cli/project-config-migration"
 
 // DisplayWorkspaceConfigMigrationNoticeWithWriter prints a once-per-day notice when the
-// workspace config in use is a legacy .infisical.json rather than a .infisical.yaml.
+// workspace config in use is a legacy .infisical.json and the CLI can't create a .infisical.yaml
+// next to it. It first tries to create the yaml itself, so the notice only shows when that fails
+// (read-only directory, invalid json, ...).
 // Stays quiet in --silent mode, and can be disabled with INFISICAL_DISABLE_WORKSPACE_CONFIG_MIGRATION_NOTICE.
 //
 // projectConfigDir is the value of --project-config-dir when the command defines it; when set,
@@ -31,15 +33,26 @@ func DisplayWorkspaceConfigMigrationNoticeWithWriter(isSilent bool, projectConfi
 		return
 	}
 
+	// nothing to tell the user once the yaml exists, whether created here or by another command
+	configFileDir := filepath.Dir(legacyConfigFilePath)
+	yamlConfigFilePath := filepath.Join(configFileDir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
+	if createWorkspaceConfigYamlFromLegacy(legacyConfigFilePath, yamlConfigFilePath) {
+		return
+	}
+	if _, err := os.Stat(yamlConfigFilePath); err == nil {
+		return
+	}
+
 	DisplayMigrationNoticeWithWriter(MigrationNotice{
 		ID:    workspaceConfigMigrationNoticeID,
-		Title: fmt.Sprintf("Important: %s is deprecated. Move this project to %s.", INFISICAL_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME),
+		Title: fmt.Sprintf("Important: unable to create %s. This project still uses the deprecated %s.", INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_WORKSPACE_CONFIG_FILE_NAME),
 		Message: fmt.Sprintf(
-			"What's happening: the CLI is reading a legacy %s, and support for it will be removed\n"+
-				"in a future release. File in use: %s\n"+
-				"What to do: run `infisical migrate-config` in %s to convert it to %s.",
+			"\nThe Infisical CLI is reading the legacy %s config file, and support for it will be removed in the near future.\n"+
+				"Falling back to the legacy config file \"%s\".\n\n"+
+				"The CLI attempts to create the %s config file next to it automatically, but could not write it to \"%s\".\n\n"+
+				"What to do: make sure that the directory is writable and your \"%s\" file is valid JSON, then run any Infisical command again, or create \"%s\" there yourself.",
 			INFISICAL_WORKSPACE_CONFIG_FILE_NAME, legacyConfigFilePath,
-			filepath.Dir(legacyConfigFilePath), INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME,
+			INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, configFileDir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME,
 		),
 		DocsURL: workspaceConfigMigrationGuideURL,
 	}, w)

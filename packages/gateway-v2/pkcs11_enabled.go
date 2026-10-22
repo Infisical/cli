@@ -4,14 +4,19 @@ package gatewayv2
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/binary"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
+	"sort"
 	"strings"
 	"sync"
 
@@ -22,6 +27,11 @@ import (
 var (
 	ecParamsP256 = []byte{0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07}
 	ecParamsP384 = []byte{0x06, 0x05, 0x2B, 0x81, 0x04, 0x00, 0x22}
+)
+
+const (
+	generatedKeyIDBytes = 16
+	maxFoundKeys        = 50
 )
 
 type pkcs11ModuleImpl struct {
@@ -165,10 +175,14 @@ func (m *pkcs11ModuleImpl) Test(slotLabel string, pin []byte) (SlotInfo, error) 
 	return info, err
 }
 
-func (m *pkcs11ModuleImpl) GenerateKeyPair(slotLabel string, pin []byte, keyLabel, keyAlgorithm string) ([]byte, error) {
-	var spkiDer []byte
+func (m *pkcs11ModuleImpl) GenerateKeyPair(slotLabel string, pin []byte, keyLabel, keyAlgorithm string) (GeneratedKey, error) {
+	var generated GeneratedKey
+	keyID := make([]byte, generatedKeyIDBytes)
+	if _, err := rand.Read(keyID); err != nil {
+		return generated, &Pkcs11Error{Code: Pkcs11ErrInternal, Message: "Failed to generate key ID"}
+	}
 	err := m.withSession(slotLabel, pin, func(_ uint, session pkcs11.SessionHandle) error {
-		mech, pubTpl, privTpl, err := generateKeyPairTemplates(keyLabel, keyAlgorithm)
+		mech, pubTpl, privTpl, err := generateKeyPairTemplates(keyLabel, keyID, keyAlgorithm)
 		if err != nil {
 			return err
 		}
@@ -180,15 +194,16 @@ func (m *pkcs11ModuleImpl) GenerateKeyPair(slotLabel string, pin []byte, keyLabe
 		if err != nil {
 			return err
 		}
-		spkiDer = der
+		generated = GeneratedKey{PublicKey: der, KeyID: keyID}
 		return nil
 	})
-	return spkiDer, err
+	return generated, err
 }
 
-func generateKeyPairTemplates(keyLabel, keyAlgorithm string) ([]*pkcs11.Mechanism, []*pkcs11.Attribute, []*pkcs11.Attribute, error) {
+func generateKeyPairTemplates(keyLabel string, keyID []byte, keyAlgorithm string) ([]*pkcs11.Mechanism, []*pkcs11.Attribute, []*pkcs11.Attribute, error) {
 	commonPriv := []*pkcs11.Attribute{
 		pkcs11.NewAttribute(pkcs11.CKA_LABEL, []byte(keyLabel)),
+		pkcs11.NewAttribute(pkcs11.CKA_ID, keyID),
 		pkcs11.NewAttribute(pkcs11.CKA_TOKEN, true),
 		pkcs11.NewAttribute(pkcs11.CKA_PRIVATE, true),
 		pkcs11.NewAttribute(pkcs11.CKA_SENSITIVE, true),
@@ -197,6 +212,7 @@ func generateKeyPairTemplates(keyLabel, keyAlgorithm string) ([]*pkcs11.Mechanis
 	}
 	commonPub := []*pkcs11.Attribute{
 		pkcs11.NewAttribute(pkcs11.CKA_LABEL, []byte(keyLabel)),
+		pkcs11.NewAttribute(pkcs11.CKA_ID, keyID),
 		pkcs11.NewAttribute(pkcs11.CKA_TOKEN, true),
 		pkcs11.NewAttribute(pkcs11.CKA_VERIFY, true),
 	}
@@ -224,7 +240,7 @@ func generateKeyPairTemplates(keyLabel, keyAlgorithm string) ([]*pkcs11.Mechanis
 
 func buildSpkiFromHandle(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, pubHandle pkcs11.ObjectHandle, keyAlgorithm string) ([]byte, error) {
 	switch keyAlgorithm {
-	case KeyAlgorithmRSA2048, KeyAlgorithmRSA4096:
+	case KeyAlgorithmRSA2048, KeyAlgorithmRSA3072, KeyAlgorithmRSA4096:
 		attrs, err := ctx.GetAttributeValue(session, pubHandle, []*pkcs11.Attribute{
 			pkcs11.NewAttribute(pkcs11.CKA_MODULUS, nil),
 			pkcs11.NewAttribute(pkcs11.CKA_PUBLIC_EXPONENT, nil),
@@ -292,15 +308,15 @@ func buildSpkiFromHandle(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, pubHandl
 	return nil, &Pkcs11Error{Code: Pkcs11ErrMechanismInvalid, Message: "Unsupported keyAlgorithm for SPKI build"}
 }
 
-func (m *pkcs11ModuleImpl) GetPublicKey(slotLabel string, pin []byte, keyLabel string) ([]byte, error) {
+func (m *pkcs11ModuleImpl) GetPublicKey(slotLabel string, pin []byte, key KeyRef) ([]byte, error) {
 	var spkiDer []byte
 	err := m.withSession(slotLabel, pin, func(_ uint, session pkcs11.SessionHandle) error {
-		handle, found, err := findObject(m.ctx, session, keyLabel, pkcs11.CKO_PUBLIC_KEY)
+		handle, found, err := findObject(m.ctx, session, key, pkcs11.CKO_PUBLIC_KEY)
 		if err != nil {
 			return err
 		}
 		if !found {
-			return &Pkcs11Error{Code: Pkcs11ErrKeyNotFound, Message: fmt.Sprintf("Public key with label %q not found", keyLabel)}
+			return &Pkcs11Error{Code: Pkcs11ErrKeyNotFound, Message: fmt.Sprintf("Public key with label %q and ID %x not found", key.Label, key.ID)}
 		}
 		alg, err := detectKeyAlgorithm(m.ctx, session, handle)
 		if err != nil {
@@ -321,28 +337,29 @@ func detectKeyAlgorithm(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, handle pk
 		pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, nil),
 	})
 	if err != nil || len(attrs) == 0 {
-		return "", &Pkcs11Error{Code: Pkcs11ErrInternal, Message: "Failed to read CKA_KEY_TYPE"}
+		return "", keyAttributeReadError(err)
 	}
-	raw := make([]byte, 8)
-	copy(raw, attrs[0].Value)
-	keyType := uint(binary.LittleEndian.Uint64(raw))
+	keyType := decodeUlong(attrs[0].Value)
 	switch keyType {
 	case pkcs11.CKK_RSA:
 		modAttrs, err := ctx.GetAttributeValue(session, handle, []*pkcs11.Attribute{pkcs11.NewAttribute(pkcs11.CKA_MODULUS, nil)})
 		if err != nil || len(modAttrs) == 0 {
-			return "", &Pkcs11Error{Code: Pkcs11ErrInternal, Message: "Failed to read CKA_MODULUS"}
+			return "", keyAttributeReadError(err)
 		}
-		switch len(modAttrs[0].Value) {
+		modulusLen := len(bytes.TrimLeft(modAttrs[0].Value, "\x00"))
+		switch modulusLen {
 		case 256:
 			return KeyAlgorithmRSA2048, nil
+		case 384:
+			return KeyAlgorithmRSA3072, nil
 		case 512:
 			return KeyAlgorithmRSA4096, nil
 		}
-		return "", &Pkcs11Error{Code: Pkcs11ErrMechanismInvalid, Message: fmt.Sprintf("Unsupported RSA modulus length: %d bits", len(modAttrs[0].Value)*8)}
+		return "", &Pkcs11Error{Code: Pkcs11ErrMechanismInvalid, Message: fmt.Sprintf("Unsupported RSA modulus length: %d bits", modulusLen*8)}
 	case pkcs11.CKK_EC:
 		paramsAttrs, err := ctx.GetAttributeValue(session, handle, []*pkcs11.Attribute{pkcs11.NewAttribute(pkcs11.CKA_EC_PARAMS, nil)})
 		if err != nil || len(paramsAttrs) == 0 {
-			return "", &Pkcs11Error{Code: Pkcs11ErrInternal, Message: "Failed to read CKA_EC_PARAMS"}
+			return "", keyAttributeReadError(err)
 		}
 		if bytes.Equal(paramsAttrs[0].Value, ecParamsP256) {
 			return KeyAlgorithmECCP256, nil
@@ -355,10 +372,31 @@ func detectKeyAlgorithm(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, handle pk
 	return "", &Pkcs11Error{Code: Pkcs11ErrMechanismInvalid, Message: fmt.Sprintf("Unsupported PKCS#11 key type: %d", keyType)}
 }
 
-func findObject(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, label string, class uint) (pkcs11.ObjectHandle, bool, error) {
+var errKeyAttributeUnreadable = &Pkcs11Error{Code: Pkcs11ErrInternal, Message: "The HSM does not reveal this key attribute"}
+
+func keyAttributeReadError(err error) error {
+	e, ok := err.(pkcs11.Error)
+	if err == nil || (ok && (e == pkcs11.CKR_ATTRIBUTE_TYPE_INVALID || e == pkcs11.CKR_ATTRIBUTE_SENSITIVE)) {
+		return errKeyAttributeUnreadable
+	}
+	if ok && (e == pkcs11.CKR_TOKEN_NOT_PRESENT || e == pkcs11.CKR_DEVICE_REMOVED || e == pkcs11.CKR_DEVICE_ERROR) {
+		return &Pkcs11Error{Code: Pkcs11ErrDriverUnavailable, Message: "Driver unavailable"}
+	}
+	return &Pkcs11Error{Code: Pkcs11ErrInternal, Message: fmt.Sprintf("Failed to read key attributes: %v", err)}
+}
+
+func isTolerableKeyLookupError(err error) bool {
+	var p11Err *Pkcs11Error
+	return err == errKeyAttributeUnreadable || (errors.As(err, &p11Err) && p11Err.Code == Pkcs11ErrMechanismInvalid)
+}
+
+func findObject(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, key KeyRef, class uint) (pkcs11.ObjectHandle, bool, error) {
 	tpl := []*pkcs11.Attribute{
-		pkcs11.NewAttribute(pkcs11.CKA_LABEL, []byte(label)),
+		pkcs11.NewAttribute(pkcs11.CKA_LABEL, []byte(key.Label)),
 		pkcs11.NewAttribute(pkcs11.CKA_CLASS, class),
+	}
+	if len(key.ID) > 0 {
+		tpl = append(tpl, pkcs11.NewAttribute(pkcs11.CKA_ID, key.ID))
 	}
 	if err := ctx.FindObjectsInit(session, tpl); err != nil {
 		return 0, false, &Pkcs11Error{Code: Pkcs11ErrInternal, Message: "FindObjectsInit failed"}
@@ -377,16 +415,16 @@ func findObject(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, label string, cla
 	}
 	if len(objs) > 1 {
 		return 0, false, &Pkcs11Error{
-			Code:    Pkcs11ErrBadRequest,
-			Message: fmt.Sprintf("Multiple objects on the HSM share label %q. Resolve the duplicate before proceeding.", label),
+			Code:    Pkcs11ErrKeyAmbiguous,
+			Message: fmt.Sprintf("Multiple objects on the HSM match label %q and ID %x", key.Label, key.ID),
 		}
 	}
 	return objs[0], true, nil
 }
 
-func (m *pkcs11ModuleImpl) Sign(slotLabel string, pin []byte, keyLabel, mechanism string, data []byte, isDigest bool) ([]byte, error) {
-	log.Debug().Str("keyLabel", keyLabel).Str("mech", mechanism).Int("dataLen", len(data)).Msg("pkcs11.Sign: enter")
-	var sig []byte
+func (m *pkcs11ModuleImpl) Sign(slotLabel string, pin []byte, key KeyRef, mechanism string, data []byte, isDigest bool, expectedPublicKey crypto.PublicKey) (SignResult, error) {
+	log.Debug().Str("keyLabel", key.Label).Str("mech", mechanism).Int("dataLen", len(data)).Msg("pkcs11.Sign: enter")
+	var result SignResult
 	err := m.withSession(slotLabel, pin, func(_ uint, session pkcs11.SessionHandle) error {
 		mechCode, params, err := resolveMechanism(mechanism, isDigest)
 		if err != nil {
@@ -397,12 +435,27 @@ func (m *pkcs11ModuleImpl) Sign(slotLabel string, pin []byte, keyLabel, mechanis
 				return err
 			}
 		}
-		handle, found, err := findObject(m.ctx, session, keyLabel, pkcs11.CKO_PRIVATE_KEY)
+		handle, found, err := findObject(m.ctx, session, key, pkcs11.CKO_PRIVATE_KEY)
 		if err != nil {
 			return err
 		}
 		if !found {
-			return &Pkcs11Error{Code: Pkcs11ErrKeyNotFound, Message: fmt.Sprintf("Private key with label %q not found", keyLabel)}
+			return &Pkcs11Error{Code: Pkcs11ErrKeyNotFound, Message: fmt.Sprintf("Private key with label %q and ID %x not found", key.Label, key.ID)}
+		}
+		attrs, err := m.ctx.GetAttributeValue(session, handle, []*pkcs11.Attribute{
+			pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, nil),
+			pkcs11.NewAttribute(pkcs11.CKA_ID, nil),
+		})
+		attrsReadable := err == nil && len(attrs) == 2
+		switch {
+		case attrsReadable:
+			if err := assertKeyTypeMatchesMechanism(attrs[0].Value, mechanism); err != nil {
+				return err
+			}
+		case expectedPublicKey == nil:
+			log.Warn().Err(err).Str("keyLabel", key.Label).Msg("pkcs11: key type and ID unreadable and no expected public key sent, signing without verification")
+		default:
+			log.Warn().Err(err).Str("keyLabel", key.Label).Msg("pkcs11: key type and ID unreadable, verifying the signature against the expected public key")
 		}
 		if err := m.ctx.SignInit(session, []*pkcs11.Mechanism{pkcs11.NewMechanism(mechCode, params)}, handle); err != nil {
 			return mapPkcs11SignError(err)
@@ -411,11 +464,108 @@ func (m *pkcs11ModuleImpl) Sign(slotLabel string, pin []byte, keyLabel, mechanis
 		if err != nil {
 			return mapPkcs11SignError(err)
 		}
-		sig = out
+		var readKeyID []byte
+		if attrsReadable {
+			readKeyID = attrs[1].Value
+		}
+		signed, err := completeSign(out, attrsReadable, readKeyID, key, expectedPublicKey, mechanism, isDigest, data)
+		if err != nil {
+			return err
+		}
+		result = signed
 		return nil
 	})
-	log.Debug().Bool("ok", err == nil).Int("sigLen", len(sig)).Msg("pkcs11.Sign: done")
-	return sig, err
+	log.Debug().Bool("ok", err == nil).Int("sigLen", len(result.Signature)).Msg("pkcs11.Sign: done")
+	return result, err
+}
+
+func (m *pkcs11ModuleImpl) FindPrivateKeys(slotLabel string, pin []byte, keyLabel string) ([]KeyInfo, error) {
+	var keys []KeyInfo
+	err := m.withSession(slotLabel, pin, func(_ uint, session pkcs11.SessionHandle) error {
+		handles, err := findAllObjects(m.ctx, session, []*pkcs11.Attribute{
+			pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PRIVATE_KEY),
+			pkcs11.NewAttribute(pkcs11.CKA_LABEL, []byte(keyLabel)),
+		}, maxFoundKeys+1)
+		if err != nil {
+			return err
+		}
+		if len(handles) > maxFoundKeys {
+			return &Pkcs11Error{Code: Pkcs11ErrBadRequest, Message: fmt.Sprintf("More than %d private keys in the slot have this label", maxFoundKeys)}
+		}
+		for _, handle := range handles {
+			var keyID string
+			attrs, err := m.ctx.GetAttributeValue(session, handle, []*pkcs11.Attribute{
+				pkcs11.NewAttribute(pkcs11.CKA_ID, nil),
+			})
+			switch {
+			case err == nil && len(attrs) == 1 && len(attrs[0].Value) <= maxKeyIDBytes:
+				keyID = hex.EncodeToString(attrs[0].Value)
+			case err == nil && len(attrs) == 1:
+				log.Warn().Str("keyLabel", keyLabel).Int("keyIdBytes", len(attrs[0].Value)).Msg("pkcs11: CKA_ID of a matching private key is longer than a request can carry, reporting it without an ID")
+			default:
+				if readErr := keyAttributeReadError(err); readErr != errKeyAttributeUnreadable {
+					return readErr
+				}
+				log.Warn().Err(err).Str("keyLabel", keyLabel).Msg("pkcs11: CKA_ID of a matching private key cannot be read")
+			}
+			keyAlgorithm, err := detectKeyAlgorithm(m.ctx, session, handle)
+			if err != nil {
+				if !isTolerableKeyLookupError(err) {
+					return err
+				}
+				log.Warn().Err(err).Str("keyLabel", keyLabel).Msg("pkcs11: algorithm of a matching private key cannot be read")
+			}
+			keys = append(keys, KeyInfo{Label: keyLabel, KeyID: keyID, KeyAlgorithm: keyAlgorithm})
+		}
+		return nil
+	})
+	sort.Slice(keys, func(i, j int) bool { return keys[i].KeyID < keys[j].KeyID })
+	return keys, err
+}
+
+func findAllObjects(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, template []*pkcs11.Attribute, limit int) ([]pkcs11.ObjectHandle, error) {
+	if err := ctx.FindObjectsInit(session, template); err != nil {
+		return nil, &Pkcs11Error{Code: Pkcs11ErrInternal, Message: "FindObjectsInit failed"}
+	}
+	defer func() {
+		if finalErr := ctx.FindObjectsFinal(session); finalErr != nil {
+			log.Warn().Err(finalErr).Msg("pkcs11: FindObjectsFinal failed")
+		}
+	}()
+	var handles []pkcs11.ObjectHandle
+	for len(handles) < limit {
+		batch, _, err := ctx.FindObjects(session, limit-len(handles))
+		if err != nil {
+			return nil, &Pkcs11Error{Code: Pkcs11ErrInternal, Message: "FindObjects failed"}
+		}
+		if len(batch) == 0 {
+			break
+		}
+		handles = append(handles, batch...)
+	}
+	return handles, nil
+}
+
+func decodeUlong(value []byte) uint {
+	raw := make([]byte, 8)
+	copy(raw, value)
+	return uint(binary.LittleEndian.Uint64(raw))
+}
+
+func assertKeyTypeMatchesMechanism(keyType []byte, mechanism string) error {
+	var expected uint
+	switch {
+	case strings.Contains(mechanism, "RSA"):
+		expected = pkcs11.CKK_RSA
+	case strings.Contains(mechanism, "ECDSA"):
+		expected = pkcs11.CKK_EC
+	default:
+		return nil
+	}
+	if decodeUlong(keyType) != expected {
+		return &Pkcs11Error{Code: Pkcs11ErrKeyTypeMismatch, Message: fmt.Sprintf("Key type does not match mechanism %s", mechanism)}
+	}
+	return nil
 }
 
 var rsaPkcs1DigestInfos = []struct {

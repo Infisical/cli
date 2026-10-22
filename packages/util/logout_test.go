@@ -1,10 +1,13 @@
 package util
 
 import (
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/Infisical/infisical-merge/packages/models"
 	jwt "github.com/golang-jwt/jwt/v5"
+	"github.com/zalando/go-keyring"
 )
 
 // sessionToken builds a session JWT carrying a session id and an expiry, which
@@ -64,6 +67,83 @@ func TestCollectLiveSessionIDs(t *testing.T) {
 		got := collectSessionIDs([]string{expired})
 		if len(got) != 1 || got[0] != "session-expired" {
 			t.Fatalf("expected the expired session to still be collected, got %v", got)
+		}
+	})
+}
+
+// writeProfiles saves a config holding the given profiles under a temporary
+// home, so the test reads and writes its own config file.
+func writeProfiles(t *testing.T, profiles ...models.Profile) {
+	t.Helper()
+	useTempHome(t)
+	if err := WriteConfigFile(&models.ConfigFile{Profiles: profiles}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+}
+
+func storedOrgSessions(t *testing.T, name string) []models.OrgSessionRef {
+	t.Helper()
+	configFile, err := GetMigratedConfigFile()
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	profile, found := FindProfile(configFile, name)
+	if !found {
+		t.Fatalf("profile %q missing from config", name)
+	}
+	return profile.OrgSessions
+}
+
+// After a logout the org-session tokens are gone from the keyring, so the
+// config must stop listing them.
+func TestPruneOrgSessionIndex(t *testing.T) {
+	t.Run("drops the logged out profile's entries and leaves other profiles alone", func(t *testing.T) {
+		keyring.MockInit()
+		writeProfiles(t,
+			models.Profile{Name: "acme", OrgSessions: []models.OrgSessionRef{{OrgID: "org-1"}, {OrgID: "org-2"}}},
+			models.Profile{Name: "globex", OrgSessions: []models.OrgSessionRef{{OrgID: "org-3"}}},
+		)
+		// org-2 has no token, as after a logout that already removed it.
+		if err := StoreOrgSessionToken("acme", "org-1", "token-1"); err != nil {
+			t.Fatalf("store token: %v", err)
+		}
+
+		if err := PruneOrgSessionIndex([]string{"acme"}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if got := storedOrgSessions(t, "acme"); len(got) != 0 {
+			t.Fatalf("expected acme's org sessions to be cleared, got %+v", got)
+		}
+		if _, found := GetOrgSessionToken("acme", "org-1"); found {
+			t.Fatal("expected acme's org-session token to be deleted")
+		}
+		if got := storedOrgSessions(t, "globex"); len(got) != 1 || got[0].OrgID != "org-3" {
+			t.Fatalf("expected globex to keep its org session, got %+v", got)
+		}
+	})
+
+	t.Run("keeps an entry whose token could not be deleted", func(t *testing.T) {
+		keyring.MockInit()
+		writeProfiles(t, models.Profile{Name: "acme", OrgSessions: []models.OrgSessionRef{{OrgID: "org-1"}}})
+		keyring.MockInitWithError(errors.New("keyring locked"))
+		t.Cleanup(keyring.MockInit)
+
+		if err := PruneOrgSessionIndex([]string{"acme"}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if got := storedOrgSessions(t, "acme"); len(got) != 1 || got[0].OrgID != "org-1" {
+			t.Fatalf("expected the undeletable entry to stay listed, got %+v", got)
+		}
+	})
+
+	t.Run("ignores a profile that does not exist", func(t *testing.T) {
+		keyring.MockInit()
+		writeProfiles(t, models.Profile{Name: "acme"})
+
+		if err := PruneOrgSessionIndex([]string{"missing"}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 }
