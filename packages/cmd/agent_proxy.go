@@ -192,7 +192,7 @@ func runAgentProxyConnect(cmd *cobra.Command, args []string) {
 	allowReadableBrokered := util.GetBoolFlagOrEnv(cmd, "allow-readable-brokered-secrets", util.INFISICAL_AGENT_PROXY_ALLOW_READABLE_BROKERED_SECRETS_NAME)
 
 	Telemetry.SetActor(telemetry.IdentityClaimsFromToken(token.Token))
-	Telemetry.CaptureEvent("cli-command:agent-proxy connect", posthog.NewProperties().
+	Telemetry.CaptureEventAsync("cli-command:agent-proxy connect", posthog.NewProperties().
 		Set("version", util.CLI_VERSION).
 		Set("agent", telemetryAgentName(args)).
 		Set("credentialSource", tokenSource).

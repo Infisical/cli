@@ -972,6 +972,10 @@ func activeProfileDomain(configFile models.ConfigFile, resolved ResolvedProfile)
 	return configFile.LoggedInUserDomain
 }
 
+// TelemetryOptedOut is set once the telemetry opt-out is resolved. The automatic re-login is a separate
+// process that does not see this one's flags, so LoginRenewalArgs passes the opt-out on.
+var TelemetryOptedOut bool
+
 // LoginRenewalArgs builds the arguments for re-running login to restore the
 // session of the profile this invocation resolved to. An existing profile is
 // signed back in to with --profile, which keeps its account, instance, and
@@ -981,6 +985,9 @@ func activeProfileDomain(configFile models.ConfigFile, resolved ResolvedProfile)
 // the login never has to ask.
 func LoginRenewalArgs(resolved ResolvedProfile, profile models.Profile, found bool) []string {
 	args := []string{"login", "--silent"}
+	if TelemetryOptedOut {
+		args = append(args, "--telemetry=false")
+	}
 	if resolved.Name == "" {
 		return args
 	}
