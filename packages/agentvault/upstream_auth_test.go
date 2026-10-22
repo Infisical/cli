@@ -207,7 +207,7 @@ func doWith(t *testing.T, c *http.Client, method, target, contentType string, bo
 	return resp, string(payload)
 }
 
-func assertUpstreamAuthFailed(t *testing.T, resp *http.Response, body string) {
+func assertUpstreamAuthFailed(t *testing.T, resp *http.Response, body, want string) {
 	t.Helper()
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502: %s", resp.StatusCode, body)
@@ -215,13 +215,18 @@ func assertUpstreamAuthFailed(t *testing.T, resp *http.Response, body string) {
 	if got := resp.Header.Values("WWW-Authenticate"); len(got) != 0 {
 		t.Fatalf("the upstream's challenge reached the agent: %v", got)
 	}
-	if body != upstreamAuthFailedBody {
-		t.Fatalf("body = %s", body)
+	if body != want {
+		t.Fatalf("body = %s, want %s", body, want)
 	}
 	if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
 		t.Fatalf("content type = %q", ct)
 	}
 }
+
+const (
+	reauthorizeLinearBody = `{"error":"upstream_auth_failed","message":"The linear service needs to be reauthorized in Infisical Agent Vault."}`
+	linearUnavailableBody = `{"error":"upstream_auth_unavailable","message":"Couldn't get a valid credential for the linear service. Try again in a moment."}`
+)
 
 const mcpCallBody = `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_issue","arguments":{}}}`
 
@@ -270,7 +275,7 @@ func TestAn401TwiceGivesA502WithoutTheChallenge(t *testing.T) {
 	client, host, up := newOAuthFixture(t, resolver, func(h string) *resolvedService { return oauthMCPService(h, "old-token") }, acceptOnly("nothing"))
 
 	resp, body := doWith(t, client, http.MethodPost, fmt.Sprintf("https://%s/mcp", host), "application/json", strings.NewReader(mcpCallBody))
-	assertUpstreamAuthFailed(t, resp, body)
+	assertUpstreamAuthFailed(t, resp, body, linearUnavailableBody)
 	if got := len(up.recorded()); got != 2 {
 		t.Fatalf("upstream saw %d requests, want exactly one retry", got)
 	}
@@ -280,13 +285,22 @@ func TestAn401TwiceGivesA502WithoutTheChallenge(t *testing.T) {
 }
 
 func TestAnUnchangedTokenIsNotRetried(t *testing.T) {
-	resolver := &oauthResolver{issue: oauthToken("old-token"), status: "needs-reauthorization"}
-	client, host, up := newOAuthFixture(t, resolver, func(h string) *resolvedService { return oauthMCPService(h, "old-token") }, acceptOnly("nothing"))
+	// Infisical answers a refresh it could not do with the token it has and the connection's status.
+	for status, want := range map[string]string{
+		oauthStatusNeedsReauthorization:  reauthorizeLinearBody,
+		oauthStatusNeedsAdditionalScopes: reauthorizeLinearBody,
+		oauthStatusConnected:             linearUnavailableBody,
+	} {
+		t.Run(status, func(t *testing.T) {
+			resolver := &oauthResolver{issue: oauthToken("old-token"), status: status}
+			client, host, up := newOAuthFixture(t, resolver, func(h string) *resolvedService { return oauthMCPService(h, "old-token") }, acceptOnly("nothing"))
 
-	resp, body := doWith(t, client, http.MethodGet, fmt.Sprintf("https://%s/mcp", host), "", nil)
-	assertUpstreamAuthFailed(t, resp, body)
-	if got := len(up.recorded()); got != 1 {
-		t.Fatalf("upstream saw %d requests; the same token must not be sent again", got)
+			resp, body := doWith(t, client, http.MethodGet, fmt.Sprintf("https://%s/mcp", host), "", nil)
+			assertUpstreamAuthFailed(t, resp, body, want)
+			if got := len(up.recorded()); got != 1 {
+				t.Fatalf("upstream saw %d requests; the same token must not be sent again", got)
+			}
+		})
 	}
 }
 
@@ -297,7 +311,7 @@ func TestANonReplayable401StillRefreshesButIsNotRetried(t *testing.T) {
 	// Not JSON, so the MCP inspection never buffers it, and with no length so it streams.
 	stream := io.MultiReader(strings.NewReader("chunk-1"), strings.NewReader("chunk-2"))
 	resp, body := doWith(t, client, http.MethodPost, fmt.Sprintf("https://%s/upload", host), "application/octet-stream", stream)
-	assertUpstreamAuthFailed(t, resp, body)
+	assertUpstreamAuthFailed(t, resp, body, linearUnavailableBody)
 	if got := len(up.recorded()); got != 1 {
 		t.Fatalf("upstream saw %d requests; a streamed body cannot be replayed", got)
 	}
@@ -323,7 +337,7 @@ func TestARefreshFailureFallsThroughToA502(t *testing.T) {
 			client, host, up := newOAuthFixture(t, resolver, func(h string) *resolvedService { return oauthMCPService(h, "old-token") }, acceptOnly("new-token"))
 
 			resp, body := doWith(t, client, http.MethodGet, fmt.Sprintf("https://%s/mcp", host), "", nil)
-			assertUpstreamAuthFailed(t, resp, body)
+			assertUpstreamAuthFailed(t, resp, body, linearUnavailableBody)
 			if got := len(up.recorded()); got != 1 {
 				t.Fatalf("upstream saw %d requests, want no retry", got)
 			}
@@ -331,11 +345,90 @@ func TestARefreshFailureFallsThroughToA502(t *testing.T) {
 				t.Fatalf("refresh called %d times, want 1", got)
 			}
 
-			doWith(t, client, http.MethodGet, fmt.Sprintf("https://%s/mcp", host), "", nil)
+			resp, body = doWith(t, client, http.MethodGet, fmt.Sprintf("https://%s/mcp", host), "", nil)
+			assertUpstreamAuthFailed(t, resp, body, linearUnavailableBody)
 			if hits := up.recorded(); hits[len(hits)-1].auth != "Bearer old-token" {
 				t.Fatalf("a failed refresh changed the cached token: %+v", hits)
 			}
+			if got := len(resolver.refreshCalls()); got != 1 {
+				t.Fatalf("refresh called %d times; a failure just seen should be remembered", got)
+			}
 		})
+	}
+}
+
+func TestARememberedRefreshFailureExpires(t *testing.T) {
+	resolver := &oauthResolver{err: errors.New("dial tcp: connection refused")}
+	cache := newSessionCache(resolver, func() time.Duration { return time.Minute })
+	resolver.services = []*resolvedService{oauthMCPService("mcp.example", "old-token")}
+	if _, _, err := cache.lookup("tok"); err != nil {
+		t.Fatal(err)
+	}
+	sent := oauthToken("old-token")
+
+	for range 2 {
+		if _, _, err := cache.refreshCredential("tok", "svc-1", "mcp.example", &sent); err == nil {
+			t.Fatal("the refresh should have failed")
+		}
+	}
+	if got := len(resolver.refreshCalls()); got != 1 {
+		t.Fatalf("refresh called %d times, want 1 within the window", got)
+	}
+
+	cache.mu.Lock()
+	for key, entry := range cache.failedRefreshes {
+		entry.until = time.Now().Add(-time.Second)
+		cache.failedRefreshes[key] = entry
+	}
+	cache.mu.Unlock()
+	_, _, _ = cache.refreshCredential("tok", "svc-1", "mcp.example", &sent)
+	if got := len(resolver.refreshCalls()); got != 2 {
+		t.Fatalf("refresh called %d times, want a new attempt once the window passed", got)
+	}
+}
+
+func TestAStaticCredential401OnAnMCPServiceGivesA502WithoutTheChallenge(t *testing.T) {
+	resolver := &oauthResolver{}
+	client, host, up := newOAuthFixture(t, resolver, func(h string) *resolvedService {
+		svc := mcpService(h)
+		svc.credential = credential{kind: credentialBearer, headerPrefix: "Bearer", value: []byte("stored-key")}
+		return svc
+	}, acceptOnly("nothing"))
+
+	resp, body := doWith(t, client, http.MethodPost, fmt.Sprintf("https://%s/mcp", host), "application/json", strings.NewReader(mcpCallBody))
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502: %s", resp.StatusCode, body)
+	}
+	if got := resp.Header.Values("WWW-Authenticate"); len(got) != 0 {
+		t.Fatalf("the upstream's challenge reached the agent: %v", got)
+	}
+	want := `{"error":"upstream_auth_failed","message":"The linear service's credential was rejected. Update it in Infisical Agent Vault."}`
+	if body != want {
+		t.Fatalf("body = %s", body)
+	}
+	if got := len(up.recorded()); got != 1 {
+		t.Fatalf("upstream saw %d requests, want no retry", got)
+	}
+	if got := len(resolver.refreshCalls()); got != 0 {
+		t.Fatalf("a stored credential was sent for refresh %d times", got)
+	}
+}
+
+func TestAStaticCredential401OnAnHTTPServicePassesThrough(t *testing.T) {
+	resolver := &oauthResolver{}
+	client, host, _ := newOAuthFixture(t, resolver, func(h string) *resolvedService {
+		svc := mcpService(h)
+		svc.kind = ""
+		svc.credential = credential{kind: credentialBearer, headerPrefix: "Bearer", value: []byte("stored-key")}
+		return svc
+	}, acceptOnly("nothing"))
+
+	resp, body := doWith(t, client, http.MethodGet, fmt.Sprintf("https://%s/api", host), "", nil)
+	if resp.StatusCode != http.StatusUnauthorized || body != `{"error":"invalid_token"}` {
+		t.Fatalf("an HTTP service's 401 should reach the agent untouched, got %d: %s", resp.StatusCode, body)
+	}
+	if got := resp.Header.Get("WWW-Authenticate"); got == "" {
+		t.Fatal("the upstream's challenge was dropped")
 	}
 }
 
@@ -348,7 +441,7 @@ func TestInsufficientScopeIsReportedAndNotRetried(t *testing.T) {
 		})
 
 	resp, body := doWith(t, client, http.MethodPost, fmt.Sprintf("https://%s/mcp", host), "application/json", strings.NewReader(mcpCallBody))
-	assertUpstreamAuthFailed(t, resp, body)
+	assertUpstreamAuthFailed(t, resp, body, reauthorizeLinearBody)
 	if got := len(up.recorded()); got != 1 {
 		t.Fatalf("upstream saw %d requests, want no retry", got)
 	}
@@ -375,26 +468,6 @@ func TestAPlain403PassesThrough(t *testing.T) {
 	}
 	if got := len(resolver.refreshCalls()); got != 0 {
 		t.Fatalf("refresh called %d times for a 403 that is not about scopes", got)
-	}
-}
-
-func TestANonOAuthCredentialKeepsTheUpstreams401(t *testing.T) {
-	resolver := &oauthResolver{issue: oauthToken("new-token")}
-	client, host, up := newOAuthFixture(t, resolver, func(h string) *resolvedService {
-		svc := oauthMCPService(h, "static-token")
-		svc.credential.refreshable = false
-		return svc
-	}, acceptOnly("new-token"))
-
-	resp, body := doWith(t, client, http.MethodPost, fmt.Sprintf("https://%s/mcp", host), "application/json", strings.NewReader(mcpCallBody))
-	if resp.StatusCode != http.StatusUnauthorized || body != `{"error":"invalid_token"}` {
-		t.Fatalf("got %d: %s", resp.StatusCode, body)
-	}
-	if resp.Header.Get("WWW-Authenticate") == "" {
-		t.Fatal("a static credential's 401 lost its challenge")
-	}
-	if got := len(resolver.refreshCalls()); got != 0 || len(up.recorded()) != 1 {
-		t.Fatalf("a static credential was refreshed (%d) or retried (%d)", got, len(up.recorded()))
 	}
 }
 
@@ -654,7 +727,7 @@ func TestAPollThatStartedBeforeASwapDoesNotRestoreTheReplacedToken(t *testing.T)
 	<-resolver.entered
 
 	old := oauthToken("old-token")
-	if _, err := cache.refreshCredential("tok", "svc-1", "mcp.example", &old); err != nil {
+	if _, _, err := cache.refreshCredential("tok", "svc-1", "mcp.example", &old); err != nil {
 		t.Fatal(err)
 	}
 	close(release)
@@ -810,7 +883,7 @@ func TestARefreshedTokenIsRefusedWhenAPollRemovedTheAccessMeanwhile(t *testing.T
 			sent := oauthToken("old-token")
 			done := make(chan error, 1)
 			go func() {
-				_, err := cache.refreshCredential("tok", "svc-1", "mcp.example", &sent)
+				_, _, err := cache.refreshCredential("tok", "svc-1", "mcp.example", &sent)
 				done <- err
 			}()
 
@@ -835,7 +908,7 @@ func TestARefreshedTokenIsDroppedWhenAPollMovedTheServiceMeanwhile(t *testing.T)
 	sent := oauthToken("a-token")
 	done := make(chan error, 1)
 	go func() {
-		_, err := cache.refreshCredential("tok", "svc-1", "a.example", &sent)
+		_, _, err := cache.refreshCredential("tok", "svc-1", "a.example", &sent)
 		done <- err
 	}()
 
@@ -890,7 +963,7 @@ func TestA409FromCredentialRefreshLeavesTheCacheAlone(t *testing.T) {
 	}
 
 	sent := oauthToken("a-token")
-	_, err = cache.refreshCredential("tok", "svc-1", "a.example", &sent)
+	_, _, err = cache.refreshCredential("tok", "svc-1", "a.example", &sent)
 	var apiErr *api.APIError
 	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusConflict {
 		t.Fatalf("err = %v, want the 409", err)
@@ -942,7 +1015,7 @@ func TestALateCredentialResponseKeepsThePolledCredential(t *testing.T) {
 			done := make(chan result, 1)
 			sent := oauthToken("old-token")
 			go func() {
-				cred, err := cache.refreshCredential("tok", "svc-1", "mcp.example", &sent)
+				cred, _, err := cache.refreshCredential("tok", "svc-1", "mcp.example", &sent)
 				done <- result{cred, err}
 			}()
 			<-resolver.entered
@@ -1029,12 +1102,13 @@ func TestOpenAuthErrorBodiesDoNotBlockRecovery(t *testing.T) {
 		first     int
 		retry     int
 		want      int
+		wantBody  string
 		refreshes int
 	}{
-		{"401 then success", http.StatusUnauthorized, http.StatusOK, http.StatusOK, 1},
-		{"401 twice", http.StatusUnauthorized, http.StatusUnauthorized, http.StatusBadGateway, 1},
-		{"insufficient scope", http.StatusForbidden, 0, http.StatusBadGateway, 1},
-		{"401 then insufficient scope", http.StatusUnauthorized, http.StatusForbidden, http.StatusBadGateway, 2},
+		{"401 then success", http.StatusUnauthorized, http.StatusOK, http.StatusOK, "", 1},
+		{"401 twice", http.StatusUnauthorized, http.StatusUnauthorized, http.StatusBadGateway, linearUnavailableBody, 1},
+		{"insufficient scope", http.StatusForbidden, 0, http.StatusBadGateway, reauthorizeLinearBody, 1},
+		{"401 then insufficient scope", http.StatusUnauthorized, http.StatusForbidden, http.StatusBadGateway, reauthorizeLinearBody, 2},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1066,7 +1140,7 @@ func TestOpenAuthErrorBodiesDoNotBlockRecovery(t *testing.T) {
 				t.Fatalf("status = %d, want %d: %s", resp.StatusCode, tc.want, body)
 			}
 			if tc.want == http.StatusBadGateway {
-				assertUpstreamAuthFailed(t, resp, body)
+				assertUpstreamAuthFailed(t, resp, body, tc.wantBody)
 			}
 			if got := len(resolver.refreshCalls()); got != tc.refreshes {
 				t.Fatalf("refresh calls = %d, want %d", got, tc.refreshes)

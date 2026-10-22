@@ -510,6 +510,9 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 	// Set only when the proxy injected a credential Infisical can refresh, which is what decides whether an
 	// upstream 401 or 403 is handled here or passed to the agent.
 	var sent *credential
+	// A credential that cannot be refreshed, injected into an MCP request: an upstream 401 then means the
+	// stored credential is wrong, which the agent cannot fix by logging in itself.
+	staticMCP := false
 
 	if ps.blocksOffBundle(matched, hostname, port) {
 		return nil, nil, outcome, fmt.Errorf("no service covers host %q: %w", hostname, errHostBlocked)
@@ -567,6 +570,8 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 			outcome.brokered = true
 			if matched.credential.refreshable {
 				sent = &matched.credential
+			} else if matched.kind == serviceKindMCP {
+				staticMCP = true
 			}
 		}
 
@@ -600,6 +605,12 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 	resp, err := ps.transport.RoundTrip(req)
 	if err != nil {
 		return nil, matched, outcome, err
+	}
+	if staticMCP && resp.StatusCode == http.StatusUnauthorized {
+		_ = resp.Body.Close()
+		log.Warn().Str("service", matched.name).Str("serviceId", matched.id).
+			Msg("agent-vault: the MCP server rejected the service's credential")
+		return upstreamAuthFailed(req, staticCredentialRejectedBody(matched.name)), matched, outcome, nil
 	}
 	if sent != nil {
 		resp, err = ps.handleUpstreamAuth(req, resp, matched, sessionToken, sent, replay, replayable)

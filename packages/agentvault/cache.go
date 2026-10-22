@@ -125,6 +125,10 @@ type sessionCache struct {
 	// A definitive refusal is remembered briefly, so an agent retrying a dead session costs one resolve per
 	// window rather than one per request. Outages and throttling are never stored here.
 	refused map[string]refusedEntry
+	// A failed credential refresh is remembered the same way, per service and rejected token, so while
+	// Infisical is down or slow each request carrying that token gets its 502 at once rather than another
+	// refresh that can take the whole control-plane timeout.
+	failedRefreshes map[string]refusedEntry
 	// Bumped under mu by every credential swap, so a poll can tell which swaps happened after it began.
 	swapGen uint64
 }
@@ -141,19 +145,25 @@ const (
 
 func newSessionCache(resolver sessionResolver, pollInterval func() time.Duration) *sessionCache {
 	return &sessionCache{
-		resolver:     resolver,
-		pollInterval: pollInterval,
-		entries:      make(map[string]*sessionEntry),
-		tokens:       make(map[string]string),
-		refused:      make(map[string]refusedEntry),
+		resolver:        resolver,
+		pollInterval:    pollInterval,
+		entries:         make(map[string]*sessionEntry),
+		tokens:          make(map[string]string),
+		refused:         make(map[string]refusedEntry),
+		failedRefreshes: make(map[string]refusedEntry),
 	}
 }
 
 func (c *sessionCache) rememberRefusalLocked(key string, err error) {
-	if len(c.refused) >= maxRefusedEntries {
-		c.refused = make(map[string]refusedEntry)
+	c.refused = rememberLocked(c.refused, key, err)
+}
+
+func rememberLocked(entries map[string]refusedEntry, key string, err error) map[string]refusedEntry {
+	if len(entries) >= maxRefusedEntries {
+		entries = make(map[string]refusedEntry)
 	}
-	c.refused[key] = refusedEntry{err: err, until: time.Now().Add(refusedTTL)}
+	entries[key] = refusedEntry{err: err, until: time.Now().Add(refusedTTL)}
+	return entries
 }
 
 var errSessionGone = errors.New("session is no longer valid")
@@ -454,23 +464,33 @@ func credentialHash(cred *credential) string {
 // refreshCredential asks Infisical for a replacement of the token the upstream rejected and swaps it into
 // the session's entry, so later requests inject it. hostPattern is that of the cached service whose
 // credential the rejected request carried: a token minted for wherever the service points now must never be
-// sent to where it used to point.
-func (c *sessionCache) refreshCredential(sessionToken, serviceID, hostPattern string, rejected *credential) (credential, error) {
+// sent to where it used to point. The status is Infisical's view of the service's OAuth connection, empty
+// when the answer did not come from Infisical.
+func (c *sessionCache) refreshCredential(sessionToken, serviceID, hostPattern string, rejected *credential) (credential, string, error) {
 	refresher, ok := c.resolver.(credentialRefresher)
 	if !ok {
-		return credential{}, errCredentialNotRefreshable
+		return credential{}, "", errCredentialNotRefreshable
 	}
 	key := sessionKey(sessionToken)
 	rejectedHash := credentialHash(rejected)
 
-	result, err, _ := c.credentialFlights.Do(credentialFlightKey(key, serviceID, hostPattern, rejectedHash, nil), func() (any, error) {
+	type refreshed struct {
+		cred   credential
+		status string
+	}
+	flightKey := credentialFlightKey(key, serviceID, hostPattern, rejectedHash, nil)
+	result, err, _ := c.credentialFlights.Do(flightKey, func() (any, error) {
 		// Checked inside the flight so a caller that arrives after another refresh finished also reuses
 		// its replacement instead of asking Infisical again.
 		if current, ok := c.currentCredential(key, serviceID, hostPattern); ok && current.refreshable && credentialHash(&current) != rejectedHash {
-			return current, nil
+			return refreshed{cred: current}, nil
+		}
+		if err := c.recentRefreshFailure(flightKey); err != nil {
+			return nil, err
 		}
 		fresh, status, err := refresher.refreshCredential(sessionToken, serviceID, hostPattern, rejectedHash)
 		if err != nil {
+			c.rememberRefreshFailure(flightKey, err)
 			return nil, err
 		}
 		if status != "" && status != oauthStatusConnected {
@@ -478,14 +498,40 @@ func (c *sessionCache) refreshCredential(sessionToken, serviceID, hostPattern st
 				Msg("agent-vault: Infisical reports this service's OAuth connection needs attention")
 		}
 		if fresh.kind != credentialBearer || !fresh.refreshable {
+			c.rememberRefreshFailure(flightKey, errCredentialNotRefreshable)
 			return nil, errCredentialNotRefreshable
 		}
-		return c.swapCredential(key, serviceID, hostPattern, rejectedHash, fresh)
+		swapped, err := c.swapCredential(key, serviceID, hostPattern, rejectedHash, fresh)
+		if err != nil {
+			return nil, err
+		}
+		return refreshed{cred: swapped, status: status}, nil
 	})
 	if err != nil {
-		return credential{}, err
+		return credential{}, "", err
 	}
-	return result.(credential), nil
+	answer := result.(refreshed)
+	return answer.cred, answer.status, nil
+}
+
+func (c *sessionCache) recentRefreshFailure(flightKey string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	failed, ok := c.failedRefreshes[flightKey]
+	if !ok {
+		return nil
+	}
+	if time.Now().Before(failed.until) {
+		return failed.err
+	}
+	delete(c.failedRefreshes, flightKey)
+	return nil
+}
+
+func (c *sessionCache) rememberRefreshFailure(flightKey string, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.failedRefreshes = rememberLocked(c.failedRefreshes, flightKey, err)
 }
 
 // reportMissingScopes tells Infisical which scopes the upstream's 403 insufficient_scope challenge asked for,
