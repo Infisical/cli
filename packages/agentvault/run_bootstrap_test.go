@@ -79,7 +79,7 @@ func TestProxyTokenServesTheCaInfisicalReturns(t *testing.T) {
 
 func TestProxyTokenWithItsOwnCaReportsAndServesIt(t *testing.T) {
 	certPEM, keyPEM, _ := caPairPEM(t)
-	own, err := LoadOwnCa(certPEM, keyPEM)
+	own, err := LoadOwnCa(OwnCaInput{Cert: certPEM, Key: keyPEM})
 	if err != nil {
 		t.Fatal(err)
 	}

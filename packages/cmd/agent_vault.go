@@ -156,39 +156,57 @@ func readAgentVaultProxyInputs(cmd *cobra.Command) (agentVaultProxyInputs, error
 	if err != nil {
 		return in, fmt.Errorf("unable to read --port: %w", err)
 	}
+	portSource := "--port"
 	if raw := strings.TrimSpace(os.Getenv("INFISICAL_AGENT_VAULT_PORT")); raw != "" && !cmd.Flags().Changed("port") {
+		portSource = "INFISICAL_AGENT_VAULT_PORT"
 		in.port, err = strconv.Atoi(raw)
 		if err != nil {
 			return in, fmt.Errorf("INFISICAL_AGENT_VAULT_PORT must be a whole number, got %q", raw)
 		}
 	}
 	if in.port < 0 || in.port > 65535 {
-		return in, fmt.Errorf("--port must be between 0 and 65535, got %d. 0 asks for any free port", in.port)
+		return in, fmt.Errorf("%s must be between 0 and 65535, got %d. 0 asks for any free port", portSource, in.port)
 	}
 
-	caCert, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "ca-cert", []string{"INFISICAL_AGENT_VAULT_CA_CERT"}, "")
+	caCert, caCertSource, err := agentVaultFlagOrEnv(cmd, "ca-cert", "INFISICAL_AGENT_VAULT_CA_CERT")
 	if err != nil {
-		return in, fmt.Errorf("unable to read --ca-cert: %w", err)
+		return in, err
 	}
-	caKey, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "ca-key", []string{"INFISICAL_AGENT_VAULT_CA_KEY"}, "")
+	caKey, caKeySource, err := agentVaultFlagOrEnv(cmd, "ca-key", "INFISICAL_AGENT_VAULT_CA_KEY")
 	if err != nil {
-		return in, fmt.Errorf("unable to read --ca-key: %w", err)
+		return in, err
 	}
 	if (caCert == "") != (caKey == "") {
 		return in, errors.New("--ca-cert and --ca-key go together")
 	}
 	if caCert != "" {
 		// Only the key is a secret; the certificate is handed to every agent anyway.
-		if keyFlag, _ := cmd.Flags().GetString("ca-key"); strings.Contains(keyFlag, "-----BEGIN ") {
+		if caKeySource == "--ca-key" && strings.Contains(caKey, "-----BEGIN ") {
 			in.warnings = append(in.warnings, "--ca-key is visible in the process list; prefer the env var INFISICAL_AGENT_VAULT_CA_KEY")
 		}
-		in.ownCa, err = agentvault.LoadOwnCa(caCert, caKey)
+		in.ownCa, err = agentvault.LoadOwnCa(agentvault.OwnCaInput{
+			Cert: caCert, CertSource: caCertSource,
+			Key: caKey, KeySource: caKeySource,
+		})
 		if err != nil {
 			return in, err
 		}
+		in.warnings = append(in.warnings, in.ownCa.Warnings()...)
 	}
 
 	return in, nil
+}
+
+// The source is the flag's name or the env var's, whichever the value came from, so errors can point at it.
+func agentVaultFlagOrEnv(cmd *cobra.Command, flag, env string) (value, source string, err error) {
+	value, err = cmd.Flags().GetString(flag)
+	if err != nil {
+		return "", "", fmt.Errorf("unable to read --%s: %w", flag, err)
+	}
+	if value != "" {
+		return value, "--" + flag, nil
+	}
+	return strings.TrimSpace(os.Getenv(env)), env, nil
 }
 
 func init() {

@@ -147,3 +147,29 @@ func TestAgentVaultProxyPortFromEnvLosesToTheFlag(t *testing.T) {
 		t.Fatal("a port out of range was accepted")
 	}
 }
+
+func TestAgentVaultProxyNamesTheEnvVarAValueCameFrom(t *testing.T) {
+	_, keyPEM := caPair(t)
+	_, err := readProxyInputs(t, map[string]string{
+		"INFISICAL_AGENT_VAULT_CA_CERT": "/nowhere/ca.crt",
+		"INFISICAL_AGENT_VAULT_CA_KEY":  keyPEM,
+	})
+	if err == nil || err.Error() != "INFISICAL_AGENT_VAULT_CA_CERT is not a PEM, base64 PEM or readable file: /nowhere/ca.crt" {
+		t.Fatalf("cert from env: got %v", err)
+	}
+
+	certPEM, _ := caPair(t)
+	_, err = readProxyInputs(t, map[string]string{"INFISICAL_AGENT_VAULT_CA_KEY": "s3cret"}, "--ca-cert", certPEM)
+	if err == nil || err.Error() != "INFISICAL_AGENT_VAULT_CA_KEY is not a PEM, base64 PEM or readable file (value hidden)" {
+		t.Fatalf("key from env: got %v", err)
+	}
+
+	_, err = readProxyInputs(t, map[string]string{"INFISICAL_AGENT_VAULT_PORT": "70000"})
+	if err == nil || !strings.HasPrefix(err.Error(), "INFISICAL_AGENT_VAULT_PORT must be between") {
+		t.Fatalf("port from env: got %v", err)
+	}
+	_, err = readProxyInputs(t, nil, "--port", "70000")
+	if err == nil || !strings.HasPrefix(err.Error(), "--port must be between") {
+		t.Fatalf("port from flag: got %v", err)
+	}
+}
