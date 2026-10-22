@@ -549,7 +549,7 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 
 		// After the brokered headers rather than before them, so a custom header cannot reintroduce an
 		// override of the method the allowlist already judged.
-		if matched.allowedMethods != nil {
+		if matched.allowedMethods != nil || prefixesRestrictMethod(matched.allowedPathPrefixes) {
 			stripMethodOverrideHeaders(req.Header)
 		}
 		if len(outcome.substituted) > 0 {

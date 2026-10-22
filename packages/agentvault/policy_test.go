@@ -111,6 +111,22 @@ func TestEqualHostPolicyFallsThrough(t *testing.T) {
 	}
 }
 
+func TestScopedRootPrefixAllowsReads(t *testing.T) {
+	for _, root := range []string{"/GET:/", "/GET:"} {
+		svc := serviceWithPolicy([]string{"GET", "POST"}, []string{root, "/POST:/drafts$"})
+		if err := checkServicePolicy(svc, requestTo(t, "GET", "/")); err != nil {
+			t.Fatalf("%s should allow GET /: %v", root, err)
+		}
+		if err := checkServicePolicy(svc, requestTo(t, "GET", "/repos")); err != nil {
+			t.Fatalf("%s should allow GET /repos: %v", root, err)
+		}
+		err := checkServicePolicy(svc, requestTo(t, "POST", "/repos"))
+		if !errors.Is(err, errPolicyBlocked) {
+			t.Fatalf("%s should still block POST /repos, got %v", root, err)
+		}
+	}
+}
+
 func TestMethodScopedPath(t *testing.T) {
 	svc := serviceWithPolicy([]string{"GET", "HEAD", "POST"}, []string{
 		"/GET:/gmail/v1/users/me/messages",

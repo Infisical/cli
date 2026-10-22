@@ -146,7 +146,15 @@ func toPathPrefixes(prefixes []string) []string {
 	out := make([]string, 0, len(prefixes))
 	for _, prefix := range prefixes {
 		prefix = strings.TrimSpace(prefix)
-		if prefix != "/" {
+		if method, path, ok := splitMethodPrefix(prefix); ok {
+			if path != "/" {
+				path = strings.TrimRight(path, "/")
+			}
+			if path == "" {
+				path = "/"
+			}
+			prefix = "/" + method + ":" + path
+		} else if prefix != "/" {
 			prefix = strings.TrimRight(prefix, "/")
 		}
 		// After the trim, so an all-slashes prefix cannot arrive here as "" and match every path.

@@ -73,7 +73,8 @@ func (s *resolvedService) allowsMethod(method string) bool {
 }
 
 // Rails, Laravel and Symfony all honour these, so a POST carrying one performs the method it names. The
-// wire method is what the allowlist judged, so where there is an allowlist the header has to go.
+// wire method is what the allowlist judged, so where there is an allowlist the header has to go. A
+// method-scoped prefix is an allowlist too, even when allowedMethods is unset.
 func stripMethodOverrideHeaders(header http.Header) {
 	for _, name := range []string{"X-HTTP-Method-Override", "X-Method-Override", "X-HTTP-Method"} {
 		header.Del(name)
@@ -221,20 +222,38 @@ func applicablePrefixes(method string, prefixes []string) []string {
 }
 
 func splitMethodPrefix(prefix string) (method, path string, ok bool) {
-	if len(prefix) < 6 || prefix[0] != '/' {
+	if len(prefix) < 5 || prefix[0] != '/' {
 		return "", "", false
 	}
 	rest := prefix[1:]
 	colon := strings.IndexByte(rest, ':')
-	if colon < 3 || colon+1 >= len(rest) || rest[colon+1] != '/' {
+	if colon < 3 {
 		return "", "", false
 	}
 	method = rest[:colon]
 	switch method {
 	case "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS":
-		return method, rest[colon+1:], true
+	default:
+		return "", "", false
 	}
-	return "", "", false
+	path = rest[colon+1:]
+	// The backend strips a trailing slash, so /GET:/ arrives as /GET:. That is still the root.
+	if path == "" {
+		return method, "/", true
+	}
+	if path[0] != '/' {
+		return "", "", false
+	}
+	return method, path, true
+}
+
+func prefixesRestrictMethod(prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if _, _, ok := splitMethodPrefix(prefix); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func matchesPrefix(escaped string, prefixes []string) bool {

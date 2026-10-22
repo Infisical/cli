@@ -461,6 +461,37 @@ func TestAMethodOverrideHeaderCannotOutrankTheAllowlist(t *testing.T) {
 	}
 }
 
+func TestAMethodOverrideHeaderCannotOutrankAScopedPrefix(t *testing.T) {
+	client, host := newPolicyFixture(t, func(h string) *resolvedService {
+		return policyService(h, nil, []string{"/POST:/items/42$"}, nil, nil)
+	})
+
+	req, err := http.NewRequest("POST", fmt.Sprintf("https://%s/items/42", host), strings.NewReader("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-HTTP-Method-Override", "DELETE")
+	req.Header.Set("X-Method-Override", "DELETE")
+	req.Header.Set("X-HTTP-Method", "DELETE")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("the POST itself is allowed, got %d: %s", resp.StatusCode, raw)
+	}
+
+	got := decodeEcho(t, string(raw))
+	for _, name := range []string{"X-Http-Method-Override", "X-Method-Override", "X-Http-Method"} {
+		if v := got.Headers[name]; len(v) > 0 {
+			t.Fatalf("%s reached the upstream as %v, so a scoped prefix can be outranked", name, v)
+		}
+	}
+}
+
 func TestAnInjectedMethodOverrideCannotOutrankTheAllowlist(t *testing.T) {
 	client, host := newPolicyFixture(t, func(h string) *resolvedService {
 		return policyService(h, []string{"GET", "POST"}, nil, []customHeader{
