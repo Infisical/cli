@@ -295,3 +295,34 @@ func TestLoadOwnCaAcceptsOnlyP256(t *testing.T) {
 		t.Fatalf("an RSA key was accepted or reported unclearly: %v", err)
 	}
 }
+
+func TestLoadOwnCaRefusesAnExpiredCa(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Expired CA"},
+		NotBefore:             time.Now().Add(-48 * time.Hour),
+		NotAfter:              time.Now().Add(-24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	keyPEM := string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
+
+	_, err = LoadOwnCa(OwnCaInput{Cert: certPEM, CertSource: "--ca-cert", Key: keyPEM, KeySource: "--ca-key"})
+	if err == nil || !strings.Contains(err.Error(), "isn't valid yet or has expired") {
+		t.Fatalf("an expired CA was accepted or reported unclearly: %v", err)
+	}
+}
