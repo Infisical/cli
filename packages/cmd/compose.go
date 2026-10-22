@@ -152,7 +152,7 @@ func explicitEnvironmentNames(composeFile string) (map[string]map[string]struct{
 		if _, ok := rawService.(map[string]interface{}); !ok {
 			return nil, fmt.Errorf("could not inject secrets: service %q has an invalid definition", serviceName)
 		}
-		serviceNames, err := collectServiceEnvironmentNames(services, serviceName, make(map[string]bool))
+		serviceNames, err := collectServiceEnvironmentNames(services, serviceName, filepath.Dir(composeFile), make(map[string]bool))
 		if err != nil {
 			return nil, err
 		}
@@ -161,8 +161,9 @@ func explicitEnvironmentNames(composeFile string) (map[string]map[string]struct{
 	return names, nil
 }
 
-func collectServiceEnvironmentNames(services map[string]interface{}, serviceName string, visiting map[string]bool) (map[string]struct{}, error) {
-	if visiting[serviceName] {
+func collectServiceEnvironmentNames(services map[string]interface{}, serviceName, baseDir string, visiting map[string]bool) (map[string]struct{}, error) {
+	visitKey := filepath.Join(baseDir, serviceName)
+	if visiting[visitKey] {
 		return nil, fmt.Errorf("could not inspect Compose service %q: extends cycle detected", serviceName)
 	}
 	rawService, exists := services[serviceName]
@@ -174,8 +175,8 @@ func collectServiceEnvironmentNames(services map[string]interface{}, serviceName
 		return nil, fmt.Errorf("could not inject secrets: service %q has an invalid definition", serviceName)
 	}
 
-	visiting[serviceName] = true
-	defer delete(visiting, serviceName)
+	visiting[visitKey] = true
+	defer delete(visiting, visitKey)
 
 	names := make(map[string]struct{})
 	rawEnvironment, exists := service["environment"]
@@ -211,7 +212,24 @@ func collectServiceEnvironmentNames(services map[string]interface{}, serviceName
 	if !ok || parentName == "" {
 		return nil, fmt.Errorf("could not inspect Compose service %q: extends has no service name", serviceName)
 	}
-	parentNames, err := collectServiceEnvironmentNames(services, parentName, visiting)
+
+	parentServices := services
+	parentBaseDir := baseDir
+	if fileName, ok := extends["file"].(string); ok && fileName != "" {
+		parentFile := filepath.Join(baseDir, fileName)
+		parentDocument, err := readComposeDocument(parentFile)
+		if err != nil {
+			return nil, err
+		}
+		var servicesOK bool
+		parentServices, servicesOK = parentDocument["services"].(map[string]interface{})
+		if !servicesOK {
+			return nil, fmt.Errorf("could not inspect Compose service %q: external file has no services map", parentName)
+		}
+		parentBaseDir = filepath.Dir(parentFile)
+	}
+
+	parentNames, err := collectServiceEnvironmentNames(parentServices, parentName, parentBaseDir, visiting)
 	if err != nil {
 		return nil, err
 	}
@@ -219,6 +237,18 @@ func collectServiceEnvironmentNames(services map[string]interface{}, serviceName
 		names[name] = struct{}{}
 	}
 	return names, nil
+}
+
+func readComposeDocument(composeFile string) (map[string]interface{}, error) {
+	contents, err := os.ReadFile(composeFile)
+	if err != nil {
+		return nil, fmt.Errorf("could not read Compose file %q: %w", composeFile, err)
+	}
+	var document map[string]interface{}
+	if err := yaml.Unmarshal(contents, &document); err != nil {
+		return nil, fmt.Errorf("could not parse Compose file %q: %w", composeFile, err)
+	}
+	return document, nil
 }
 
 func findComposeUp(args []string) (int, int, bool) {

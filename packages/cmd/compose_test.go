@@ -313,6 +313,48 @@ func TestPrepareComposeCommandPreservesInheritedEnvironmentValues(t *testing.T) 
 	}
 }
 
+func TestPrepareComposeCommandPreservesExternalInheritedEnvironmentValues(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	commonPath := filepath.Join(dir, "common.yaml")
+	composePath := filepath.Join(dir, "compose.yaml")
+	if err := os.WriteFile(commonPath, []byte(`services:
+  base:
+    environment:
+      TOKEN: explicit
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(composePath, []byte(`services:
+  worker:
+    extends:
+      file: common.yaml
+      service: base
+    image: example/worker
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	args, cleanup, err := prepareComposeCommand(
+		[]string{"docker", "compose", "--file", composePath, "up"},
+		[]string{"TOKEN"},
+		[]string{"TOKEN=from-infisical"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	generated, err := os.ReadFile(args[3])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(generated), "TOKEN") {
+		t.Fatal("expected external inherited TOKEN not to be added to the child service")
+	}
+}
+
 func TestPrepareComposeCommandDoesNotWriteSecretValues(t *testing.T) {
 	t.Parallel()
 
