@@ -72,7 +72,7 @@ type Options struct {
 	ProxyName  string
 	OwnCa      *OwnCa
 
-	OnReady func(enrolledNow bool)
+	OnReady func()
 }
 
 type proxyServer struct {
@@ -88,6 +88,7 @@ type proxyServer struct {
 	// What Start loaded, so a settings change is persisted from memory. A re-read at that instant could find
 	// the file gone and write it back without the token. Only tick touches it after Start.
 	persisted persistedState
+	legacy    bool
 
 	saturationOnce sync.Once
 }

@@ -3,7 +3,6 @@ package agentvault
 import (
 	"bytes"
 	"context"
-	"crypto/ecdsa"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -11,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -20,162 +18,65 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-var errInfisicalHoldsNoCa = errors.New("upgrade Infisical to use this CLI, or pass --ca-cert/--ca-key")
+var errProxyTokenRequired = errors.New(
+	"a proxy token is required: start the proxy with --proxy-token or INFISICAL_AGENT_VAULT_PROXY_TOKEN")
 
-// A server from before Infisical held the CA requires rootCaCertificate, and rejects the login as a
-// validation failure before the token is spent.
-func isMissingCaRejection(err error) bool {
-	var apiErr *api.APIError
-	if !errors.As(err, &apiErr) {
-		return false
+// A file that can't be checked counts as saved state, so loading it reports the real error.
+func (s *store) hasSavedState() bool {
+	for _, name := range []string{proxyStateFile, caKeyFile, caCertFile} {
+		if _, err := os.Lstat(s.path(name)); !os.IsNotExist(err) {
+			return true
+		}
 	}
-	if apiErr.StatusCode != http.StatusUnprocessableEntity && apiErr.StatusCode != http.StatusBadRequest {
-		return false
-	}
-	return strings.Contains(apiErr.ErrorMessage, "rootCaCertificate")
+	return false
 }
 
-// enroll commits nothing to disk until the server has answered.
-func enroll(st *store, enrollmentToken string, own *OwnCa) (persistedState, *caManager, error) {
-	if err := st.probeWritable(); err != nil {
-		return persistedState{}, nil, err
-	}
-
-	httpClient, err := util.GetRestyClientWithCustomHeaders()
-	if err != nil {
-		return persistedState{}, nil, err
-	}
-	httpClient.SetTimeout(controlPlaneTimeout)
-
-	req := api.LoginAgentVaultProxyRequest{Method: "token", Token: enrollmentToken}
-	if own != nil {
-		req.RootCaCertificate = string(caPEM(own.cert))
-	}
-	res, err := api.CallLoginAgentVaultProxy(httpClient, req)
-	if err != nil {
-		if own == nil && isMissingCaRejection(err) {
-			return persistedState{}, nil, errInfisicalHoldsNoCa
-		}
-		return persistedState{}, nil, err
-	}
-
-	config := ProxyConfig{
-		TrafficPolicy: res.Config.TrafficPolicy,
-		AllowedHosts:  res.Config.AllowedHosts,
-		PollInterval:  res.Config.PollInterval,
-	}
-	if !usableProxyConfig(config) {
-		return persistedState{}, nil, fmt.Errorf(
-			"the enrollment response carried no usable proxy settings (trafficPolicy %q, pollInterval %d). Check that --domain points at Infisical and not at something answering in its place. The enrollment token has been used, so take a new one from the Proxies page before trying again",
-			config.TrafficPolicy, config.PollInterval)
-	}
-
-	var key *ecdsa.PrivateKey
-	var cert *x509.Certificate
-	if own != nil {
-		key, cert = own.key, own.cert
-	} else {
-		if res.RootCa == nil {
-			return persistedState{}, nil, errInfisicalHoldsNoCa
-		}
-		key, cert, err = parseCaPair([]byte(res.RootCa.Certificate), []byte(res.RootCa.PrivateKey))
-		if err != nil {
-			return persistedState{}, nil, fmt.Errorf("the certificate authority Infisical returned can't be used: %w", err)
-		}
-	}
-
-	state := persistedState{
-		ProxyID:         res.ProxyID,
-		ProxyName:       res.Name,
-		AccessToken:     res.AccessToken,
-		EnrollmentToken: enrollmentToken,
-		Config:          config,
-	}
-
-	if err := st.saveCa(key, cert); err != nil {
-		return persistedState{}, nil, err
-	}
-	if err := st.saveState(state); err != nil {
-		return persistedState{}, nil, err
-	}
-
-	return state, newCaManager(key, cert), nil
-}
-
-// resolveState decides whether this run enrolls or resumes. Re-passing the same enrollment token that
-// already enrolled this box is a no-op.
-func resolveState(st *store, enrollmentToken string, own *OwnCa) (persistedState, *caManager, bool, error) {
+func loadSavedState(st *store, own *OwnCa) (persistedState, *caManager, error) {
 	stored, confFound, stateErr := st.loadState()
 	key, cert, caErr := st.loadCa()
 	hasCa := caErr == nil && key != nil && cert != nil
 	hasToken := stateErr == nil && stored.AccessToken != ""
 
-	alreadyEnrolled := hasToken && hasCa
-
-	// A token is checked before the damage errors: the messages for damaged state say to enroll again
-	// with a new token, so that has to work on the same damage.
-	if enrollmentToken != "" {
-		if alreadyEnrolled && stored.EnrollmentToken == enrollmentToken {
-			if err := checkStoredPolicy(st, stored); err != nil {
-				return persistedState{}, nil, false, err
-			}
-			log.Info().Msg("agent-vault: this enrollment token already enrolled this proxy, resuming")
-			warnIfOwnCaIgnored(own, cert)
-			return stored, newCaManager(key, cert), false, nil
-		}
-		// Re-enrolling replaces the certificate authority, so anything holding a copy of the old one stops
-		// trusting the proxy. That holds whether or not the rest of the state survived beside it.
-		if hasCa || caErr != nil {
-			log.Warn().Msg("agent-vault: enrolling with a new token replaces this proxy's certificate authority")
-		}
-		state, ca, err := enroll(st, enrollmentToken, own)
-		return state, ca, err == nil, err
-	}
-
 	if stateErr != nil {
-		return persistedState{}, nil, false, stateErr
+		return persistedState{}, nil, stateErr
 	}
 	if caErr != nil {
-		return persistedState{}, nil, false, caErr
+		return persistedState{}, nil, caErr
 	}
 
-	// Only a directory with nothing in it is a first run. Anything else is damage, and saying "not
-	// enrolled" would send the operator for a new token, which replaces a certificate authority that may
-	// still be intact on disk.
 	switch {
 	case !confFound && !hasCa:
-		return persistedState{}, nil, false, errors.New(
-			"this proxy has not enrolled yet. Run it once with --enrollment-token, using the token shown when the proxy was created")
+		return persistedState{}, nil, errProxyTokenRequired
 	case !hasToken && !hasCa:
 		// Settings alone: proxy.json is there but holds no token, and there is no certificate authority. Without
 		// this arm the state fell through and the proxy came up with a nil CA and an empty fingerprint.
-		return persistedState{}, nil, false, fmt.Errorf(
-			"%s in %s has no access token and there is no certificate authority beside it, so this proxy was never fully enrolled. Enroll with a new token from the Proxies page",
+		return persistedState{}, nil, fmt.Errorf(
+			"%s in %s has no access token and there is no certificate authority beside it, so this proxy's saved state is incomplete. Start the proxy with a proxy token from the Proxies page",
 			proxyStateFile, st.dir)
 	case hasCa && !hasToken:
-		return persistedState{}, nil, false, fmt.Errorf(
-			"the certificate authority in %s is intact but %s has no access token, so this proxy's state is incomplete. Restore %s from a backup to keep the certificate authority, or enroll again with a new token from the Proxies page, which replaces it and means every agent trusting the old one has to be restarted",
+		return persistedState{}, nil, fmt.Errorf(
+			"the certificate authority in %s is intact but %s has no access token, so this proxy's saved state is incomplete. Restore %s from a backup to keep the certificate authority, or start the proxy with a proxy token from the Proxies page, which serves a different certificate authority that every agent then has to trust",
 			st.dir, proxyStateFile, proxyStateFile)
 	case hasToken && !hasCa:
-		return persistedState{}, nil, false, fmt.Errorf(
-			"%s in %s holds an access token but the certificate authority (%s, %s) is missing. Restore both files from a backup, or enroll again with a new token from the Proxies page, which issues a new certificate authority",
+		return persistedState{}, nil, fmt.Errorf(
+			"%s in %s holds an access token but the certificate authority (%s, %s) is missing. Restore both files from a backup, or start the proxy with a proxy token from the Proxies page",
 			proxyStateFile, st.dir, caKeyFile, caCertFile)
 	}
 
 	if err := checkStoredPolicy(st, stored); err != nil {
-		return persistedState{}, nil, false, err
+		return persistedState{}, nil, err
 	}
 
-	warnIfOwnCaIgnored(own, cert)
-	return stored, newCaManager(key, cert), false, nil
+	warnIfOwnCaIgnored(own, cert, st.dir)
+	return stored, newCaManager(key, cert), nil
 }
 
-// Infisical recorded the CA this proxy enrolled with, so a different one passed on a later run is not served.
-func warnIfOwnCaIgnored(own *OwnCa, enrolled *x509.Certificate) {
-	if own == nil || bytes.Equal(own.cert.Raw, enrolled.Raw) {
+// The saved state carries the CA agents already trust, so a different one passed on a later run is not served.
+func warnIfOwnCaIgnored(own *OwnCa, saved *x509.Certificate, dir string) {
+	if own == nil || bytes.Equal(own.cert.Raw, saved.Raw) {
 		return
 	}
-	log.Warn().Msg("agent-vault: --ca-cert and --ca-key differ from the certificate authority this proxy enrolled with, so they are ignored. Enroll again with a new token to serve them")
+	log.Warn().Msgf("agent-vault: --ca-cert and --ca-key differ from the certificate authority saved in %s, so they are ignored. Start the proxy with a proxy token to serve them", dir)
 }
 
 // Every path that serves persisted state runs this. A file whose policy does not parse must never reach
@@ -186,7 +87,7 @@ func checkStoredPolicy(st *store, stored persistedState) error {
 		return nil
 	}
 	return fmt.Errorf(
-		"%s in %s has an unrecognised trafficPolicy value %q; it must be %s or %s. If the file predates the trafficPolicy rename, enroll again with a new token from the Proxies page",
+		"%s in %s has an unrecognised trafficPolicy value %q; it must be %s or %s. If the file predates the trafficPolicy rename, start the proxy with a proxy token from the Proxies page",
 		proxyStateFile, st.dir, stored.Config.TrafficPolicy, TrafficPolicyAnyHost, TrafficPolicyBundleHosts)
 }
 
@@ -200,9 +101,15 @@ func usableProxyConfig(c ProxyConfig) bool {
 	return isTrafficPolicy(c.TrafficPolicy) && c.PollInterval > 0
 }
 
-// Start enrolls if needed, then serves until interrupted. An empty enrollmentToken means
-// "read the persisted state and serve".
-func Start(opts Options, enrollmentToken string) error {
+type startup struct {
+	state  persistedState
+	ca     *caManager
+	saver  stateSaver
+	legacy bool
+}
+
+// Start loads the proxy's settings and CA, then serves until interrupted.
+func Start(opts Options, proxyToken string) error {
 	if opts.DataDir == "" {
 		dir, err := DefaultDataDir()
 		if err != nil {
@@ -211,36 +118,66 @@ func Start(opts Options, enrollmentToken string) error {
 		opts.DataDir = dir
 	}
 
-	st := newStore(opts.DataDir)
-	state, ca, enrolledNow, err := resolveState(st, enrollmentToken, opts.OwnCa)
+	s, err := prepareStart(opts, proxyToken)
 	if err != nil {
 		return err
 	}
 	if opts.OnReady != nil {
-		opts.OnReady(enrolledNow)
+		opts.OnReady()
+	}
+	return serve(opts, s)
+}
+
+func prepareStart(opts Options, proxyToken string) (startup, error) {
+	if proxyToken != "" {
+		state, ca, err := loadFromProxyToken(proxyToken, opts.OwnCa)
+		if err != nil {
+			return startup{}, err
+		}
+		return startup{state: state, ca: ca}, nil
 	}
 
-	return serve(opts, st, state, ca)
+	st := newStore(opts.DataDir)
+	if !st.hasSavedState() {
+		return startup{}, errProxyTokenRequired
+	}
+	// Read-only support for proxies enrolled before enrollment tokens were removed. Remove after 2026-12-21.
+	state, ca, err := loadSavedState(st, opts.OwnCa)
+	if err != nil {
+		return startup{}, err
+	}
+	log.Warn().Msgf("agent-vault: starting from the state saved in %s, which stops working after 2026-12-21. Start the proxy with a proxy token from the Proxies page instead", opts.DataDir)
+	return startup{state: state, ca: ca, saver: st, legacy: true}, nil
 }
 
 // Tests shorten these so that running out of retries takes milliseconds.
 var (
-	bootstrapRetryWindow  = 60 * time.Second
-	bootstrapFirstBackoff = 1 * time.Second
+	bootstrapRetryWindow        = 60 * time.Second
+	bootstrapUnauthorizedWindow = 10 * time.Second
+	bootstrapFirstBackoff       = 1 * time.Second
+	bootstrapSleep              = time.Sleep
 )
 
-const bootstrapMaxBackoff = 10 * time.Second
+const (
+	bootstrapMaxBackoff = 10 * time.Second
+	bootstrapMinTimeout = 1 * time.Second
+)
 
 var errBootstrapUnreachable = errors.New("can't reach Infisical to load this proxy's settings and CA; not serving")
 
-// A 4xx is Infisical's answer, such as a rotated token or a Standard proxy, so it ends the run at once.
-// Anything else may be Infisical restarting.
+// A 4xx is Infisical's answer, such as a rotated token, so it ends the run at once. Anything else may be
+// Infisical restarting.
 func isBootstrapRetryable(err error) bool {
 	var apiErr *api.APIError
 	if !errors.As(err, &apiErr) {
 		return true
 	}
 	return apiErr.StatusCode >= http.StatusInternalServerError || apiErr.StatusCode == http.StatusTooManyRequests
+}
+
+// A zero timeout means no timeout at all to the HTTP client, so a nearly spent window still gets a floor.
+func bootstrapAttemptTimeout(remaining time.Duration) time.Duration {
+	return max(min(controlPlaneTimeout, remaining), bootstrapMinTimeout)
 }
 
 func bootstrap(proxyToken string, own *OwnCa) (api.AgentVaultProxyBootstrapResponse, error) {
@@ -256,38 +193,55 @@ func bootstrap(proxyToken string, own *OwnCa) (api.AgentVaultProxyBootstrapRespo
 		req.ServedCaCertificate = string(caPEM(own.cert))
 	}
 
-	deadline := time.Now().Add(bootstrapRetryWindow)
+	start := time.Now()
+	deadline := start.Add(bootstrapRetryWindow)
+	// A token minted moments ago may not have reached the replica that answers, so a 401 is retried briefly.
+	unauthorizedDeadline := start.Add(bootstrapUnauthorizedWindow)
 	backoff := bootstrapFirstBackoff
-	for {
-		httpClient.SetTimeout(min(controlPlaneTimeout, time.Until(deadline)))
+	// Once Infisical has rejected the token, running out of time is not "unreachable": the caller must not
+	// fall back to anything saved for it.
+	var rejected error
+	giveUp := func(last error) (api.AgentVaultProxyBootstrapResponse, error) {
+		log.Warn().Err(last).Msg("agent-vault: failed to load this proxy's settings from Infisical")
+		if rejected != nil {
+			return api.AgentVaultProxyBootstrapResponse{}, rejected
+		}
+		return api.AgentVaultProxyBootstrapResponse{}, errBootstrapUnreachable
+	}
+
+	var last error
+	for attempt := 1; ; attempt++ {
+		remaining := time.Until(deadline)
+		if attempt > 1 && remaining <= 0 {
+			return giveUp(last)
+		}
+		httpClient.SetTimeout(bootstrapAttemptTimeout(remaining))
 		res, err := api.CallAgentVaultProxyBootstrap(httpClient, req)
-		if err == nil || !isBootstrapRetryable(err) {
-			return res, err
+		if err == nil {
+			return res, nil
 		}
-		if time.Until(deadline) < backoff {
-			log.Warn().Err(err).Msg("agent-vault: failed to load this proxy's settings from Infisical")
-			return api.AgentVaultProxyBootstrapResponse{}, errBootstrapUnreachable
+		last = err
+
+		wait := backoff
+		switch {
+		case isTokenRejected(err):
+			untilFatal := time.Until(unauthorizedDeadline)
+			if untilFatal <= 0 {
+				return api.AgentVaultProxyBootstrapResponse{}, err
+			}
+			rejected = err
+			wait = min(wait, untilFatal)
+		case !isBootstrapRetryable(err):
+			return api.AgentVaultProxyBootstrapResponse{}, err
 		}
-		log.Warn().Err(err).Dur("retryIn", backoff).Msg("agent-vault: failed to load this proxy's settings from Infisical, retrying")
-		time.Sleep(backoff)
+
+		if time.Until(deadline) < wait {
+			return giveUp(err)
+		}
+		log.Warn().Err(err).Dur("retryIn", wait).Msg("agent-vault: failed to load this proxy's settings from Infisical, retrying")
+		bootstrapSleep(wait)
 		backoff = min(backoff*2, bootstrapMaxBackoff)
 	}
-}
-
-// StartWithProxyToken serves an HA proxy. Every copy started from the same token loads its settings and
-// CA from Infisical, so nothing is read from or written to disk, and nothing is served before Infisical
-// has answered.
-func StartWithProxyToken(opts Options, proxyToken string) error {
-	log.Info().Msg("agent-vault: proxy token mode: nothing is saved to disk")
-
-	state, ca, err := loadFromProxyToken(proxyToken, opts.OwnCa)
-	if err != nil {
-		return err
-	}
-	if opts.OnReady != nil {
-		opts.OnReady(false)
-	}
-	return serve(opts, nil, state, ca)
 }
 
 func loadFromProxyToken(proxyToken string, own *OwnCa) (persistedState, *caManager, error) {
@@ -329,8 +283,14 @@ func loadFromProxyToken(proxyToken string, own *OwnCa) (persistedState, *caManag
 	}, ca, nil
 }
 
-// A nil store is proxy token mode: settings changes apply in memory only.
-func serve(opts Options, st *store, state persistedState, ca *caManager) error {
+// A settings change the heartbeat brings is saved through this, so a restart while Infisical is down keeps it.
+type stateSaver interface {
+	saveState(persistedState) error
+}
+
+// A nil saver applies settings changes in memory only.
+func serve(opts Options, s startup) error {
+	state, ca, st := s.state, s.ca, s.saver
 	opts.ProxyID = state.ProxyID
 	opts.ProxyName = state.ProxyName
 	accessToken := state.AccessToken
@@ -347,6 +307,7 @@ func serve(opts Options, st *store, state persistedState, ca *caManager) error {
 		transport: newUpstreamTransport(),
 		config:    config,
 		persisted: state,
+		legacy:    s.legacy,
 	}
 	resolver, err := newInfisicalResolver(opts.ProxyToken)
 	if err != nil {
@@ -442,17 +403,17 @@ func serve(opts Options, st *store, state persistedState, ca *caManager) error {
 const heartbeatRejectionsBeforeExit = 2
 
 var errProxyTokenRejected = errors.New(
-	"Infisical no longer accepts this proxy's token: its access was revoked or the proxy was deleted. Enroll again with a new enrollment token from the Proxies page")
-
-var errHaProxyTokenRejected = errors.New(
 	"Infisical no longer accepts this proxy token: it was rotated or revoked, or the proxy was deleted. Restart with the current proxy token from the Proxies page")
+
+var errSavedStateTokenRejected = errors.New(
+	"Infisical no longer accepts this proxy's saved access token: its access was revoked or the proxy was deleted. Start the proxy with a proxy token from the Proxies page")
 
 func isTokenRejected(err error) bool {
 	var apiErr *api.APIError
 	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusUnauthorized
 }
 
-func (ps *proxyServer) pollLoop(st *store, stop <-chan struct{}, fatal chan<- error) {
+func (ps *proxyServer) pollLoop(st stateSaver, stop <-chan struct{}, fatal chan<- error) {
 	rejections := 0
 	onTick := func() bool {
 		if ps.tick(st) {
@@ -461,8 +422,8 @@ func (ps *proxyServer) pollLoop(st *store, stop <-chan struct{}, fatal chan<- er
 			rejections = 0
 		}
 		if rejections >= heartbeatRejectionsBeforeExit {
-			if st == nil {
-				fatal <- errHaProxyTokenRejected
+			if ps.legacy {
+				fatal <- errSavedStateTokenRejected
 			} else {
 				fatal <- errProxyTokenRejected
 			}
@@ -490,7 +451,7 @@ func (ps *proxyServer) pollLoop(st *store, stop <-chan struct{}, fatal chan<- er
 	}
 }
 
-func (ps *proxyServer) tick(st *store) (tokenRejected bool) {
+func (ps *proxyServer) tick(st stateSaver) (tokenRejected bool) {
 	httpClient, err := util.GetRestyClientWithCustomHeaders()
 	if err == nil {
 		httpClient.SetAuthToken(ps.opts.ProxyToken()).SetTimeout(controlPlaneTimeout)

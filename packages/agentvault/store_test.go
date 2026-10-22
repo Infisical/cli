@@ -2,7 +2,6 @@ package agentvault
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -14,9 +13,7 @@ func TestLoadCaRefusesAKeyThatDoesNotMatchTheCertificate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generateRootCa: %v", err)
 	}
-	if err := st.saveCa(firstKey, firstCert); err != nil {
-		t.Fatalf("saveCa: %v", err)
-	}
+	writeCa(t, st.dir, firstKey, firstCert)
 	if _, _, err := st.loadCa(); err != nil {
 		t.Fatalf("a matching pair must load: %v", err)
 	}
@@ -25,9 +22,7 @@ func TestLoadCaRefusesAKeyThatDoesNotMatchTheCertificate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generateRootCa: %v", err)
 	}
-	if err := st.saveCa(secondKey, firstCert); err != nil {
-		t.Fatalf("saveCa: %v", err)
-	}
+	writeCa(t, st.dir, secondKey, firstCert)
 
 	_, _, err = st.loadCa()
 	if err == nil {
@@ -38,45 +33,11 @@ func TestLoadCaRefusesAKeyThatDoesNotMatchTheCertificate(t *testing.T) {
 	}
 }
 
-func TestProbeWritableRefusesAReadOnlyDirectory(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root writes anywhere")
-	}
-	dir := filepath.Join(t.TempDir(), "state")
-	if err := os.Mkdir(dir, 0o500); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
-
-	err := newStore(dir).probeWritable()
-	if err == nil {
-		t.Fatal("a read-only directory passed the probe, so the enrollment token would be spent for nothing")
-	}
-	if !strings.Contains(err.Error(), "spend the token") {
-		t.Fatalf("the message does not say what is at stake: %v", err)
-	}
-	entries, _ := os.ReadDir(dir)
-	if len(entries) != 0 {
-		t.Fatalf("the probe left files behind: %v", entries)
-	}
-}
-
-func TestProbeWritableLeavesNothingBehind(t *testing.T) {
-	dir := t.TempDir()
-	if err := newStore(dir).probeWritable(); err != nil {
-		t.Fatal(err)
-	}
-	entries, _ := os.ReadDir(dir)
-	if len(entries) != 0 {
-		t.Fatalf("the probe left files behind: %v", entries)
-	}
-}
-
 func TestSaveStateRoundTripsWithoutTempFiles(t *testing.T) {
 	dir := t.TempDir()
 	st := newStore(dir)
 	want := persistedState{
-		ProxyID: "p1", ProxyName: "edge", AccessToken: "tok", EnrollmentToken: "enroll",
+		ProxyID: "p1", ProxyName: "edge", AccessToken: "tok",
 		Config: ProxyConfig{TrafficPolicy: TrafficPolicyBundleHosts, AllowedHosts: "a.example.com", PollInterval: 30},
 	}
 	if err := st.saveState(want); err != nil {

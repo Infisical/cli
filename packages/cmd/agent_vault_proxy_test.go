@@ -17,7 +17,6 @@ import (
 
 // Cleared so a value set in the developer's shell can't reach the test.
 var agentVaultProxyEnv = []string{
-	"INFISICAL_AGENT_VAULT_ENROLLMENT_TOKEN",
 	"INFISICAL_AGENT_VAULT_PROXY_TOKEN",
 	"INFISICAL_AGENT_VAULT_DATA_DIR",
 	"INFISICAL_AGENT_VAULT_PORT",
@@ -65,18 +64,6 @@ func caPair(t *testing.T) (certPEM, keyPEM string) {
 		string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
 }
 
-func TestAgentVaultProxyRefusesBothTokens(t *testing.T) {
-	const want = "use either --enrollment-token (Standard) or --proxy-token (HA), not both"
-	_, err := readProxyInputs(t, nil, "--enrollment-token", "avp_a", "--proxy-token", "pxt")
-	if err == nil || err.Error() != want {
-		t.Fatalf("two flags: got %v", err)
-	}
-	_, err = readProxyInputs(t, map[string]string{"INFISICAL_AGENT_VAULT_PROXY_TOKEN": "pxt"}, "--enrollment-token", "avp_a")
-	if err == nil || err.Error() != want {
-		t.Fatalf("flag and env: got %v", err)
-	}
-}
-
 func TestAgentVaultProxyNeedsBothHalvesOfACa(t *testing.T) {
 	certPEM, keyPEM := caPair(t)
 	if _, err := readProxyInputs(t, nil, "--ca-cert", certPEM); err == nil || err.Error() != "--ca-cert and --ca-key go together" {
@@ -117,16 +104,24 @@ func TestAgentVaultProxyWarnsAboutAKeyInAFlagOnly(t *testing.T) {
 	}
 }
 
-func TestAgentVaultProxyIgnoresTheDataDirWithAProxyToken(t *testing.T) {
+func TestAgentVaultProxyKeepsTheDataDirWithAProxyToken(t *testing.T) {
 	in, err := readProxyInputs(t, map[string]string{"INFISICAL_AGENT_VAULT_PROXY_TOKEN": "pxt"}, "--data-dir", "/var/lib/av")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if in.proxyToken != "pxt" || in.dataDir != "" {
+	if in.proxyToken != "pxt" || in.dataDir != "/var/lib/av" {
 		t.Fatalf("got token %q and data dir %q", in.proxyToken, in.dataDir)
 	}
-	if len(in.warnings) != 1 || in.warnings[0] != "--data-dir is ignored with --proxy-token; nothing is saved" {
+	if len(in.warnings) != 0 {
 		t.Fatalf("got warnings %v", in.warnings)
+	}
+}
+
+func TestAgentVaultProxyNoLongerTakesAnEnrollmentToken(t *testing.T) {
+	cmd := &cobra.Command{Use: "proxy"}
+	addAgentVaultProxyFlags(cmd)
+	if cmd.Flags().Lookup("enrollment-token") != nil {
+		t.Fatal("--enrollment-token is still registered")
 	}
 }
 

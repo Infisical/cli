@@ -17,41 +17,9 @@ type AgentVaultProxyConfig struct {
 	PollInterval  int    `json:"pollInterval"`
 }
 
-type LoginAgentVaultProxyRequest struct {
-	Method            string `json:"method"`
-	Token             string `json:"token"`
-	RootCaCertificate string `json:"rootCaCertificate,omitempty"`
-}
-
 type AgentVaultProxyRootCa struct {
 	Certificate string `json:"certificate"`
 	PrivateKey  string `json:"privateKey"`
-}
-
-type LoginAgentVaultProxyResponse struct {
-	ProxyID     string                 `json:"proxyId"`
-	Name        string                 `json:"name"`
-	AccessToken string                 `json:"accessToken"`
-	Config      AgentVaultProxyConfig  `json:"config"`
-	RootCa      *AgentVaultProxyRootCa `json:"rootCa"`
-}
-
-func CallLoginAgentVaultProxy(httpClient *resty.Client, request LoginAgentVaultProxyRequest) (LoginAgentVaultProxyResponse, error) {
-	var res LoginAgentVaultProxyResponse
-	response, err := httpClient.
-		R().
-		SetResult(&res).
-		SetHeader("User-Agent", USER_AGENT).
-		SetBody(request).
-		Post(fmt.Sprintf("%v/v1/agent-vault/proxy/login", config.INFISICAL_URL))
-
-	if err != nil {
-		return LoginAgentVaultProxyResponse{}, NewGenericRequestError("CallLoginAgentVaultProxy", err)
-	}
-	if response.IsError() {
-		return LoginAgentVaultProxyResponse{}, NewAPIErrorWithResponse("CallLoginAgentVaultProxy", response, nil)
-	}
-	return res, nil
 }
 
 type AgentVaultProxyBootstrapRequest struct {

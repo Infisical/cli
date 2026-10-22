@@ -33,20 +33,15 @@ var agentVaultProxyCmd = &cobra.Command{
 The proxy decides per request whether a host is allowed and attaches the real credential on the way out,
 so the agent never holds a secret.
 
-A proxy runs in the mode it was created with in Infisical.
-
-Standard runs on one machine. Enroll once with the token shown when the proxy was created, then run it
-with no token to serve. The proxy keeps its access token and certificate authority in --data-dir:
-
-  infisical agent-vault proxy --enrollment-token avp_...
-  infisical agent-vault proxy
-
-HA runs any number of copies (HA boxes, sidecars, containers) from one proxy token. Each copy loads its
-settings and certificate authority from Infisical when it starts and saves nothing to disk. On a shared
-host, pass the token in INFISICAL_AGENT_VAULT_PROXY_TOKEN rather than --proxy-token, which other users
-can read from the process list:
+Start the proxy with the proxy token shown when it was created or its token was last rotated. You can run
+any number of copies from one token: each loads its settings and certificate authority from Infisical when
+it starts. On a shared host, pass the token in INFISICAL_AGENT_VAULT_PROXY_TOKEN rather than --proxy-token,
+which other users can read from the process list:
 
   INFISICAL_AGENT_VAULT_PROXY_TOKEN=... infisical agent-vault proxy
+
+A proxy enrolled before proxy tokens keeps starting from the state saved in --data-dir, with no token,
+until 2026-12-21.
 
 Infisical issues the certificate authority the proxy serves. To serve your own instead, pass --ca-cert
 and --ca-key, each as a PEM, the base64 of a PEM, or a file path.
@@ -54,7 +49,7 @@ and --ca-key, each as a PEM, the base64 of a PEM, or a file path.
 A proxy's settings - its traffic policy, the exceptions to it, and how often it refreshes - are set in
 Infisical and arrive on every poll, so they have no flags here. Every HTTPS host is intercepted either way; an exception is not blocked,
 not un-intercepted.`,
-	Example:               "infisical agent-vault proxy --enrollment-token avp_7k2mf...\nINFISICAL_AGENT_VAULT_PROXY_TOKEN=eyJhb... infisical agent-vault proxy",
+	Example:               "INFISICAL_AGENT_VAULT_PROXY_TOKEN=eyJhb... infisical agent-vault proxy",
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
@@ -82,20 +77,14 @@ not un-intercepted.`,
 			log.Warn().Msg("agent-vault: " + warning)
 		}
 
-		mode := "standard"
-		if in.proxyToken != "" {
-			mode = "ha"
-		}
 		opts := agentvault.Options{
 			Port:    in.port,
 			DataDir: in.dataDir,
 			OwnCa:   in.ownCa,
-			OnReady: func(enrolledNow bool) {
+			OnReady: func() {
 				Telemetry.CaptureEvent("cli-command:agent-vault proxy", posthog.NewProperties().
 					Set("version", util.CLI_VERSION).
 					Set("platform", runtime.GOOS).
-					Set("mode", mode).
-					Set("enrolledNow", enrolledNow).
 					Set("customPort", in.port != agentvault.DefaultPort).
 					Set("customDataDir", in.dataDir != "").
 					Set("ownCa", in.ownCa != nil).
@@ -103,24 +92,18 @@ not un-intercepted.`,
 			},
 		}
 
-		if in.proxyToken != "" {
-			err = agentvault.StartWithProxyToken(opts, in.proxyToken)
-		} else {
-			err = agentvault.Start(opts, in.enrollmentToken)
-		}
-		if err != nil {
+		if err := agentvault.Start(opts, in.proxyToken); err != nil {
 			util.HandleError(err, "Agent Vault proxy failed")
 		}
 	},
 }
 
 type agentVaultProxyInputs struct {
-	enrollmentToken string
-	proxyToken      string
-	dataDir         string
-	port            int
-	ownCa           *agentvault.OwnCa
-	warnings        []string
+	proxyToken string
+	dataDir    string
+	port       int
+	ownCa      *agentvault.OwnCa
+	warnings   []string
 }
 
 // Warnings are returned rather than logged because the logger is configured after this runs.
@@ -128,28 +111,16 @@ func readAgentVaultProxyInputs(cmd *cobra.Command) (agentVaultProxyInputs, error
 	var in agentVaultProxyInputs
 	var err error
 
-	in.enrollmentToken, err = util.GetCmdFlagOrEnvWithDefaultValue(
-		cmd, "enrollment-token", []string{"INFISICAL_AGENT_VAULT_ENROLLMENT_TOKEN"}, "")
-	if err != nil {
-		return in, fmt.Errorf("unable to read --enrollment-token: %w", err)
-	}
 	in.proxyToken, err = util.GetCmdFlagOrEnvWithDefaultValue(
 		cmd, "proxy-token", []string{"INFISICAL_AGENT_VAULT_PROXY_TOKEN"}, "")
 	if err != nil {
 		return in, fmt.Errorf("unable to read --proxy-token: %w", err)
-	}
-	if in.enrollmentToken != "" && in.proxyToken != "" {
-		return in, errors.New("use either --enrollment-token (Standard) or --proxy-token (HA), not both")
 	}
 
 	in.dataDir, err = util.GetCmdFlagOrEnvWithDefaultValue(
 		cmd, "data-dir", []string{"INFISICAL_AGENT_VAULT_DATA_DIR"}, "")
 	if err != nil {
 		return in, fmt.Errorf("unable to read --data-dir: %w", err)
-	}
-	if in.proxyToken != "" && in.dataDir != "" {
-		in.warnings = append(in.warnings, "--data-dir is ignored with --proxy-token; nothing is saved")
-		in.dataDir = ""
 	}
 
 	in.port, err = cmd.Flags().GetInt("port")
@@ -217,12 +188,10 @@ func init() {
 }
 
 func addAgentVaultProxyFlags(cmd *cobra.Command) {
-	cmd.Flags().String("enrollment-token", "",
-		"one-time token from Infisical, used to enroll this proxy. Not needed once enrolled")
 	cmd.Flags().String("proxy-token", "",
-		"token from Infisical that runs a copy of an HA proxy. Nothing is saved to disk")
+		"token from Infisical that starts this proxy; any number of copies can run from one token")
 	cmd.Flags().String("data-dir", "",
-		fmt.Sprintf("where a Standard proxy keeps its certificate authority and access token (default: %s)", defaultDataDirHelp()))
+		fmt.Sprintf("where a proxy enrolled before proxy tokens keeps its saved state (default: %s)", defaultDataDirHelp()))
 	cmd.Flags().String("ca-cert", "", "your own certificate authority to serve, instead of the one Infisical issues: PEM, base64 PEM or file path")
 	cmd.Flags().String("ca-key", "", "private key for --ca-cert: PEM, base64 PEM or file path")
 	cmd.Flags().Int("port", agentvault.DefaultPort, "port to listen on; 0 binds any free port, which the startup line then reports")
