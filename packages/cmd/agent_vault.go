@@ -42,8 +42,7 @@ which other users can read from the process list:
 
 After each start the proxy saves its settings and certificate authority under --data-dir, when that
 directory is writable, and uses them only if Infisical can't be reached on a later start with the same
-token. A proxy enrolled before proxy tokens keeps starting from the state saved in --data-dir, with no
-token, until 2026-12-21.
+token.
 
 Infisical issues the certificate authority the proxy serves. To serve your own instead, pass --ca-cert
 and --ca-key, each as a PEM, the base64 of a PEM, or a file path.
@@ -117,18 +116,6 @@ func readAgentVaultProxyInputs(cmd *cobra.Command) (agentVaultProxyInputs, error
 		cmd, "proxy-token", []string{"INFISICAL_AGENT_VAULT_PROXY_TOKEN"}, "")
 	if err != nil {
 		return in, fmt.Errorf("unable to read --proxy-token: %w", err)
-	}
-
-	// Units written for enrollment still pass the token on every start; failing on the flag would take an
-	// enrolled proxy down on a CLI upgrade, so it is accepted and ignored.
-	enrollmentToken, err := util.GetCmdFlagOrEnvWithDefaultValue(
-		cmd, "enrollment-token", []string{"INFISICAL_AGENT_VAULT_ENROLLMENT_TOKEN"}, "")
-	if err != nil {
-		return in, fmt.Errorf("unable to read --enrollment-token: %w", err)
-	}
-	if enrollmentToken != "" {
-		in.warnings = append(in.warnings,
-			"--enrollment-token is ignored: proxies now start from a proxy token, which Rotate Proxy Token on the Proxies page issues")
 	}
 
 	in.dataDir, err = util.GetCmdFlagOrEnvWithDefaultValue(
@@ -211,6 +198,8 @@ func addAgentVaultProxyFlags(cmd *cobra.Command) {
 	cmd.Flags().Int("port", agentvault.DefaultPort, "port to listen on; 0 binds any free port, which the startup line then reports")
 	cmd.Flags().String("log-format", "console", "log output format: console | json")
 	cmd.Flags().String("log-file", "", "path to also write logs to")
+	// Units written for enrollment still pass this on every start; failing on an unknown flag would take an
+	// enrolled proxy down on a CLI upgrade, so it is accepted and ignored. Remove after 2026-12-21.
 	cmd.Flags().String("enrollment-token", "", "no longer used")
 	_ = cmd.Flags().MarkHidden("enrollment-token")
 }

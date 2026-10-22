@@ -147,7 +147,6 @@ func prepareStart(opts Options, proxyToken string) (startup, error) {
 	if err != nil {
 		return startup{}, err
 	}
-	log.Warn().Msgf("agent-vault: starting from the state saved in %s, which stops working after 2026-12-21. Start the proxy with a proxy token from the Proxies page instead", dataDir)
 	return startup{state: state, ca: ca, saver: st, dataDir: dataDir, legacy: true}, nil
 }
 

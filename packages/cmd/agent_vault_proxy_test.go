@@ -118,12 +118,12 @@ func TestAgentVaultProxyKeepsTheDataDirWithAProxyToken(t *testing.T) {
 	}
 }
 
-func TestAgentVaultProxyIgnoresAnEnrollmentTokenWithAWarning(t *testing.T) {
+func TestAgentVaultProxySilentlyIgnoresAnEnrollmentToken(t *testing.T) {
 	in, err := readProxyInputs(t, nil, "--enrollment-token", "avp_old")
 	if err != nil {
 		t.Fatalf("an enrollment token from an old unit file failed the start: %v", err)
 	}
-	if len(in.warnings) != 1 || !strings.Contains(in.warnings[0], "--enrollment-token is ignored") {
+	if len(in.warnings) != 0 {
 		t.Fatalf("got warnings %v", in.warnings)
 	}
 
