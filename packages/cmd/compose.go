@@ -29,14 +29,19 @@ func prepareComposeCommand(args []string, secretNames []string, _ []string) ([]s
 		return nil, nil, err
 	}
 
-	protectedNames := make(map[string]struct{})
+	protectedNames := make(map[string]map[string]struct{})
 	for _, file := range files {
 		names, err := explicitEnvironmentNames(file.path)
 		if err != nil {
 			return nil, nil, err
 		}
-		for name := range names {
-			protectedNames[name] = struct{}{}
+		for serviceName, serviceNames := range names {
+			if protectedNames[serviceName] == nil {
+				protectedNames[serviceName] = make(map[string]struct{})
+			}
+			for name := range serviceNames {
+				protectedNames[serviceName][name] = struct{}{}
+			}
 		}
 	}
 
@@ -91,7 +96,7 @@ func prepareComposeCommand(args []string, secretNames []string, _ []string) ([]s
 	return updatedArgs, cleanup, nil
 }
 
-func injectSecrets(composeFile string, secretNames []string, protectedNames map[string]struct{}) ([]byte, error) {
+func injectSecrets(composeFile string, secretNames []string, protectedNames map[string]map[string]struct{}) ([]byte, error) {
 	contents, err := os.ReadFile(composeFile)
 	if err != nil {
 		return nil, fmt.Errorf("could not read Compose file %q: %w", composeFile, err)
@@ -115,7 +120,7 @@ func injectSecrets(composeFile string, secretNames []string, protectedNames map[
 		if !ok {
 			return nil, fmt.Errorf("could not inject secrets: service %q has an invalid definition", serviceName)
 		}
-		if err := addSecretsToService(service, secretNames, protectedNames); err != nil {
+		if err := addSecretsToService(service, secretNames, protectedNames[serviceName]); err != nil {
 			return nil, fmt.Errorf("could not inject secrets into service %q: %w", serviceName, err)
 		}
 	}
@@ -127,7 +132,7 @@ func injectSecrets(composeFile string, secretNames []string, protectedNames map[
 	return updated, nil
 }
 
-func explicitEnvironmentNames(composeFile string) (map[string]struct{}, error) {
+func explicitEnvironmentNames(composeFile string) (map[string]map[string]struct{}, error) {
 	contents, err := os.ReadFile(composeFile)
 	if err != nil {
 		return nil, fmt.Errorf("could not read Compose file %q: %w", composeFile, err)
@@ -138,7 +143,7 @@ func explicitEnvironmentNames(composeFile string) (map[string]struct{}, error) {
 		return nil, fmt.Errorf("could not parse Compose file %q: %w", composeFile, err)
 	}
 
-	names := make(map[string]struct{})
+	names := make(map[string]map[string]struct{})
 	services, ok := document["services"].(map[string]interface{})
 	if !ok {
 		return names, nil
@@ -152,10 +157,13 @@ func explicitEnvironmentNames(composeFile string) (map[string]struct{}, error) {
 		if !exists || rawEnvironment == nil {
 			continue
 		}
+		if names[serviceName] == nil {
+			names[serviceName] = make(map[string]struct{})
+		}
 		switch environment := rawEnvironment.(type) {
 		case map[string]interface{}:
 			for name := range environment {
-				names[name] = struct{}{}
+				names[serviceName][name] = struct{}{}
 			}
 		case []interface{}:
 			for _, item := range environment {
@@ -164,7 +172,7 @@ func explicitEnvironmentNames(composeFile string) (map[string]struct{}, error) {
 					return nil, errors.New("environment list contains a non-string value")
 				}
 				name, _, _ := strings.Cut(value, "=")
-				names[name] = struct{}{}
+				names[serviceName][name] = struct{}{}
 			}
 		default:
 			return nil, errors.New("environment must be a map or list")

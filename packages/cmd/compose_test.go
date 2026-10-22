@@ -20,6 +20,7 @@ func TestPrepareComposeCommandInjectsSecretsIntoEveryService(t *testing.T) {
     image: example/api
     environment:
       EXISTING: explicit
+      TOKEN: explicit
   worker:
     image: example/worker
     environment:
@@ -31,8 +32,8 @@ func TestPrepareComposeCommandInjectsSecretsIntoEveryService(t *testing.T) {
 
 	args, cleanup, err := prepareComposeCommand(
 		[]string{"docker", "compose", "--file", composePath, "up"},
-		[]string{"SECRET", "EXISTING"},
-		[]string{"SECRET=from-infisical", "EXISTING=from-infisical"},
+		[]string{"SECRET", "EXISTING", "TOKEN"},
+		[]string{"SECRET=from-infisical", "EXISTING=from-infisical", "TOKEN=from-infisical"},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -64,6 +65,9 @@ func TestPrepareComposeCommandInjectsSecretsIntoEveryService(t *testing.T) {
 	if apiEnvironment["EXISTING"] != "explicit" {
 		t.Fatalf("expected explicit api value to win, got %v", apiEnvironment["EXISTING"])
 	}
+	if apiEnvironment["TOKEN"] != "explicit" {
+		t.Fatalf("expected explicit api token to win, got %v", apiEnvironment["TOKEN"])
+	}
 
 	workerEnvironment := services["worker"].(map[string]interface{})["environment"].([]interface{})
 	values := make([]string, 0, len(workerEnvironment))
@@ -75,6 +79,9 @@ func TestPrepareComposeCommandInjectsSecretsIntoEveryService(t *testing.T) {
 	}
 	if !slices.Contains(values, "EXISTING=explicit") {
 		t.Fatalf("expected explicit worker value to remain, got %v", values)
+	}
+	if !slices.Contains(values, "TOKEN") {
+		t.Fatalf("expected TOKEN to be injected into worker, got %v", values)
 	}
 
 	unchanged, err := os.ReadFile(composePath)
