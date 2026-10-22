@@ -15,6 +15,43 @@ var errPolicyBlocked = errors.New("blocked by service policy")
 // own status rather than landing in either of theirs.
 var errBodyUnreadable = errors.New("could not read the request body")
 
+// bestMatch is host-only. Two services on the same host used to leave the later one unreachable,
+// so a POST-only exact path could not sit beside a GET prefix. A refusal falls through only to a
+// service of the same host rank. A weaker host, including a wildcard, stays refused.
+func policyMatch(services []*resolvedService, host, port string, req *http.Request) (*resolvedService, error) {
+	matched := bestMatch(services, host, port)
+	if matched == nil {
+		return nil, nil
+	}
+	if err := checkServicePolicy(matched, req); err != nil {
+		if alt := equalRankAllowing(services, matched, host, port, req); alt != nil {
+			return alt, nil
+		}
+		return matched, err
+	}
+	return matched, nil
+}
+
+func equalRankAllowing(services []*resolvedService, winner *resolvedService, host, port string, req *http.Request) *resolvedService {
+	want, ok := hostRank(winner, host, port)
+	if !ok {
+		return nil
+	}
+	for _, svc := range services {
+		if svc == winner {
+			continue
+		}
+		detail, matched := hostRank(svc, host, port)
+		if !matched || detail.betterThan(want) || want.betterThan(detail) {
+			continue
+		}
+		if checkServicePolicy(svc, req) == nil {
+			return svc
+		}
+	}
+	return nil
+}
+
 func checkServicePolicy(svc *resolvedService, req *http.Request) error {
 	if !svc.allowsMethod(req.Method) {
 		return fmt.Errorf("service %q does not allow %s: %w", svc.name, truncateLogged(req.Method, maxLoggedMethodLen), errPolicyBlocked)

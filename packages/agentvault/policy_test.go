@@ -70,6 +70,47 @@ func TestMethodPolicy(t *testing.T) {
 	})
 }
 
+func TestEqualHostPolicyFallsThrough(t *testing.T) {
+	read := &resolvedService{
+		name:                "gmail-read",
+		hostPatterns:        parseHostPatterns("gmail.googleapis.com"),
+		allowedMethods:      toMethodSet([]string{"GET", "HEAD"}),
+		allowedPathPrefixes: toPathPrefixes([]string{"/gmail/v1/users/me/messages", "/gmail/v1/users/me/drafts"}),
+	}
+	draft := &resolvedService{
+		name:                "gmail-draft-create",
+		hostPatterns:        parseHostPatterns("gmail.googleapis.com"),
+		allowedMethods:      toMethodSet([]string{"POST"}),
+		allowedPathPrefixes: toPathPrefixes([]string{"/gmail/v1/users/me/drafts$"}),
+	}
+	wild := &resolvedService{
+		name:           "wildcard",
+		hostPatterns:   parseHostPatterns("*.googleapis.com"),
+		allowedMethods: nil,
+	}
+	services := []*resolvedService{read, draft, wild}
+
+	got, err := policyMatch(services, "gmail.googleapis.com", "443", requestTo(t, "POST", "/gmail/v1/users/me/drafts"))
+	if err != nil || got != draft {
+		t.Fatalf("exact draft create should fall through to the POST service, got %v err %v", got, err)
+	}
+
+	got, err = policyMatch(services, "gmail.googleapis.com", "443", requestTo(t, "GET", "/gmail/v1/users/me/messages"))
+	if err != nil || got != read {
+		t.Fatalf("a listed GET should stay on the read service, got %v err %v", got, err)
+	}
+
+	got, err = policyMatch(services, "gmail.googleapis.com", "443", requestTo(t, "POST", "/gmail/v1/users/me/drafts/abc/send"))
+	if !errors.Is(err, errPolicyBlocked) || got == wild {
+		t.Fatalf("send must stay blocked and must not fall through to the wildcard, got %v err %v", got, err)
+	}
+
+	got, err = policyMatch(services, "gmail.googleapis.com", "443", requestTo(t, "POST", "/gmail/v1/users/me/messages/send"))
+	if !errors.Is(err, errPolicyBlocked) || got == wild {
+		t.Fatalf("message send must stay blocked, got %v err %v", got, err)
+	}
+}
+
 func TestExactPathPolicy(t *testing.T) {
 	svc := serviceWithPolicy([]string{"POST"}, []string{"/gmail/v1/users/me/drafts$"})
 

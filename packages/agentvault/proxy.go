@@ -502,16 +502,14 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 		return nil, nil, outcome, errOpaqueTarget
 	}
 
-	matched := bestMatch(services, hostname, port)
+	matched, policyErr := policyMatch(services, hostname, port, req)
 
 	if ps.blocksOffBundle(matched, hostname, port) {
 		return nil, nil, outcome, fmt.Errorf("no service covers host %q: %w", hostname, errHostBlocked)
 	}
 
-	if matched != nil {
-		if err := checkServicePolicy(matched, req); err != nil {
-			return nil, matched, outcome, err
-		}
+	if policyErr != nil {
+		return nil, matched, outcome, policyErr
 	}
 
 	req.URL.Scheme = scheme
