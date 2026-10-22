@@ -70,6 +70,7 @@ type Options struct {
 	ProxyToken func() string
 	ProxyID    string
 	ProxyName  string
+	OwnCa      *OwnCa
 
 	OnReady func(enrolledNow bool)
 }

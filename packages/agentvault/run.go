@@ -1,13 +1,17 @@
 package agentvault
 
 import (
+	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -16,15 +20,23 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// enroll commits nothing to disk until the server has answered.
-func enroll(st *store, enrollmentToken string) (persistedState, *caManager, error) {
-	// The CA subject cannot carry the proxy's name: the certificate has to exist before the enrollment
-	// call that returns it.
-	key, cert, err := generateRootCa()
-	if err != nil {
-		return persistedState{}, nil, err
-	}
+var errInfisicalHoldsNoCa = errors.New("upgrade Infisical to use this CLI, or pass --ca-cert/--ca-key")
 
+// A server from before Infisical held the CA requires rootCaCertificate, and rejects the login as a
+// validation failure before the token is spent.
+func isMissingCaRejection(err error) bool {
+	var apiErr *api.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	if apiErr.StatusCode != http.StatusUnprocessableEntity && apiErr.StatusCode != http.StatusBadRequest {
+		return false
+	}
+	return strings.Contains(apiErr.ErrorMessage, "rootCaCertificate")
+}
+
+// enroll commits nothing to disk until the server has answered.
+func enroll(st *store, enrollmentToken string, own *OwnCa) (persistedState, *caManager, error) {
 	if err := st.probeWritable(); err != nil {
 		return persistedState{}, nil, err
 	}
@@ -35,12 +47,15 @@ func enroll(st *store, enrollmentToken string) (persistedState, *caManager, erro
 	}
 	httpClient.SetTimeout(controlPlaneTimeout)
 
-	res, err := api.CallLoginAgentVaultProxy(httpClient, api.LoginAgentVaultProxyRequest{
-		Method:            "token",
-		Token:             enrollmentToken,
-		RootCaCertificate: string(caPEM(cert)),
-	})
+	req := api.LoginAgentVaultProxyRequest{Method: "token", Token: enrollmentToken}
+	if own != nil {
+		req.RootCaCertificate = string(caPEM(own.cert))
+	}
+	res, err := api.CallLoginAgentVaultProxy(httpClient, req)
 	if err != nil {
+		if own == nil && isMissingCaRejection(err) {
+			return persistedState{}, nil, errInfisicalHoldsNoCa
+		}
 		return persistedState{}, nil, err
 	}
 
@@ -54,6 +69,21 @@ func enroll(st *store, enrollmentToken string) (persistedState, *caManager, erro
 			"the enrollment response carried no usable proxy settings (trafficPolicy %q, pollInterval %d). Check that --domain points at Infisical and not at something answering in its place. The enrollment token has been used, so take a new one from the Proxies page before trying again",
 			config.TrafficPolicy, config.PollInterval)
 	}
+
+	var key *ecdsa.PrivateKey
+	var cert *x509.Certificate
+	if own != nil {
+		key, cert = own.key, own.cert
+	} else {
+		if res.RootCa == nil {
+			return persistedState{}, nil, errInfisicalHoldsNoCa
+		}
+		key, cert, err = parseCaPair([]byte(res.RootCa.Certificate), []byte(res.RootCa.PrivateKey))
+		if err != nil {
+			return persistedState{}, nil, fmt.Errorf("the certificate authority Infisical returned can't be used: %w", err)
+		}
+	}
+
 	state := persistedState{
 		ProxyID:         res.ProxyID,
 		ProxyName:       res.Name,
@@ -74,7 +104,7 @@ func enroll(st *store, enrollmentToken string) (persistedState, *caManager, erro
 
 // resolveState decides whether this run enrolls or resumes. Re-passing the same enrollment token that
 // already enrolled this box is a no-op.
-func resolveState(st *store, enrollmentToken string) (persistedState, *caManager, bool, error) {
+func resolveState(st *store, enrollmentToken string, own *OwnCa) (persistedState, *caManager, bool, error) {
 	stored, confFound, stateErr := st.loadState()
 	key, cert, caErr := st.loadCa()
 	hasCa := caErr == nil && key != nil && cert != nil
@@ -90,6 +120,7 @@ func resolveState(st *store, enrollmentToken string) (persistedState, *caManager
 				return persistedState{}, nil, false, err
 			}
 			log.Info().Msg("agent-vault: this enrollment token already enrolled this proxy, resuming")
+			warnIfOwnCaIgnored(own, cert)
 			return stored, newCaManager(key, cert), false, nil
 		}
 		// Re-enrolling replaces the certificate authority, so anything holding a copy of the old one stops
@@ -97,7 +128,7 @@ func resolveState(st *store, enrollmentToken string) (persistedState, *caManager
 		if hasCa || caErr != nil {
 			log.Warn().Msg("agent-vault: enrolling with a new token replaces this proxy's certificate authority")
 		}
-		state, ca, err := enroll(st, enrollmentToken)
+		state, ca, err := enroll(st, enrollmentToken, own)
 		return state, ca, err == nil, err
 	}
 
@@ -135,7 +166,16 @@ func resolveState(st *store, enrollmentToken string) (persistedState, *caManager
 		return persistedState{}, nil, false, err
 	}
 
+	warnIfOwnCaIgnored(own, cert)
 	return stored, newCaManager(key, cert), false, nil
+}
+
+// Infisical recorded the CA this proxy enrolled with, so a different one passed on a later run is not served.
+func warnIfOwnCaIgnored(own *OwnCa, enrolled *x509.Certificate) {
+	if own == nil || bytes.Equal(own.cert.Raw, enrolled.Raw) {
+		return
+	}
+	log.Warn().Msg("agent-vault: --ca-cert and --ca-key differ from the certificate authority this proxy enrolled with, so they are ignored. Enroll again with a new token to serve them")
 }
 
 // Every path that serves persisted state runs this. A file whose policy does not parse must never reach
@@ -172,7 +212,7 @@ func Start(opts Options, enrollmentToken string) error {
 	}
 
 	st := newStore(opts.DataDir)
-	state, ca, enrolledNow, err := resolveState(st, enrollmentToken)
+	state, ca, enrolledNow, err := resolveState(st, enrollmentToken, opts.OwnCa)
 	if err != nil {
 		return err
 	}

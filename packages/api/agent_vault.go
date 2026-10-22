@@ -20,14 +20,20 @@ type AgentVaultProxyConfig struct {
 type LoginAgentVaultProxyRequest struct {
 	Method            string `json:"method"`
 	Token             string `json:"token"`
-	RootCaCertificate string `json:"rootCaCertificate"`
+	RootCaCertificate string `json:"rootCaCertificate,omitempty"`
+}
+
+type AgentVaultProxyRootCa struct {
+	Certificate string `json:"certificate"`
+	PrivateKey  string `json:"privateKey"`
 }
 
 type LoginAgentVaultProxyResponse struct {
-	ProxyID     string                `json:"proxyId"`
-	Name        string                `json:"name"`
-	AccessToken string                `json:"accessToken"`
-	Config      AgentVaultProxyConfig `json:"config"`
+	ProxyID     string                 `json:"proxyId"`
+	Name        string                 `json:"name"`
+	AccessToken string                 `json:"accessToken"`
+	Config      AgentVaultProxyConfig  `json:"config"`
+	RootCa      *AgentVaultProxyRootCa `json:"rootCa"`
 }
 
 func CallLoginAgentVaultProxy(httpClient *resty.Client, request LoginAgentVaultProxyRequest) (LoginAgentVaultProxyResponse, error) {
@@ -44,6 +50,35 @@ func CallLoginAgentVaultProxy(httpClient *resty.Client, request LoginAgentVaultP
 	}
 	if response.IsError() {
 		return LoginAgentVaultProxyResponse{}, NewAPIErrorWithResponse("CallLoginAgentVaultProxy", response, nil)
+	}
+	return res, nil
+}
+
+type AgentVaultProxyBootstrapRequest struct {
+	ServedCaCertificate string `json:"servedCaCertificate,omitempty"`
+}
+
+type AgentVaultProxyBootstrapResponse struct {
+	ProxyID string                 `json:"proxyId"`
+	Name    string                 `json:"name"`
+	Config  AgentVaultProxyConfig  `json:"config"`
+	RootCa  *AgentVaultProxyRootCa `json:"rootCa"`
+}
+
+func CallAgentVaultProxyBootstrap(httpClient *resty.Client, request AgentVaultProxyBootstrapRequest) (AgentVaultProxyBootstrapResponse, error) {
+	var res AgentVaultProxyBootstrapResponse
+	response, err := httpClient.
+		R().
+		SetResult(&res).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/agent-vault/proxy/bootstrap", config.INFISICAL_URL))
+
+	if err != nil {
+		return AgentVaultProxyBootstrapResponse{}, NewGenericRequestError("CallAgentVaultProxyBootstrap", err)
+	}
+	if response.IsError() {
+		return AgentVaultProxyBootstrapResponse{}, NewAPIErrorWithResponse("CallAgentVaultProxyBootstrap", response, nil)
 	}
 	return res, nil
 }

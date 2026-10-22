@@ -16,6 +16,40 @@ import (
 	"time"
 )
 
+func generateRootCa() (*ecdsa.PrivateKey, *x509.Certificate, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	template := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "Infisical Agent Vault Proxy"},
+		NotBefore:             time.Now().Add(-1 * time.Minute),
+		NotAfter:              time.Now().Add(5 * 365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLenZero:        true,
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return nil, nil, err
+	}
+	return key, cert, nil
+}
+
 func caPairPEM(t *testing.T) (certPEM, ecKeyPEM, pkcs8KeyPEM string) {
 	t.Helper()
 	key, cert, err := generateRootCa()
