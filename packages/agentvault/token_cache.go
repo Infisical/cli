@@ -38,7 +38,9 @@ type tokenCache struct {
 
 func newTokenCache(dataDir, proxyToken string) *tokenCache {
 	sum := sha256.Sum256([]byte(proxyToken))
-	return &tokenCache{dir: filepath.Join(dataDir, tokenCacheDir), tokenHash: hex.EncodeToString(sum[:])}
+	tokenHash := hex.EncodeToString(sum[:])
+	// One folder per token, so two proxies sharing a data directory never read or overwrite each other's CA.
+	return &tokenCache{dir: filepath.Join(dataDir, tokenCacheDir, tokenHash), tokenHash: tokenHash}
 }
 
 func (c *tokenCache) path(name string) string { return filepath.Join(c.dir, name) }

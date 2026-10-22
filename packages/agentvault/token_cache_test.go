@@ -48,7 +48,7 @@ func infisicalAnswers(t *testing.T, status int) {
 
 func TestTokenCacheIsWrittenPrivatelyWithoutTheToken(t *testing.T) {
 	dataDir, _ := startedOnce(t, nil)
-	dir := filepath.Join(dataDir, tokenCacheDir)
+	dir := newTokenCache(dataDir, "pxt").dir
 
 	info, err := os.Stat(dir)
 	if err != nil {
@@ -155,7 +155,7 @@ func TestTokenCacheWithItsOwnCaSavesNoKey(t *testing.T) {
 	}
 	dataDir, _ := startedOnce(t, own)
 	for _, name := range []string{caKeyFile, caCertFile} {
-		if _, err := os.Stat(filepath.Join(dataDir, tokenCacheDir, name)); !os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(newTokenCache(dataDir, "pxt").dir, name)); !os.IsNotExist(err) {
 			t.Fatalf("%s was saved for a proxy serving its own CA: %v", name, err)
 		}
 	}
@@ -211,5 +211,17 @@ func TestTokenCacheKeepsSettingsTheHeartbeatBrings(t *testing.T) {
 	}
 	if state.Config != next.Config || state.ProxyID != "p1" {
 		t.Fatalf("the heartbeat's settings were not saved: %+v", state)
+	}
+}
+
+func TestTokenCacheKeepsEachTokenApart(t *testing.T) {
+	dataDir := t.TempDir()
+	a := newTokenCache(dataDir, "pxt-a")
+	b := newTokenCache(dataDir, "pxt-b")
+	if a.dir == b.dir {
+		t.Fatalf("two tokens share the cache folder %s", a.dir)
+	}
+	if filepath.Dir(a.dir) != filepath.Join(dataDir, tokenCacheDir) {
+		t.Fatalf("cache folder %s is not under %s", a.dir, filepath.Join(dataDir, tokenCacheDir))
 	}
 }
