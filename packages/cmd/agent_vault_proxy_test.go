@@ -22,6 +22,7 @@ var agentVaultProxyEnv = []string{
 	"INFISICAL_AGENT_VAULT_PORT",
 	"INFISICAL_AGENT_VAULT_CA_CERT",
 	"INFISICAL_AGENT_VAULT_CA_KEY",
+	"INFISICAL_AGENT_VAULT_ENROLLMENT_TOKEN",
 }
 
 func readProxyInputs(t *testing.T, env map[string]string, args ...string) (agentVaultProxyInputs, error) {
@@ -117,11 +118,19 @@ func TestAgentVaultProxyKeepsTheDataDirWithAProxyToken(t *testing.T) {
 	}
 }
 
-func TestAgentVaultProxyNoLongerTakesAnEnrollmentToken(t *testing.T) {
+func TestAgentVaultProxyIgnoresAnEnrollmentTokenWithAWarning(t *testing.T) {
+	in, err := readProxyInputs(t, nil, "--enrollment-token", "avp_old")
+	if err != nil {
+		t.Fatalf("an enrollment token from an old unit file failed the start: %v", err)
+	}
+	if len(in.warnings) != 1 || !strings.Contains(in.warnings[0], "--enrollment-token is ignored") {
+		t.Fatalf("got warnings %v", in.warnings)
+	}
+
 	cmd := &cobra.Command{Use: "proxy"}
 	addAgentVaultProxyFlags(cmd)
-	if cmd.Flags().Lookup("enrollment-token") != nil {
-		t.Fatal("--enrollment-token is still registered")
+	if flag := cmd.Flags().Lookup("enrollment-token"); flag == nil || !flag.Hidden {
+		t.Fatal("--enrollment-token should be registered and hidden")
 	}
 }
 
