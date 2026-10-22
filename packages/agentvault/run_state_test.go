@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -50,9 +51,19 @@ func storeWithCa(t *testing.T) *store {
 const enrolledConf = `{"proxyId":"p1","accessToken":"tok","config":{"trafficPolicy":"bundle-hosts"}}`
 
 func TestStartWithoutATokenOrSavedStateAsksForAToken(t *testing.T) {
+	t.Setenv("INFISICAL_AGENT_VAULT_ENROLLMENT_TOKEN", "")
 	_, err := prepareStart(Options{DataDir: t.TempDir()}, "")
 	if err == nil || err.Error() != "a proxy token is required: start the proxy with --proxy-token or INFISICAL_AGENT_VAULT_PROXY_TOKEN" {
 		t.Fatalf("expected the proxy token message, got %v", err)
+	}
+}
+
+// Remove after 2026-12-21, with proxyTokenRequired.
+func TestAMissingTokenSaysTheEnrollmentTokenVariableIsNoLongerUsed(t *testing.T) {
+	t.Setenv("INFISICAL_AGENT_VAULT_ENROLLMENT_TOKEN", "avp_old")
+	_, err := prepareStart(Options{DataDir: t.TempDir()}, "")
+	if !errors.Is(err, errProxyTokenRequired) || !strings.Contains(err.Error(), "INFISICAL_AGENT_VAULT_ENROLLMENT_TOKEN is no longer used") {
+		t.Fatalf("expected the proxy token message with the enrollment variable hint, got %v", err)
 	}
 }
 

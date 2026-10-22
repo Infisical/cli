@@ -21,6 +21,15 @@ import (
 var errProxyTokenRequired = errors.New(
 	"a proxy token is required: start the proxy with --proxy-token or INFISICAL_AGENT_VAULT_PROXY_TOKEN")
 
+// Env files written for enrollment still set this. It is no longer read, so it only matters when a start fails
+// for lack of a token. Remove after 2026-12-21.
+func proxyTokenRequired() error {
+	if os.Getenv("INFISICAL_AGENT_VAULT_ENROLLMENT_TOKEN") != "" {
+		return fmt.Errorf("%w (INFISICAL_AGENT_VAULT_ENROLLMENT_TOKEN is no longer used)", errProxyTokenRequired)
+	}
+	return errProxyTokenRequired
+}
+
 // A file that can't be checked counts as saved state, so loading it reports the real error.
 func (s *store) hasSavedState() bool {
 	for _, name := range []string{proxyStateFile, caKeyFile, caCertFile} {
@@ -46,7 +55,7 @@ func loadSavedState(st *store, own *OwnCa) (persistedState, *caManager, error) {
 
 	switch {
 	case !confFound && !hasCa:
-		return persistedState{}, nil, errProxyTokenRequired
+		return persistedState{}, nil, proxyTokenRequired()
 	case !hasToken && !hasCa:
 		// Settings alone: proxy.json is there but holds no token, and there is no certificate authority. Without
 		// this arm the state fell through and the proxy came up with a nil CA and an empty fingerprint.
@@ -140,7 +149,7 @@ func prepareStart(opts Options, proxyToken string) (startup, error) {
 
 	st := newStore(dataDir)
 	if !st.hasSavedState() {
-		return startup{}, errProxyTokenRequired
+		return startup{}, proxyTokenRequired()
 	}
 	// Read-only support for proxies enrolled before enrollment tokens were removed. Remove after 2026-12-21.
 	state, ca, err := loadSavedState(st, opts.OwnCa)
