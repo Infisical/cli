@@ -109,7 +109,7 @@ Both accept a variable instead of the flag, and a flag beats a variable. If both
 neither flag is passed, the run stops and asks which you meant.
 
 The proxy's certificate authority is fetched from the proxy on every run and trusted for the agent. Pass
---ca-fingerprint to abort if the served certificate does not match a fingerprint from the Proxies page.
+--ca-fingerprint to abort if the served certificate does not match the proxy's fingerprint from Infisical.
 
 Unlike 'secrets agent-proxy run', this command does not sandbox the agent: it sets environment variables
 and starts the process.`,
@@ -304,7 +304,7 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	// An empty pin would otherwise run unpinned in silence, and "$AV_PIN" with the variable unset is how
 	// the unattended runs the pin exists for would produce one.
 	if cmd.Flags().Changed("ca-fingerprint") && strings.TrimSpace(pinnedFingerprint) == "" {
-		util.HandleError(fmt.Errorf("--ca-fingerprint was passed with no value. Give it the fingerprint from the Proxies page, or drop the flag to run without a pin"))
+		util.HandleError(fmt.Errorf("--ca-fingerprint was passed with no value. Give it the proxy's fingerprint from Infisical, or drop the flag to run without a pin"))
 	}
 	noCaTrust, _ := cmd.Flags().GetBool("no-ca-trust")
 	keepSession, _ := cmd.Flags().GetBool("keep-session")
@@ -337,7 +337,7 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "The proxy served a certificate authority that could not be read")
 	}
 	if pinnedFingerprint != "" && !agentVaultFingerprintsEqual(pinnedFingerprint, servedFingerprint) {
-		util.HandleError(fmt.Errorf("the proxy at %s serves a certificate authority with fingerprint %s, not the pinned %s. Nothing was written and the agent was not started. If the proxy was re-enrolled, take the new fingerprint from the Proxies page; otherwise something else is answering at that address", proxyAddr, servedFingerprint, pinnedFingerprint))
+		util.HandleError(fmt.Errorf("the proxy at %s serves a certificate authority with fingerprint %s, not the pinned %s. Nothing was written and the agent was not started. If the proxy's token was rotated, take the new fingerprint from Infisical; otherwise something else is answering at that address", proxyAddr, servedFingerprint, pinnedFingerprint))
 	}
 
 	caPath := ""
@@ -412,12 +412,12 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		switch {
 		case clientErr != nil || tokenErr != nil:
 			util.PrintWarning(fmt.Sprintf(
-				"The agent exited but its session could not be revoked (%v). Revoke it from the Sessions page.",
+				"The agent exited but its session could not be revoked (%v). Revoke it in Infisical.",
 				cmp.Or(clientErr, tokenErr)))
 		default:
 			httpClient.SetAuthToken(token)
 			if revokeErr := api.CallRevokeAgentVaultSession(httpClient, minted.ID); revokeErr != nil {
-				util.PrintWarning(fmt.Sprintf("The agent exited but its session could not be revoked (%v). Revoke it from the Sessions page.", revokeErr))
+				util.PrintWarning(fmt.Sprintf("The agent exited but its session could not be revoked (%v). Revoke it in Infisical.", revokeErr))
 			} else {
 				fmt.Fprintln(os.Stderr, color.HiBlackString("session revoked"))
 			}
@@ -663,7 +663,7 @@ func init() {
 	agentVaultRunCmd.Flags().String("ttl", "never", "lifetime of the session this command creates: one number and one unit, such as 30m, 8h or 7d (not 2h30m), or never")
 	agentVaultRunCmd.Flags().Bool("keep-session", false, "leave a minted session active when the agent exits")
 	agentVaultRunCmd.Flags().String("proxy", "", "address of the Agent Vault proxy as host:port (falls back to "+agentVaultProxyAddressEnv+")")
-	agentVaultRunCmd.Flags().String("ca-fingerprint", "", "abort unless the proxy's certificate authority matches this SHA256 fingerprint from the Proxies page")
+	agentVaultRunCmd.Flags().String("ca-fingerprint", "", "abort unless the proxy's certificate authority matches this SHA256 fingerprint from Infisical")
 	agentVaultRunCmd.Flags().String("no-proxy", "", "additional comma-separated hosts to bypass the proxy (always merged with localhost,127.0.0.1)")
 	agentVaultRunCmd.Flags().String("ca-file", "", "where to write the certificate authority fetched from the proxy; an output path, not a CA to trust (default: "+filepath.Join(defaultDataDirHelp(), "ca-<proxy-id>.pem")+")")
 	agentVaultRunCmd.Flags().Bool("no-ca-trust", false, "skip writing the certificate authority and setting the trust variables, for a host that already trusts this proxy's CA (a pinned fingerprint is still checked)")
