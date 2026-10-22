@@ -57,8 +57,9 @@ func TestPrepareComposeCommandInjectsSecretsIntoEveryService(t *testing.T) {
 
 	services := document["services"].(map[string]interface{})
 	apiEnvironment := services["api"].(map[string]interface{})["environment"].(map[string]interface{})
-	if apiEnvironment["SECRET"] != nil {
-		t.Fatalf("expected SECRET in api environment, got %v", apiEnvironment["SECRET"])
+	secret, exists := apiEnvironment["SECRET"]
+	if !exists || secret != nil {
+		t.Fatalf("expected SECRET to be present as an unset Compose variable, got %v", apiEnvironment["SECRET"])
 	}
 	if apiEnvironment["EXISTING"] != "explicit" {
 		t.Fatalf("expected explicit api value to win, got %v", apiEnvironment["EXISTING"])
@@ -183,6 +184,77 @@ func TestPrepareComposeCommandSupportsAttachedFileOptionsAndDockerOptions(t *tes
 	if args[len(args)-1] != "up" {
 		t.Fatalf("expected actual Compose subcommand to remain intact, got %v", args)
 	}
+}
+
+func TestPrepareComposeCommandLeavesOrdinaryDockerCommandsUnchanged(t *testing.T) {
+	t.Parallel()
+
+	args := []string{"docker", "run", "--rm", "alpine", "echo", "compose", "up"}
+	updated, cleanup, err := prepareComposeCommand(args, []string{"SECRET"}, []string{"SECRET=value"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup()
+
+	if !slices.Equal(args, updated) {
+		t.Fatalf("expected ordinary Docker command to remain unchanged, got %v", updated)
+	}
+}
+
+func TestPrepareComposeCommandPreservesExplicitValuesAcrossFiles(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	basePath := filepath.Join(dir, "base.yaml")
+	overridePath := filepath.Join(dir, "override.yaml")
+	if err := os.WriteFile(basePath, []byte("services:\n  app:\n    environment:\n      TOKEN: explicit\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(overridePath, []byte("services:\n  app:\n    image: example/app\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	args, cleanup, err := prepareComposeCommand(
+		[]string{"docker", "compose", "-f", basePath, "-f", overridePath, "up"},
+		[]string{"TOKEN"},
+		[]string{"TOKEN=from-infisical"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	contents, err := os.ReadFile(args[5])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(contents), "TOKEN") {
+		t.Fatal("override file should not replace the explicit value from the base file")
+	}
+}
+
+func TestPrepareComposeCommandAllowsPartialOverrideFiles(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	basePath := filepath.Join(dir, "base.yaml")
+	overridePath := filepath.Join(dir, "override.yaml")
+	if err := os.WriteFile(basePath, []byte("services:\n  app:\n    image: example/app\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(overridePath, []byte("networks:\n  internal:\n    driver: bridge\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, cleanup, err := prepareComposeCommand(
+		[]string{"docker", "compose", "-f", basePath, "-f", overridePath, "up"},
+		[]string{"SECRET"},
+		[]string{"SECRET=value"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup()
 }
 
 func TestPrepareComposeCommandDoesNotWriteSecretValues(t *testing.T) {

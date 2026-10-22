@@ -29,6 +29,17 @@ func prepareComposeCommand(args []string, secretNames []string, _ []string) ([]s
 		return nil, nil, err
 	}
 
+	protectedNames := make(map[string]struct{})
+	for _, file := range files {
+		names, err := explicitEnvironmentNames(file.path)
+		if err != nil {
+			return nil, nil, err
+		}
+		for name := range names {
+			protectedNames[name] = struct{}{}
+		}
+	}
+
 	updatedArgs := append([]string(nil), args...)
 	cleanupPaths := make([]string, 0, len(files))
 	cleanup := func() {
@@ -38,7 +49,7 @@ func prepareComposeCommand(args []string, secretNames []string, _ []string) ([]s
 	}
 
 	for _, file := range files {
-		updated, err := injectSecrets(file.path, secretNames)
+		updated, err := injectSecrets(file.path, secretNames, protectedNames)
 		if err != nil {
 			cleanup()
 			return nil, nil, err
@@ -80,7 +91,7 @@ func prepareComposeCommand(args []string, secretNames []string, _ []string) ([]s
 	return updatedArgs, cleanup, nil
 }
 
-func injectSecrets(composeFile string, secretNames []string) ([]byte, error) {
+func injectSecrets(composeFile string, secretNames []string, protectedNames map[string]struct{}) ([]byte, error) {
 	contents, err := os.ReadFile(composeFile)
 	if err != nil {
 		return nil, fmt.Errorf("could not read Compose file %q: %w", composeFile, err)
@@ -93,14 +104,18 @@ func injectSecrets(composeFile string, secretNames []string) ([]byte, error) {
 
 	services, ok := document["services"].(map[string]interface{})
 	if !ok {
-		return nil, errors.New("could not inject secrets: Compose file has no services map")
+		updated, err := yaml.Marshal(document)
+		if err != nil {
+			return nil, fmt.Errorf("could not serialize temporary Compose file: %w", err)
+		}
+		return updated, nil
 	}
 	for serviceName, rawService := range services {
 		service, ok := rawService.(map[string]interface{})
 		if !ok {
 			return nil, fmt.Errorf("could not inject secrets: service %q has an invalid definition", serviceName)
 		}
-		if err := addSecretsToService(service, secretNames); err != nil {
+		if err := addSecretsToService(service, secretNames, protectedNames); err != nil {
 			return nil, fmt.Errorf("could not inject secrets into service %q: %w", serviceName, err)
 		}
 	}
@@ -110,6 +125,52 @@ func injectSecrets(composeFile string, secretNames []string) ([]byte, error) {
 		return nil, fmt.Errorf("could not serialize temporary Compose file: %w", err)
 	}
 	return updated, nil
+}
+
+func explicitEnvironmentNames(composeFile string) (map[string]struct{}, error) {
+	contents, err := os.ReadFile(composeFile)
+	if err != nil {
+		return nil, fmt.Errorf("could not read Compose file %q: %w", composeFile, err)
+	}
+
+	var document map[string]interface{}
+	if err := yaml.Unmarshal(contents, &document); err != nil {
+		return nil, fmt.Errorf("could not parse Compose file %q: %w", composeFile, err)
+	}
+
+	names := make(map[string]struct{})
+	services, ok := document["services"].(map[string]interface{})
+	if !ok {
+		return names, nil
+	}
+	for serviceName, rawService := range services {
+		service, ok := rawService.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("could not inject secrets: service %q has an invalid definition", serviceName)
+		}
+		rawEnvironment, exists := service["environment"]
+		if !exists || rawEnvironment == nil {
+			continue
+		}
+		switch environment := rawEnvironment.(type) {
+		case map[string]interface{}:
+			for name := range environment {
+				names[name] = struct{}{}
+			}
+		case []interface{}:
+			for _, item := range environment {
+				value, ok := item.(string)
+				if !ok {
+					return nil, errors.New("environment list contains a non-string value")
+				}
+				name, _, _ := strings.Cut(value, "=")
+				names[name] = struct{}{}
+			}
+		default:
+			return nil, errors.New("environment must be a map or list")
+		}
+	}
+	return names, nil
 }
 
 func findComposeUp(args []string) (int, int, bool) {
@@ -125,6 +186,10 @@ func findComposeUp(args []string) (int, int, bool) {
 			}
 			if optionTakesValue(args[i]) && !strings.Contains(args[i], "=") {
 				i++
+				continue
+			}
+			if !strings.HasPrefix(args[i], "-") {
+				return -1, -1, false
 			}
 		}
 	}
@@ -214,7 +279,7 @@ func resolveComposeFiles(args []string, composeIndex, subcommandIndex int) ([]co
 	return files, nil
 }
 
-func addSecretsToService(service map[string]interface{}, secretNames []string) error {
+func addSecretsToService(service map[string]interface{}, secretNames []string, protectedNames map[string]struct{}) error {
 	rawEnvironment, exists := service["environment"]
 	if !exists || rawEnvironment == nil {
 		rawEnvironment = []interface{}{}
@@ -225,6 +290,9 @@ func addSecretsToService(service map[string]interface{}, secretNames []string) e
 	case map[string]interface{}:
 		for _, name := range secretNames {
 			if _, exists := environment[name]; !exists {
+				if _, protected := protectedNames[name]; protected {
+					continue
+				}
 				environment[name] = nil
 			}
 		}
@@ -240,6 +308,9 @@ func addSecretsToService(service map[string]interface{}, secretNames []string) e
 		}
 		for _, name := range secretNames {
 			if _, exists := existing[name]; !exists {
+				if _, protected := protectedNames[name]; protected {
+					continue
+				}
 				environment = append(environment, name)
 			}
 		}
