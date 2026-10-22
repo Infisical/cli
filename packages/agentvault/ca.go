@@ -1,6 +1,7 @@
 package agentvault
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -8,10 +9,13 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -77,6 +81,102 @@ func generateRootCa() (*ecdsa.PrivateKey, *x509.Certificate, error) {
 
 func caPEM(cert *x509.Certificate) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
+}
+
+func keyMatchesCert(key *ecdsa.PrivateKey, cert *x509.Certificate) bool {
+	certKey, ok := cert.PublicKey.(*ecdsa.PublicKey)
+	return ok && certKey.Equal(&key.PublicKey)
+}
+
+// Infisical returns its key as PKCS8, while openssl writes an operator's EC key as SEC 1, so both are read.
+func parseCaPair(certPEM, keyPEM []byte) (*ecdsa.PrivateKey, *x509.Certificate, error) {
+	certBlock, _ := pem.Decode(certPEM)
+	if certBlock == nil || certBlock.Type != "CERTIFICATE" {
+		return nil, nil, errors.New("the certificate is not a PEM CERTIFICATE block")
+	}
+	cert, err := x509.ParseCertificate(certBlock.Bytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse the certificate: %w", err)
+	}
+	if !cert.IsCA {
+		return nil, nil, errors.New("the certificate is not a certificate authority: its basic constraints do not allow it to sign")
+	}
+
+	keyBlock, _ := pem.Decode(keyPEM)
+	if keyBlock == nil {
+		return nil, nil, errors.New("the private key is not PEM")
+	}
+	var key *ecdsa.PrivateKey
+	switch keyBlock.Type {
+	case "EC PRIVATE KEY":
+		key, err = x509.ParseECPrivateKey(keyBlock.Bytes)
+	case "PRIVATE KEY":
+		var parsed any
+		parsed, err = x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
+		if err == nil {
+			var ok bool
+			if key, ok = parsed.(*ecdsa.PrivateKey); !ok {
+				return nil, nil, errors.New("the private key is not an ECDSA key")
+			}
+		}
+	default:
+		return nil, nil, fmt.Errorf("the private key is a %q PEM block; expected EC PRIVATE KEY or PRIVATE KEY", keyBlock.Type)
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse the private key: %w", err)
+	}
+
+	if !keyMatchesCert(key, cert) {
+		return nil, nil, errors.New("the certificate does not match the private key")
+	}
+	return key, cert, nil
+}
+
+const pemMarker = "-----BEGIN "
+
+// Tried as inline PEM, then base64 of a PEM, then a file path. DER is not accepted.
+func loadCaValue(v string) ([]byte, bool) {
+	if strings.Contains(v, pemMarker) {
+		return []byte(v), true
+	}
+	if decoded, err := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(v), "")); err == nil && bytes.Contains(decoded, []byte(pemMarker)) {
+		return decoded, true
+	}
+	if data, err := os.ReadFile(v); err == nil && bytes.Contains(data, []byte(pemMarker)) {
+		return data, true
+	}
+	return nil, false
+}
+
+// OwnCa is a certificate authority the operator brings in place of the one Infisical holds.
+type OwnCa struct {
+	key  *ecdsa.PrivateKey
+	cert *x509.Certificate
+}
+
+func LoadOwnCa(certValue, keyValue string) (*OwnCa, error) {
+	certPEM, ok := loadCaValue(certValue)
+	if !ok {
+		return nil, fmt.Errorf("--ca-cert is not a PEM, base64 PEM or readable file: %s", shortenValue(certValue))
+	}
+	keyPEM, ok := loadCaValue(keyValue)
+	if !ok {
+		return nil, fmt.Errorf("--ca-key is not a PEM, base64 PEM or readable file: %s", shortenValue(keyValue))
+	}
+	key, cert, err := parseCaPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("the certificate authority in --ca-cert and --ca-key can't be used: %w", err)
+	}
+	return &OwnCa{key: key, cert: cert}, nil
+}
+
+// A value that failed to load may still be most of a private key, so only its start is echoed back.
+func shortenValue(v string) string {
+	const keep = 64
+	if len(v) <= keep {
+		return v
+	}
+	return v[:keep] + "..."
 }
 
 func newCaManager(key *ecdsa.PrivateKey, cert *x509.Certificate) *caManager {

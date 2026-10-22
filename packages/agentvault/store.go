@@ -114,8 +114,7 @@ func (s *store) loadCa() (*ecdsa.PrivateKey, *x509.Certificate, error) {
 
 	// A re-enrollment interrupted between the two files leaves a new key beside the old certificate, and
 	// both parse, so the pair is checked here.
-	certKey, ok := cert.PublicKey.(*ecdsa.PublicKey)
-	if !ok || !certKey.Equal(&key.PublicKey) {
+	if !keyMatchesCert(key, cert) {
 		return nil, nil, fmt.Errorf(
 			"the certificate authority in %s does not match its private key, so an earlier re-enrollment was interrupted. Enroll again with a new token from the Proxies page", s.dir)
 	}
