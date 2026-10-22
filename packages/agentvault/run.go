@@ -220,6 +220,117 @@ func Start(opts Options, enrollmentToken string) error {
 		opts.OnReady(enrolledNow)
 	}
 
+	return serve(opts, st, state, ca)
+}
+
+// Tests shorten these so that running out of retries takes milliseconds.
+var (
+	bootstrapRetryWindow  = 60 * time.Second
+	bootstrapFirstBackoff = 1 * time.Second
+)
+
+const bootstrapMaxBackoff = 10 * time.Second
+
+var errBootstrapUnreachable = errors.New("can't reach Infisical to load this proxy's settings and CA; not serving")
+
+// A 4xx is Infisical's answer, such as a rotated token or a Standard proxy, so it ends the run at once.
+// Anything else may be Infisical restarting.
+func isBootstrapRetryable(err error) bool {
+	var apiErr *api.APIError
+	if !errors.As(err, &apiErr) {
+		return true
+	}
+	return apiErr.StatusCode >= http.StatusInternalServerError || apiErr.StatusCode == http.StatusTooManyRequests
+}
+
+func bootstrap(proxyToken string, own *OwnCa) (api.AgentVaultProxyBootstrapResponse, error) {
+	// No client-side retries: this loop owns the retry window, and the client's would stretch it.
+	httpClient, err := util.GetRestyClientWithPolicy(util.RetryPolicy{})
+	if err != nil {
+		return api.AgentVaultProxyBootstrapResponse{}, err
+	}
+	httpClient.SetAuthToken(proxyToken)
+
+	req := api.AgentVaultProxyBootstrapRequest{}
+	if own != nil {
+		req.ServedCaCertificate = string(caPEM(own.cert))
+	}
+
+	deadline := time.Now().Add(bootstrapRetryWindow)
+	backoff := bootstrapFirstBackoff
+	for {
+		httpClient.SetTimeout(min(controlPlaneTimeout, time.Until(deadline)))
+		res, err := api.CallAgentVaultProxyBootstrap(httpClient, req)
+		if err == nil || !isBootstrapRetryable(err) {
+			return res, err
+		}
+		if time.Until(deadline) < backoff {
+			log.Warn().Err(err).Msg("agent-vault: failed to load this proxy's settings from Infisical")
+			return api.AgentVaultProxyBootstrapResponse{}, errBootstrapUnreachable
+		}
+		log.Warn().Err(err).Dur("retryIn", backoff).Msg("agent-vault: failed to load this proxy's settings from Infisical, retrying")
+		time.Sleep(backoff)
+		backoff = min(backoff*2, bootstrapMaxBackoff)
+	}
+}
+
+// StartWithProxyToken serves an HA proxy. Every copy started from the same token loads its settings and
+// CA from Infisical, so nothing is read from or written to disk, and nothing is served before Infisical
+// has answered.
+func StartWithProxyToken(opts Options, proxyToken string) error {
+	log.Info().Msg("agent-vault: proxy token mode: nothing is saved to disk")
+
+	state, ca, err := loadFromProxyToken(proxyToken, opts.OwnCa)
+	if err != nil {
+		return err
+	}
+	if opts.OnReady != nil {
+		opts.OnReady(false)
+	}
+	return serve(opts, nil, state, ca)
+}
+
+func loadFromProxyToken(proxyToken string, own *OwnCa) (persistedState, *caManager, error) {
+	res, err := bootstrap(proxyToken, own)
+	if err != nil {
+		return persistedState{}, nil, err
+	}
+
+	config := ProxyConfig{
+		TrafficPolicy: res.Config.TrafficPolicy,
+		AllowedHosts:  res.Config.AllowedHosts,
+		PollInterval:  res.Config.PollInterval,
+	}
+	if !usableProxyConfig(config) {
+		return persistedState{}, nil, fmt.Errorf(
+			"Infisical's answer carried no usable proxy settings (trafficPolicy %q, pollInterval %d). Check that --domain points at Infisical and not at something answering in its place",
+			config.TrafficPolicy, config.PollInterval)
+	}
+
+	var ca *caManager
+	if own != nil {
+		ca = newCaManager(own.key, own.cert)
+	} else {
+		if res.RootCa == nil {
+			return persistedState{}, nil, errors.New("Infisical returned no certificate authority for this proxy; not serving")
+		}
+		key, cert, err := parseCaPair([]byte(res.RootCa.Certificate), []byte(res.RootCa.PrivateKey))
+		if err != nil {
+			return persistedState{}, nil, fmt.Errorf("the certificate authority Infisical returned can't be used: %w", err)
+		}
+		ca = newCaManager(key, cert)
+	}
+
+	return persistedState{
+		ProxyID:     res.ProxyID,
+		ProxyName:   res.Name,
+		AccessToken: proxyToken,
+		Config:      config,
+	}, ca, nil
+}
+
+// A nil store is proxy token mode: settings changes apply in memory only.
+func serve(opts Options, st *store, state persistedState, ca *caManager) error {
 	opts.ProxyID = state.ProxyID
 	opts.ProxyName = state.ProxyName
 	accessToken := state.AccessToken
@@ -277,13 +388,15 @@ func Start(opts Options, enrollmentToken string) error {
 	go func() { serveErr <- front.Serve(limited) }()
 
 	// The bound port, not the requested one: they differ whenever port 0 was asked for.
-	log.Info().
+	listening := log.Info().
 		Int("port", listener.Addr().(*net.TCPAddr).Port).
 		Str("proxyId", state.ProxyID).
 		Str("name", state.ProxyName).
-		Str("fingerprint", ca.Fingerprint()).
-		Str("dataDir", opts.DataDir).
-		Msg("agent-vault: proxy listening")
+		Str("fingerprint", ca.Fingerprint())
+	if st != nil {
+		listening = listening.Str("dataDir", opts.DataDir)
+	}
+	listening.Msg("agent-vault: proxy listening")
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
@@ -331,6 +444,9 @@ const heartbeatRejectionsBeforeExit = 2
 var errProxyTokenRejected = errors.New(
 	"Infisical no longer accepts this proxy's token: its access was revoked or the proxy was deleted. Enroll again with a new enrollment token from the Proxies page")
 
+var errHaProxyTokenRejected = errors.New(
+	"Infisical no longer accepts this proxy token: it was rotated or revoked, or the proxy was deleted. Restart with the current proxy token from the Proxies page")
+
 func isTokenRejected(err error) bool {
 	var apiErr *api.APIError
 	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusUnauthorized
@@ -345,7 +461,11 @@ func (ps *proxyServer) pollLoop(st *store, stop <-chan struct{}, fatal chan<- er
 			rejections = 0
 		}
 		if rejections >= heartbeatRejectionsBeforeExit {
-			fatal <- errProxyTokenRejected
+			if st == nil {
+				fatal <- errHaProxyTokenRejected
+			} else {
+				fatal <- errProxyTokenRejected
+			}
 			return false
 		}
 		return true
@@ -398,8 +518,10 @@ func (ps *proxyServer) tick(st *store) (tokenRejected bool) {
 
 				// Persisted so a restart during an Infisical outage keeps the operator's policy rather than coming back up allowing.
 				ps.persisted.Config = next
-				if saveErr := st.saveState(ps.persisted); saveErr != nil {
-					log.Warn().Err(saveErr).Msg("agent-vault: failed to persist the new settings")
+				if st != nil {
+					if saveErr := st.saveState(ps.persisted); saveErr != nil {
+						log.Warn().Err(saveErr).Msg("agent-vault: failed to persist the new settings")
+					}
 				}
 			}
 		}
