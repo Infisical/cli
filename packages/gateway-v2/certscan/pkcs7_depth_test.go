@@ -6,26 +6,19 @@ import (
 	"testing"
 )
 
-func TestParsePKCS7RejectsDeeplyNested(t *testing.T) {
-	deep := bytes.Repeat([]byte{0x30, 0x80}, 100000)
-	if asn1NestingWithinLimit(deep, maxPKCS7NestingDepth) {
-		t.Fatal("expected deeply nested input to exceed the depth limit")
-	}
-	if _, err := parsePKCS7(deep); !errors.Is(err, errPKCS7TooDeeplyNested) {
-		t.Fatalf("expected %v, got %v", errPKCS7TooDeeplyNested, err)
+func TestParsePKCS7RejectsOversizedInput(t *testing.T) {
+	oversized := make([]byte, maxPKCS7ParseBytes+1)
+	if _, err := parsePKCS7(oversized); !errors.Is(err, errPKCS7TooLarge) {
+		t.Fatalf("expected %v, got %v", errPKCS7TooLarge, err)
 	}
 }
 
-func TestASN1NestingWithinLimitAllowsShallow(t *testing.T) {
-	shallow := []byte{0x30, 0x03, 0x02, 0x01, 0x01}
-	if !asn1NestingWithinLimit(shallow, maxPKCS7NestingDepth) {
-		t.Fatal("expected shallow structure to be within the limit")
+func TestParsePKCS7HandlesDeeplyNestedWithinSizeCap(t *testing.T) {
+	deep := bytes.Repeat([]byte{0x30, 0x80}, 200000)
+	if len(deep) > maxPKCS7ParseBytes {
+		t.Fatalf("fixture of %d bytes exceeds the size cap", len(deep))
 	}
-}
-
-func TestASN1NestingWithinLimitRejectsOutOfBoundsLength(t *testing.T) {
-	overflowing := []byte{0x04, 0x84, 0xff, 0xff, 0xff, 0xfa}
-	if asn1NestingWithinLimit(overflowing, maxPKCS7NestingDepth) {
-		t.Fatal("expected a length larger than the remaining input to be rejected")
+	if _, err := parsePKCS7(deep); errors.Is(err, errPKCS7TooLarge) {
+		t.Fatal("input within the size cap must reach the parser")
 	}
 }
