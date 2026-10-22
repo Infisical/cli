@@ -182,7 +182,8 @@ func LoadOwnCa(in OwnCaInput) (*OwnCa, error) {
 	}
 	// Leaves are capped at the CA's NotAfter, so an expired CA would start cleanly and fail every agent's TLS.
 	if now := time.Now(); now.Before(cert.NotBefore) || now.After(cert.NotAfter) {
-		return nil, fmt.Errorf("the certificate authority in %s isn't valid yet or has expired", in.CertSource)
+		return nil, fmt.Errorf("the certificate authority in %s isn't valid yet or has expired (valid from %s to %s)",
+			in.CertSource, cert.NotBefore.UTC().Format(time.RFC3339), cert.NotAfter.UTC().Format(time.RFC3339))
 	}
 	own := &OwnCa{key: key, cert: cert}
 	if n := countPEMBlocks(certPEM, "CERTIFICATE"); n > 1 {

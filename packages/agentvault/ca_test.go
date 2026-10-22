@@ -322,7 +322,7 @@ func TestLoadOwnCaRefusesAnExpiredCa(t *testing.T) {
 	keyPEM := string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
 
 	_, err = LoadOwnCa(OwnCaInput{Cert: certPEM, CertSource: "--ca-cert", Key: keyPEM, KeySource: "--ca-key"})
-	if err == nil || !strings.Contains(err.Error(), "isn't valid yet or has expired") {
+	if err == nil || !strings.Contains(err.Error(), "isn't valid yet or has expired (valid from ") {
 		t.Fatalf("an expired CA was accepted or reported unclearly: %v", err)
 	}
 }

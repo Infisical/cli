@@ -178,7 +178,11 @@ func startFromProxyToken(proxyToken string, own *OwnCa, dataDir string, dataDirC
 			}
 			return startup{}, err
 		}
-		log.Warn().Str("dataDir", dataDir).Msg("agent-vault: can't reach Infisical, so serving the settings and certificate authority saved on this proxy token's last start. Settings update once Infisical answers")
+		served := "the settings and certificate authority saved on this proxy token's last start"
+		if own != nil {
+			served = "the settings saved on this proxy token's last start, with your own certificate authority"
+		}
+		log.Warn().Str("dataDir", dataDir).Msgf("agent-vault: can't reach Infisical, so serving %s. Settings update once Infisical answers", served)
 		return startup{state: cachedState, ca: cachedCa, saver: cache, dataDir: dataDir}, nil
 	}
 	if err != nil {
