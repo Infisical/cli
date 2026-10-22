@@ -30,106 +30,71 @@ func prepareComposeCommand(args []string, secretNames []string, _ []string) ([]s
 	}
 
 	protectedNames := make(map[string]map[string]struct{})
+	serviceNames := make(map[string]struct{})
 	for _, file := range files {
 		names, err := explicitEnvironmentNames(file.path)
 		if err != nil {
 			return nil, nil, err
 		}
-		for serviceName, serviceNames := range names {
+		for serviceName, namesForService := range names {
+			serviceNames[serviceName] = struct{}{}
 			if protectedNames[serviceName] == nil {
 				protectedNames[serviceName] = make(map[string]struct{})
 			}
-			for name := range serviceNames {
+			for name := range namesForService {
 				protectedNames[serviceName][name] = struct{}{}
 			}
 		}
 	}
 
 	updatedArgs := append([]string(nil), args...)
-	cleanupPaths := make([]string, 0, len(files))
+	override, err := buildComposeOverride(serviceNames, secretNames, protectedNames)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(override) == 0 {
+		return updatedArgs, func() {}, nil
+	}
+
+	tempFile, err := os.CreateTemp("", "infisical-compose-*.yaml")
+	if err != nil {
+		return nil, nil, fmt.Errorf("could not create temporary Compose file: %w", err)
+	}
+	tempPath := tempFile.Name()
 	cleanup := func() {
-		for _, path := range cleanupPaths {
-			_ = os.Remove(path)
-		}
+		_ = os.Remove(tempPath)
+	}
+	if _, err := tempFile.Write(override); err != nil {
+		_ = tempFile.Close()
+		cleanup()
+		return nil, nil, fmt.Errorf("could not write temporary Compose file: %w", err)
+	}
+	if err := tempFile.Close(); err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("could not close temporary Compose file: %w", err)
 	}
 
-	for _, file := range files {
-		updated, err := injectSecrets(file.path, secretNames, protectedNames)
-		if err != nil {
-			cleanup()
-			return nil, nil, err
-		}
-		tempFile, err := os.CreateTemp(filepath.Dir(file.path), ".infisical-compose-*.yaml")
-		if err != nil {
-			cleanup()
-			return nil, nil, fmt.Errorf("could not create temporary Compose file: %w", err)
-		}
-		tempPath := tempFile.Name()
-		cleanupPaths = append(cleanupPaths, tempPath)
-		if _, err := tempFile.Write(updated); err != nil {
-			_ = tempFile.Close()
-			cleanup()
-			return nil, nil, fmt.Errorf("could not write temporary Compose file: %w", err)
-		}
-		if err := tempFile.Close(); err != nil {
-			cleanup()
-			return nil, nil, fmt.Errorf("could not close temporary Compose file: %w", err)
-		}
-
-		if file.flagIndex >= 0 {
-			switch {
-			case strings.HasPrefix(updatedArgs[file.flagIndex], "--file="):
-				updatedArgs[file.valueIndex] = "--file=" + tempPath
-			case strings.HasPrefix(updatedArgs[file.flagIndex], "-f") && len(updatedArgs[file.flagIndex]) > 2:
-				updatedArgs[file.valueIndex] = "-f" + tempPath
-			case updatedArgs[file.valueIndex] == updatedArgs[file.flagIndex]:
-				updatedArgs[file.valueIndex] = "-f" + tempPath
-			default:
-				updatedArgs[file.valueIndex] = tempPath
-			}
-		} else {
-			updatedArgs = append(updatedArgs[:subcommandIndex], append([]string{"--file", tempPath}, updatedArgs[subcommandIndex:]...)...)
-			subcommandIndex += 2
-		}
-	}
-
+	updatedArgs = append(updatedArgs[:subcommandIndex], append([]string{"--file", tempPath}, updatedArgs[subcommandIndex:]...)...)
 	return updatedArgs, cleanup, nil
 }
 
-func injectSecrets(composeFile string, secretNames []string, protectedNames map[string]map[string]struct{}) ([]byte, error) {
-	contents, err := os.ReadFile(composeFile)
-	if err != nil {
-		return nil, fmt.Errorf("could not read Compose file %q: %w", composeFile, err)
-	}
-
-	var document map[string]interface{}
-	if err := yaml.Unmarshal(contents, &document); err != nil {
-		return nil, fmt.Errorf("could not parse Compose file %q: %w", composeFile, err)
-	}
-
-	services, ok := document["services"].(map[string]interface{})
-	if !ok {
-		updated, err := yaml.Marshal(document)
-		if err != nil {
-			return nil, fmt.Errorf("could not serialize temporary Compose file: %w", err)
+func buildComposeOverride(serviceNames map[string]struct{}, secretNames []string, protectedNames map[string]map[string]struct{}) ([]byte, error) {
+	services := make(map[string]interface{})
+	for serviceName := range serviceNames {
+		environment := make(map[string]interface{})
+		for _, name := range secretNames {
+			if _, protected := protectedNames[serviceName][name]; !protected {
+				environment[name] = nil
+			}
 		}
-		return updated, nil
-	}
-	for serviceName, rawService := range services {
-		service, ok := rawService.(map[string]interface{})
-		if !ok {
-			return nil, fmt.Errorf("could not inject secrets: service %q has an invalid definition", serviceName)
-		}
-		if err := addSecretsToService(service, secretNames, protectedNames[serviceName]); err != nil {
-			return nil, fmt.Errorf("could not inject secrets into service %q: %w", serviceName, err)
+		if len(environment) > 0 {
+			services[serviceName] = map[string]interface{}{"environment": environment}
 		}
 	}
-
-	updated, err := yaml.Marshal(document)
-	if err != nil {
-		return nil, fmt.Errorf("could not serialize temporary Compose file: %w", err)
+	if len(services) == 0 {
+		return nil, nil
 	}
-	return updated, nil
+	return yaml.Marshal(map[string]interface{}{"services": services})
 }
 
 func explicitEnvironmentNames(composeFile string) (map[string]map[string]struct{}, error) {
@@ -252,6 +217,9 @@ func readComposeDocument(composeFile string) (map[string]interface{}, error) {
 }
 
 func findComposeUp(args []string) (int, int, bool) {
+	if len(args) == 0 {
+		return -1, -1, false
+	}
 	composeIndex := -1
 	switch filepath.Base(args[0]) {
 	case "docker-compose":
@@ -355,46 +323,4 @@ func resolveComposeFiles(args []string, composeIndex, subcommandIndex int) ([]co
 		files[i].path = path
 	}
 	return files, nil
-}
-
-func addSecretsToService(service map[string]interface{}, secretNames []string, protectedNames map[string]struct{}) error {
-	rawEnvironment, exists := service["environment"]
-	if !exists || rawEnvironment == nil {
-		rawEnvironment = []interface{}{}
-		service["environment"] = rawEnvironment
-	}
-
-	switch environment := rawEnvironment.(type) {
-	case map[string]interface{}:
-		for _, name := range secretNames {
-			if _, exists := environment[name]; !exists {
-				if _, protected := protectedNames[name]; protected {
-					continue
-				}
-				environment[name] = nil
-			}
-		}
-	case []interface{}:
-		existing := make(map[string]struct{}, len(environment))
-		for _, item := range environment {
-			value, ok := item.(string)
-			if !ok {
-				return errors.New("environment list contains a non-string value")
-			}
-			name, _, _ := strings.Cut(value, "=")
-			existing[name] = struct{}{}
-		}
-		for _, name := range secretNames {
-			if _, exists := existing[name]; !exists {
-				if _, protected := protectedNames[name]; protected {
-					continue
-				}
-				environment = append(environment, name)
-			}
-		}
-		service["environment"] = environment
-	default:
-		return errors.New("environment must be a map or list")
-	}
-	return nil
 }

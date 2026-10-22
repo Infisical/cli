@@ -40,14 +40,14 @@ func TestPrepareComposeCommandInjectsSecretsIntoEveryService(t *testing.T) {
 	}
 	defer cleanup()
 
-	if args[2] != "--file" || args[3] == composePath {
+	if args[4] != "--file" || args[5] == composePath {
 		t.Fatalf("expected Compose file argument to be replaced, got %v", args)
 	}
-	if _, err := os.Stat(args[3]); err != nil {
+	if _, err := os.Stat(args[5]); err != nil {
 		t.Fatalf("temporary Compose file does not exist: %v", err)
 	}
 
-	contents, err := os.ReadFile(args[3])
+	contents, err := os.ReadFile(args[5])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,30 +58,15 @@ func TestPrepareComposeCommandInjectsSecretsIntoEveryService(t *testing.T) {
 
 	services := document["services"].(map[string]interface{})
 	apiEnvironment := services["api"].(map[string]interface{})["environment"].(map[string]interface{})
-	secret, exists := apiEnvironment["SECRET"]
-	if !exists || secret != nil {
-		t.Fatalf("expected SECRET to be present as an unset Compose variable, got %v", apiEnvironment["SECRET"])
+	if secret, exists := apiEnvironment["SECRET"]; !exists || secret != nil {
+		t.Fatalf("expected SECRET to be present as an unset Compose variable, got %v", secret)
 	}
-	if apiEnvironment["EXISTING"] != "explicit" {
-		t.Fatalf("expected explicit api value to win, got %v", apiEnvironment["EXISTING"])
+	workerEnvironment := services["worker"].(map[string]interface{})["environment"].(map[string]interface{})
+	if secret, exists := workerEnvironment["SECRET"]; !exists || secret != nil {
+		t.Fatalf("expected SECRET to be present as an unset Compose variable, got %v", secret)
 	}
-	if apiEnvironment["TOKEN"] != "explicit" {
-		t.Fatalf("expected explicit api token to win, got %v", apiEnvironment["TOKEN"])
-	}
-
-	workerEnvironment := services["worker"].(map[string]interface{})["environment"].([]interface{})
-	values := make([]string, 0, len(workerEnvironment))
-	for _, value := range workerEnvironment {
-		values = append(values, value.(string))
-	}
-	if !slices.Contains(values, "SECRET") {
-		t.Fatalf("expected SECRET in worker environment, got %v", values)
-	}
-	if !slices.Contains(values, "EXISTING=explicit") {
-		t.Fatalf("expected explicit worker value to remain, got %v", values)
-	}
-	if !slices.Contains(values, "TOKEN") {
-		t.Fatalf("expected TOKEN to be injected into worker, got %v", values)
+	if token, exists := workerEnvironment["TOKEN"]; !exists || token != nil {
+		t.Fatalf("expected TOKEN to be injected into worker, got %v", token)
 	}
 
 	unchanged, err := os.ReadFile(composePath)
@@ -161,8 +146,8 @@ func TestPrepareComposeCommandRejectsMultipleComposeFiles(t *testing.T) {
 	}
 	defer cleanup()
 
-	if args[3] == filepath.Join(dir, "base.yaml") || args[5] == filepath.Join(dir, "local.yaml") {
-		t.Fatalf("expected all Compose files to be replaced, got %v", args)
+	if args[3] != filepath.Join(dir, "base.yaml") || args[5] != filepath.Join(dir, "local.yaml") {
+		t.Fatalf("expected source Compose files to remain unchanged, got %v", args)
 	}
 }
 
@@ -185,8 +170,8 @@ func TestPrepareComposeCommandSupportsAttachedFileOptionsAndDockerOptions(t *tes
 	}
 	defer cleanup()
 
-	if !strings.HasPrefix(args[4], "--file=") || strings.HasSuffix(args[4], composePath) {
-		t.Fatalf("expected attached Compose file option to be replaced, got %v", args)
+	if !strings.HasPrefix(args[4], "--file=") || !strings.HasSuffix(args[4], composePath) {
+		t.Fatalf("expected attached Compose file option to remain unchanged, got %v", args)
 	}
 	if args[len(args)-1] != "up" {
 		t.Fatalf("expected actual Compose subcommand to remain intact, got %v", args)
@@ -205,6 +190,54 @@ func TestPrepareComposeCommandLeavesOrdinaryDockerCommandsUnchanged(t *testing.T
 
 	if !slices.Equal(args, updated) {
 		t.Fatalf("expected ordinary Docker command to remain unchanged, got %v", updated)
+	}
+}
+
+func TestPrepareComposeCommandFindsComposeAfterDockerOptions(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	composePath := filepath.Join(dir, "compose.yaml")
+	if err := os.WriteFile(composePath, []byte("services:\n  app:\n    image: example/app\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	args, cleanup, err := prepareComposeCommand(
+		[]string{"docker", "--context", "prod", "compose", "--project-name", "example", "--file", composePath, "up"},
+		[]string{"SECRET"},
+		[]string{"SECRET=value"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	if !slices.Contains(args, "--file") {
+		t.Fatalf("expected generated Compose override, got %v", args)
+	}
+}
+
+func TestPrepareComposeCommandDoesNotRewriteComposeArgumentValues(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	composePath := filepath.Join(dir, "compose.yaml")
+	if err := os.WriteFile(composePath, []byte("services:\n  app:\n    image: example/app\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	args, cleanup, err := prepareComposeCommand(
+		[]string{"docker", "compose", "--project-name", "up", "--file", composePath, "up"},
+		[]string{"SECRET"},
+		[]string{"SECRET=value"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	if !slices.Contains(args, "--file") || args[2] != "--project-name" || args[3] != "up" {
+		t.Fatalf("expected Compose option values to remain intact, got %v", args)
 	}
 }
 
@@ -231,12 +264,8 @@ func TestPrepareComposeCommandPreservesExplicitValuesAcrossFiles(t *testing.T) {
 	}
 	defer cleanup()
 
-	contents, err := os.ReadFile(args[5])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(contents), "TOKEN") {
-		t.Fatal("override file should not replace the explicit value from the base file")
+	if len(args) != 7 {
+		t.Fatalf("expected source Compose files to remain unchanged, got %v", args)
 	}
 }
 
@@ -293,23 +322,8 @@ func TestPrepareComposeCommandPreservesInheritedEnvironmentValues(t *testing.T) 
 	}
 	defer cleanup()
 
-	generated, err := os.ReadFile(args[3])
-	if err != nil {
-		t.Fatal(err)
-	}
-	var document map[string]interface{}
-	if err := yaml.Unmarshal(generated, &document); err != nil {
-		t.Fatal(err)
-	}
-	worker := document["services"].(map[string]interface{})["worker"].(map[string]interface{})
-	environment, exists := worker["environment"].([]interface{})
-	if !exists {
-		return
-	}
-	for _, item := range environment {
-		if item == "TOKEN" || strings.HasPrefix(item.(string), "TOKEN=") {
-			t.Fatal("expected inherited TOKEN not to be added to the child service")
-		}
+	if len(args) != 5 {
+		t.Fatalf("expected no override file for inherited TOKEN, got %v", args)
 	}
 }
 
@@ -346,12 +360,8 @@ func TestPrepareComposeCommandPreservesExternalInheritedEnvironmentValues(t *tes
 	}
 	defer cleanup()
 
-	generated, err := os.ReadFile(args[3])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(generated), "TOKEN") {
-		t.Fatal("expected external inherited TOKEN not to be added to the child service")
+	if len(args) != 5 {
+		t.Fatalf("expected no override file for external inherited TOKEN, got %v", args)
 	}
 }
 
@@ -374,11 +384,38 @@ func TestPrepareComposeCommandDoesNotWriteSecretValues(t *testing.T) {
 	}
 	defer cleanup()
 
-	contents, err := os.ReadFile(args[3])
+	contents, err := os.ReadFile(args[5])
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(contents), "pa$WORD") {
 		t.Fatal("temporary Compose file contains a secret value")
+	}
+}
+
+func TestPrepareComposeCommandCleansUpOverrideFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	composePath := filepath.Join(dir, "compose.yaml")
+	if err := os.WriteFile(composePath, []byte("services:\n  app:\n    image: example/app\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	args, cleanup, err := prepareComposeCommand(
+		[]string{"docker", "compose", "--file", composePath, "up"},
+		[]string{"SECRET"},
+		[]string{"SECRET=value"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tempPath := args[5]
+	if _, err := os.Stat(tempPath); err != nil {
+		t.Fatal(err)
+	}
+	cleanup()
+	if _, err := os.Stat(tempPath); !os.IsNotExist(err) {
+		t.Fatalf("expected temporary override to be removed, got %v", err)
 	}
 }
