@@ -365,12 +365,8 @@ func TestBootstrapRetriesARejectedTokenBrieflyThenFails(t *testing.T) {
 	start := time.Now()
 	_, _, err := loadFromProxyToken("pxt", nil)
 	elapsed := time.Since(start)
-	var apiErr *api.APIError
-	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("expected the 401, got %v", err)
-	}
-	if errors.Is(err, errBootstrapUnreachable) {
-		t.Fatal("a rejected token was reported as unreachable")
+	if !errors.Is(err, errProxyTokenRejected) {
+		t.Fatalf("expected the rejected-token message, got %v", err)
 	}
 	if attempts.Load() < 2 {
 		t.Fatalf("a 401 was not retried: %d attempts", attempts.Load())

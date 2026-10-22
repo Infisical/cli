@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
@@ -124,9 +125,81 @@ func TestTokenCacheIsNotUsedWhenInfisicalAnswers(t *testing.T) {
 		infisicalAnswers(t, status)
 
 		_, err := prepareStart(Options{DataDir: dataDir}, "pxt")
+		if status == http.StatusUnauthorized {
+			if !errors.Is(err, errProxyTokenRejected) {
+				t.Fatalf("401: the cache was used or the token was not reported as rejected: %v", err)
+			}
+			continue
+		}
 		var apiErr *api.APIError
 		if !errors.As(err, &apiErr) || apiErr.StatusCode != status {
 			t.Fatalf("%d: the cache was used or the answer was lost: %v", status, err)
+		}
+	}
+}
+
+func TestARejectedProxyTokenRemovesItsCache(t *testing.T) {
+	shortBootstrapRetries(t)
+	dataDir, _ := startedOnce(t, nil)
+	infisicalAnswers(t, http.StatusUnauthorized)
+
+	if _, err := prepareStart(Options{DataDir: dataDir}, "pxt"); !errors.Is(err, errProxyTokenRejected) {
+		t.Fatalf("expected the rejected-token message, got %v", err)
+	}
+	if _, err := os.Stat(newTokenCache(dataDir, "pxt").dir); !os.IsNotExist(err) {
+		t.Fatalf("the cache of a rejected token was kept: %v", err)
+	}
+}
+
+func TestAProxyTokenRejectedWhileRunningRemovesItsCache(t *testing.T) {
+	dataDir, first := startedOnce(t, nil)
+	ps, _ := newPollLoopFixture(t, http.StatusUnauthorized)
+	stop := make(chan struct{})
+	fatal := make(chan error, 1)
+	done := runPollLoop(ps, first.saver, stop, fatal)
+
+	select {
+	case err := <-fatal:
+		if err != errProxyTokenRejected {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("poll loop kept running after two 401 heartbeats")
+	}
+	<-done
+	if _, err := os.Stat(newTokenCache(dataDir, "pxt").dir); !os.IsNotExist(err) {
+		t.Fatalf("the cache of a rejected token was kept: %v", err)
+	}
+}
+
+func TestARotatedTokensCacheIsRemovedOnTheNextStart(t *testing.T) {
+	dataDir, first := startedOnce(t, nil)
+	retired := newTokenCache(dataDir, "pxt-retired")
+	if err := retired.save(persistedState{ProxyID: "p1", Config: first.state.Config}, first.ca, false); err != nil {
+		t.Fatal(err)
+	}
+	otherProxy := newTokenCache(dataDir, "pxt-other-proxy")
+	if err := otherProxy.save(persistedState{ProxyID: "p2", Config: first.state.Config}, first.ca, false); err != nil {
+		t.Fatal(err)
+	}
+	unreadable := filepath.Join(dataDir, tokenCacheDir, "unreadable")
+	if err := os.MkdirAll(unreadable, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(unreadable, tokenCacheSettings), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := prepareStart(Options{DataDir: dataDir}, "pxt"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(retired.dir); !os.IsNotExist(err) {
+		t.Fatalf("the retired token's cache, and the CA in it, was kept: %v", err)
+	}
+	for _, dir := range []string{newTokenCache(dataDir, "pxt").dir, otherProxy.dir, unreadable} {
+		if _, err := os.Stat(dir); err != nil {
+			t.Fatalf("%s was removed: %v", dir, err)
 		}
 	}
 }

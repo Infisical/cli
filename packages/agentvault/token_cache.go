@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 
 	"github.com/Infisical/infisical-merge/packages/util"
+	"github.com/rs/zerolog/log"
 )
 
 // Kept apart from the state proxies enrolled before proxy tokens saved, so removing that support never
@@ -148,6 +149,44 @@ func (c *tokenCache) load(proxyToken string, own *OwnCa) (persistedState, *caMan
 		AccessToken: proxyToken,
 		Config:      entry.Config,
 	}, ca, nil
+}
+
+// A token Infisical refused must not leave a certificate authority behind for a later start to serve.
+func (c *tokenCache) remove() {
+	if err := os.RemoveAll(c.dir); err != nil {
+		log.Warn().Err(err).Str("dir", c.dir).Msg("agent-vault: can't remove the settings saved for a rejected proxy token")
+	}
+}
+
+// After a rotation the retired token's folder still holds the certificate authority it served. Folders of
+// other proxies sharing the data directory, and folders that can't be read, are left alone.
+func (c *tokenCache) pruneOtherTokens(proxyID string) {
+	if proxyID == "" {
+		return
+	}
+	root := filepath.Dir(c.dir)
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		log.Warn().Err(err).Str("dir", root).Msg("agent-vault: can't list the settings saved for earlier proxy tokens")
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() || e.Name() == filepath.Base(c.dir) {
+			continue
+		}
+		dir := filepath.Join(root, e.Name())
+		data, err := os.ReadFile(filepath.Join(dir, tokenCacheSettings))
+		if err != nil {
+			continue
+		}
+		var entry tokenCacheEntry
+		if json.Unmarshal(data, &entry) != nil || entry.ProxyID != proxyID {
+			continue
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			log.Warn().Err(err).Str("dir", dir).Msg("agent-vault: can't remove the settings saved for an earlier token of this proxy")
+		}
+	}
 }
 
 func removeIfExists(path string) error {

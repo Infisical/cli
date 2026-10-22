@@ -173,6 +173,9 @@ func startFromProxyToken(proxyToken string, own *OwnCa, dataDir string, dataDirC
 		return startup{state: cachedState, ca: cachedCa, saver: cache, dataDir: dataDir}, nil
 	}
 	if err != nil {
+		if errors.Is(err, errProxyTokenRejected) && cache != nil {
+			cache.remove()
+		}
 		return startup{}, err
 	}
 
@@ -188,6 +191,7 @@ func startFromProxyToken(proxyToken string, own *OwnCa, dataDir string, dataDirC
 		event.Err(saveErr).Str("dataDir", dataDir).Msg("agent-vault: can't save this proxy's settings, so a start while Infisical can't be reached will fail")
 		return startup{state: state, ca: ca}, nil
 	}
+	cache.pruneOtherTokens(state.ProxyID)
 	return startup{state: state, ca: ca, saver: cache, dataDir: dataDir}, nil
 }
 
@@ -241,11 +245,11 @@ func bootstrap(proxyToken string, own *OwnCa) (api.AgentVaultProxyBootstrapRespo
 	backoff := bootstrapFirstBackoff
 	// Once Infisical has rejected the token, running out of time is not "unreachable": the caller must not
 	// fall back to anything saved for it.
-	var rejected error
+	rejected := false
 	giveUp := func(last error) (api.AgentVaultProxyBootstrapResponse, error) {
 		log.Warn().Err(last).Msg("agent-vault: failed to load this proxy's settings from Infisical")
-		if rejected != nil {
-			return api.AgentVaultProxyBootstrapResponse{}, rejected
+		if rejected {
+			return api.AgentVaultProxyBootstrapResponse{}, errProxyTokenRejected
 		}
 		return api.AgentVaultProxyBootstrapResponse{}, errBootstrapUnreachable
 	}
@@ -268,9 +272,10 @@ func bootstrap(proxyToken string, own *OwnCa) (api.AgentVaultProxyBootstrapRespo
 		case isTokenRejected(err):
 			untilFatal := time.Until(unauthorizedDeadline)
 			if untilFatal <= 0 {
-				return api.AgentVaultProxyBootstrapResponse{}, err
+				log.Warn().Err(err).Msg("agent-vault: failed to load this proxy's settings from Infisical")
+				return api.AgentVaultProxyBootstrapResponse{}, errProxyTokenRejected
 			}
-			rejected = err
+			rejected = true
 			wait = min(wait, untilFatal)
 		case !isBootstrapRetryable(err):
 			return api.AgentVaultProxyBootstrapResponse{}, err
@@ -444,7 +449,7 @@ func serve(opts Options, s startup) error {
 const heartbeatRejectionsBeforeExit = 2
 
 var errProxyTokenRejected = errors.New(
-	"Infisical no longer accepts this proxy token: it was rotated or revoked, or the proxy was deleted. Restart with the current proxy token from the Proxies page")
+	"Infisical doesn't accept this proxy token. Check that it's the latest token for this Infisical, or generate a new one on the Proxies page")
 
 var errSavedStateTokenRejected = errors.New(
 	"Infisical no longer accepts this proxy's saved access token: its access was revoked or the proxy was deleted. Start the proxy with a proxy token from the Proxies page")
@@ -466,6 +471,9 @@ func (ps *proxyServer) pollLoop(st stateSaver, stop <-chan struct{}, fatal chan<
 			if ps.legacy {
 				fatal <- errSavedStateTokenRejected
 			} else {
+				if cache, ok := st.(*tokenCache); ok {
+					cache.remove()
+				}
 				fatal <- errProxyTokenRejected
 			}
 			return false
