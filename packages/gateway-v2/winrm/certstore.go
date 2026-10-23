@@ -82,12 +82,12 @@ foreach ($name in $issuers) {
   try {
     foreach ($c in $store.Certificates) {
       if (-not $seen.Add($c.Thumbprint)) { continue }
-      if ($isRequested) {
-        if ($entries.Count -ge $max -or $written -ge $budget) { $cut[$name] = $true; break }
-      } elseif ($issuerCount -ge $maxIssuers) {
-        [Console]::Out.WriteLine($m + 'J' + $t + $name)
-        break
-      } else {
+      if ($isRequested -and $written -ge $budget) { $cut[$name] = $true; break }
+      if (-not $isRequested -or $entries.Count -ge $max) {
+        if ($issuerCount -ge $maxIssuers) {
+          if ($isRequested) { $cut[$name] = $true } else { [Console]::Out.WriteLine($m + 'J' + $t + $name) }
+          break
+        }
         $issuerCount++
       }
       $line = $m + 'C' + $t + $name + $t + $c.Thumbprint + $t + [int]$c.HasPrivateKey + $t + '0' + $t + [Convert]::ToBase64String($c.RawData)
@@ -102,6 +102,7 @@ foreach ($name in $issuers) {
 }
 $count = 0
 $stop = $false
+$full = $false
 foreach ($name in $requested) {
   if ($stop) { break }
   if ($unreadable.ContainsKey($name)) { [Console]::Out.WriteLine($m + 'D' + $t + $name); continue }
@@ -112,11 +113,11 @@ foreach ($name in $requested) {
       $count++
     }
     if (-not $stop -and $cut.ContainsKey($name)) {
-      if ($written -ge $budget) { [Console]::Out.WriteLine($m + 'B') } else { [Console]::Out.WriteLine($m + 'L') }
-      $stop = $true
+      if ($written -ge $budget) { [Console]::Out.WriteLine($m + 'B'); $full = $true } else { [Console]::Out.WriteLine($m + 'L'); $stop = $true }
     }
     continue
   }
+  if ($full) { continue }
   if (-not (Test-Path -LiteralPath ('Cert:\LocalMachine\' + $name))) { continue }
   $store = New-Object System.Security.Cryptography.X509Certificates.X509Store($name, [System.Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine)
   try {
@@ -130,7 +131,7 @@ foreach ($name in $requested) {
     foreach ($c in $store.Certificates) {
       if (-not $seen.Add($c.Thumbprint)) { continue }
       if ($count -ge $max) { [Console]::Out.WriteLine($m + 'L'); $stop = $true; break }
-      if ($written -ge $budget) { [Console]::Out.WriteLine($m + 'B'); $stop = $true; break }
+      if ($written -ge $budget) { [Console]::Out.WriteLine($m + 'B'); $full = $true; break }
       $line = $m + 'C' + $t + $name + $t + $c.Thumbprint + $t + [int]$c.HasPrivateKey + $t + '1' + $t + [Convert]::ToBase64String($c.RawData)
       [Console]::Out.WriteLine($line)
       $written += $line.Length + 2
