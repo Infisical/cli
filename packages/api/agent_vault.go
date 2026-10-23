@@ -104,6 +104,9 @@ type AgentVaultService struct {
 	Credential          AgentVaultCredential     `json:"credential"`
 	CustomHeaders       []AgentVaultCustomHeader `json:"customHeaders"`
 	Substitutions       []AgentVaultSubstitution `json:"substitutions"`
+	// The service takes part of its credential from each member and the session's owner has not set their personal values.
+	// Older servers never send it, which decodes to false.
+	PersonalValuesMissing bool `json:"personalValuesMissing"`
 }
 
 type AgentVaultSessionLogGrant struct {
