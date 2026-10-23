@@ -134,3 +134,62 @@ func TestBuildStoreResultsDedupesByStoreAndThumbprint(t *testing.T) {
 		t.Fatalf("expected one result per store, got %d", len(resp.Certificates))
 	}
 }
+
+func caTemplate(serial int64, name string, ski byte, notAfter time.Time) *x509.Certificate {
+	return &x509.Certificate{
+		SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: name},
+		NotBefore: time.Now().Add(-72 * time.Hour), NotAfter: notAfter,
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign, SubjectKeyId: []byte{ski},
+	}
+}
+
+func TestBuildStoreResultsPicksTheCAThatSignedTheLeaf(t *testing.T) {
+	realKey, otherKey, leafKey := mustKey(t), mustKey(t), mustKey(t)
+	realTmpl := caTemplate(30, "Shared CA", 31, time.Now().Add(-time.Hour))
+	realCA := mustCert(t, realTmpl, realTmpl, &realKey.PublicKey, realKey)
+	otherTmpl := caTemplate(32, "Shared CA", 33, time.Now().Add(24*time.Hour))
+	otherCA := mustCert(t, otherTmpl, otherTmpl, &otherKey.PublicKey, otherKey)
+
+	signer := *realCA
+	signer.SubjectKeyId = nil
+	leaf := mustCert(t, &x509.Certificate{
+		SerialNumber: big.NewInt(34), Subject: pkix.Name{CommonName: "app.example.com"}, DNSNames: []string{"app.example.com"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), BasicConstraintsValid: true,
+	}, &signer, &leafKey.PublicKey, realKey)
+	if len(leaf.AuthorityKeyId) != 0 {
+		t.Fatal("test setup: the leaf must not carry an authority key ID")
+	}
+
+	resp := BuildStoreResults([]StoreCertificate{
+		{Store: "Root", Thumbprint: "OT", DER: otherCA.Raw},
+		{Store: "Root", Thumbprint: "RE", DER: realCA.Raw},
+		{Store: "My", Thumbprint: "LF", Requested: true, DER: leaf.Raw},
+	})
+	got := chainDER(t, resp, resp.Certificates[0])
+	if len(got) != 2 || !bytes.Equal(got[1], realCA.Raw) {
+		t.Fatal("expected the chain to use the expired CA that actually signed the leaf")
+	}
+}
+
+func TestBuildStoreResultsFollowsARolloverCertificateToTheOldRoot(t *testing.T) {
+	oldKey, newKey, interKey, leafKey := mustKey(t), mustKey(t), mustKey(t), mustKey(t)
+	oldTmpl := caTemplate(40, "Rollover Root", 41, time.Now().Add(24*time.Hour))
+	oldRoot := mustCert(t, oldTmpl, oldTmpl, &oldKey.PublicKey, oldKey)
+	newWithOld := mustCert(t, caTemplate(42, "Rollover Root", 43, time.Now().Add(24*time.Hour)), oldRoot, &newKey.PublicKey, oldKey)
+	inter := mustCert(t, caTemplate(44, "Rollover Issuing CA", 45, time.Now().Add(24*time.Hour)), newWithOld, &interKey.PublicKey, newKey)
+	leaf := mustCert(t, &x509.Certificate{
+		SerialNumber: big.NewInt(46), Subject: pkix.Name{CommonName: "svc.example.com"}, DNSNames: []string{"svc.example.com"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), BasicConstraintsValid: true,
+	}, inter, &leafKey.PublicKey, interKey)
+
+	resp := BuildStoreResults([]StoreCertificate{
+		{Store: "Root", Thumbprint: "OR", DER: oldRoot.Raw},
+		{Store: "CA", Thumbprint: "NO", DER: newWithOld.Raw},
+		{Store: "CA", Thumbprint: "IN", DER: inter.Raw},
+		{Store: "My", Thumbprint: "LF", Requested: true, DER: leaf.Raw},
+	})
+	got := chainDER(t, resp, resp.Certificates[0])
+	if len(got) != 4 || !bytes.Equal(got[2], newWithOld.Raw) || !bytes.Equal(got[3], oldRoot.Raw) {
+		t.Fatalf("expected leaf, intermediate, rollover certificate, old root; got %d certificates", len(got))
+	}
+}

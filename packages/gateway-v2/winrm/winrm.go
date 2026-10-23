@@ -108,10 +108,16 @@ func aclGrantArgs(rules []AccessRule) (string, error) {
 // responses are tiny, so this never limits real use.
 const maxWinRMReadBytes = 32 * 1024 * 1024
 
-// limitedConn fails the read once maxWinRMReadBytes are consumed; the winrm library reads bodies unbounded.
+// limitedConn fails a response read past maxWinRMReadBytes; the winrm library reads bodies unbounded.
 type limitedConn struct {
 	net.Conn
 	remaining int64
+}
+
+// Requests on a keep-alive connection are sequential, so each write starts a new response's allowance.
+func (c *limitedConn) Write(p []byte) (int, error) {
+	c.remaining = maxWinRMReadBytes
+	return c.Conn.Write(p)
 }
 
 func (c *limitedConn) Read(p []byte) (int, error) {

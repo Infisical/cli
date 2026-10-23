@@ -3,6 +3,7 @@ package certscan
 import (
 	"bytes"
 	"crypto/x509"
+	"errors"
 	"time"
 )
 
@@ -37,8 +38,10 @@ type StoreScanResponse struct {
 	Certificates []StoreCertificateResult `json:"certificates"`
 	DeniedStores []string                 `json:"deniedStores"`
 	// Issuer stores the scan reads for chains but couldn't open, so chains may stop early.
-	UnreadableIssuerStores []string        `json:"unreadableIssuerStores"`
-	TruncatedReason        TruncatedReason `json:"truncatedReason,omitempty"`
+	UnreadableIssuerStores []string `json:"unreadableIssuerStores"`
+	// Issuer stores with more certificates than the scan reads for chains.
+	TruncatedIssuerStores []string        `json:"truncatedIssuerStores"`
+	TruncatedReason       TruncatedReason `json:"truncatedReason,omitempty"`
 }
 
 type storeResultBuilder struct {
@@ -146,7 +149,7 @@ func chainForStoreCertificate(cert *x509.Certificate, issuers issuerIndex, now t
 	chain := []*x509.Certificate{cert}
 	visited := map[string]bool{string(cert.Raw): true}
 	current := cert
-	for !isSelfIssued(current) && len(chain) < maxChainLength {
+	for !isSelfSigned(current) && len(chain) < maxChainLength {
 		next := findStoreIssuer(current, issuers.bySubject[string(current.RawIssuer)], visited, now)
 		if next == nil {
 			break
@@ -158,6 +161,28 @@ func chainForStoreCertificate(cert *x509.Certificate, issuers issuerIndex, now t
 	return ChainKindLeaf, chain
 }
 
+// signedBy reports whether parent's key signed child; checked is false when Go refuses the algorithm (MD5, SHA-1).
+func signedBy(child, parent *x509.Certificate) (ok, checked bool) {
+	err := parent.CheckSignature(child.SignatureAlgorithm, child.RawTBSCertificate, child.Signature)
+	if err == nil {
+		return true, true
+	}
+	var insecure x509.InsecureAlgorithmError
+	if errors.As(err, &insecure) || errors.Is(err, x509.ErrUnsupportedAlgorithm) {
+		return true, false
+	}
+	return false, false
+}
+
+// A self-issued certificate can be signed by a previous CA key during a rollover, so names alone don't end a chain.
+func isSelfSigned(c *x509.Certificate) bool {
+	if !isSelfIssued(c) {
+		return false
+	}
+	ok, _ := signedBy(c, c)
+	return ok
+}
+
 // Prefers a valid, self-signed issuer: Windows CA stores keep expired cross-signed copies of roots.
 func findStoreIssuer(cert *x509.Certificate, candidates []*x509.Certificate, visited map[string]bool, now time.Time) *x509.Certificate {
 	var best *x509.Certificate
@@ -166,17 +191,22 @@ func findStoreIssuer(cert *x509.Certificate, candidates []*x509.Certificate, vis
 		if visited[string(candidate.Raw)] {
 			continue
 		}
+		if len(cert.AuthorityKeyId) > 0 && len(candidate.SubjectKeyId) > 0 &&
+			!bytes.Equal(cert.AuthorityKeyId, candidate.SubjectKeyId) {
+			continue
+		}
+		ok, checked := signedBy(cert, candidate)
+		if !ok {
+			continue
+		}
 		score := 0
-		if len(cert.AuthorityKeyId) > 0 && len(candidate.SubjectKeyId) > 0 {
-			if !bytes.Equal(cert.AuthorityKeyId, candidate.SubjectKeyId) {
-				continue
-			}
-			score += 2
+		if checked {
+			score += 8
 		}
 		if !now.Before(candidate.NotBefore) && !now.After(candidate.NotAfter) {
 			score += 4
 		}
-		if isSelfIssued(candidate) {
+		if isSelfSigned(candidate) {
 			score++
 		}
 		if score > bestScore {

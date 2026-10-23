@@ -38,6 +38,7 @@ type StoreScanResult struct {
 	Records                []certscan.StoreCertificate
 	DeniedStores           []string
 	UnreadableIssuerStores []string
+	TruncatedIssuerStores  []string
 	HitLimit               bool
 	OverBudget             bool
 	Truncated              bool
@@ -64,14 +65,16 @@ $written = 0
 $issuerCount = 0
 $read = @{}
 $unreadable = @{}
+$cut = @{}
 foreach ($name in $issuers) {
+  $isRequested = $requested -contains $name
   if (-not (Test-Path -LiteralPath ('Cert:\LocalMachine\' + $name))) { continue }
   $store = New-Object System.Security.Cryptography.X509Certificates.X509Store($name, [System.Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine)
   try {
     $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]'ReadOnly, OpenExistingOnly')
   } catch {
     $unreadable[$name] = $true
-    if (-not ($requested -contains $name)) { [Console]::Out.WriteLine($m + 'I' + $t + $name) }
+    if (-not $isRequested) { [Console]::Out.WriteLine($m + 'I' + $t + $name) }
     continue
   }
   $entries = New-Object System.Collections.Generic.List[object]
@@ -79,8 +82,14 @@ foreach ($name in $issuers) {
   try {
     foreach ($c in $store.Certificates) {
       if (-not $seen.Add($c.Thumbprint)) { continue }
-      if ($issuerCount -ge $maxIssuers) { break }
-      $issuerCount++
+      if ($isRequested) {
+        if ($entries.Count -ge $max -or $written -ge $budget) { $cut[$name] = $true; break }
+      } elseif ($issuerCount -ge $maxIssuers) {
+        [Console]::Out.WriteLine($m + 'J' + $t + $name)
+        break
+      } else {
+        $issuerCount++
+      }
       $line = $m + 'C' + $t + $name + $t + $c.Thumbprint + $t + [int]$c.HasPrivateKey + $t + '0' + $t + [Convert]::ToBase64String($c.RawData)
       [Console]::Out.WriteLine($line)
       $written += $line.Length + 2
@@ -101,6 +110,10 @@ foreach ($name in $requested) {
       if ($count -ge $max) { [Console]::Out.WriteLine($m + 'L'); $stop = $true; break }
       [Console]::Out.WriteLine($m + 'R' + $t + $name + $t + $e[0] + $t + $e[1])
       $count++
+    }
+    if (-not $stop -and $cut.ContainsKey($name)) {
+      if ($written -ge $budget) { [Console]::Out.WriteLine($m + 'B') } else { [Console]::Out.WriteLine($m + 'L') }
+      $stop = $true
     }
     continue
   }
@@ -203,6 +216,10 @@ func parseStoreScanOutput(stdout []byte, maxRequested int, cut bool) StoreScanRe
 		case "I":
 			if len(fields) == 2 && IsAllowedCertificateStore(fields[1]) {
 				result.UnreadableIssuerStores = append(result.UnreadableIssuerStores, fields[1])
+			}
+		case "J":
+			if len(fields) == 2 && IsAllowedCertificateStore(fields[1]) {
+				result.TruncatedIssuerStores = append(result.TruncatedIssuerStores, fields[1])
 			}
 		case "C":
 			record, ok := parseStoreRecord(fields)

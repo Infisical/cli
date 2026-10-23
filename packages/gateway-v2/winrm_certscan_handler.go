@@ -63,6 +63,7 @@ func handleWinrmScanCertificates(ctx context.Context, env *winrmRequestEnvelope)
 	response.Host = certscan.HostInfo{Hostname: scan.Hostname}
 	response.DeniedStores = scan.DeniedStores
 	response.UnreadableIssuerStores = scan.UnreadableIssuerStores
+	response.TruncatedIssuerStores = scan.TruncatedIssuerStores
 	if scan.Truncated && scan.Diagnostic != "" {
 		log.Warn().Str("diagnostic", scan.Diagnostic).Msg("winrm: certificate store scan stopped early")
 	}

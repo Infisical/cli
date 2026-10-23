@@ -52,6 +52,7 @@ func TestParseStoreScanOutputIgnoresNoiseAndReadsRecords(t *testing.T) {
 		record("H", "web-01"),
 		record("C", "Root", thumbB, "0", "0", der),
 		record("I", "CA"),
+		record("J", "Root"),
 		"noise " + record("C", "My", strings.ToLower(thumbA), "1", "1", der),
 		record("C", "My", thumbA, "1", "1", der),
 		record("C", "My", thumbC, "0", "1", "not-base64!"),
@@ -80,6 +81,9 @@ func TestParseStoreScanOutputIgnoresNoiseAndReadsRecords(t *testing.T) {
 	}
 	if len(result.UnreadableIssuerStores) != 1 || result.UnreadableIssuerStores[0] != "CA" {
 		t.Fatalf("expected CA unreadable, got %v", result.UnreadableIssuerStores)
+	}
+	if len(result.TruncatedIssuerStores) != 1 || result.TruncatedIssuerStores[0] != "Root" {
+		t.Fatalf("expected Root cut short, got %v", result.TruncatedIssuerStores)
 	}
 }
 
