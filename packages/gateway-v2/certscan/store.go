@@ -10,6 +10,9 @@ import (
 // Chains index into the shared Pool, so the budget counts each certificate once.
 const maxStoreResponseBytes = 12 * 1024 * 1024
 
+// Bounds the signature work a hostile host can force; past it, issuers match by name as for SHA-1.
+const maxSignatureChecks = 50000
+
 // Requested is false for certificates read only to build chains.
 type StoreCertificate struct {
 	Store         string
@@ -77,10 +80,10 @@ func (b *storeResultBuilder) add(certs []*x509.Certificate) ([]int, bool) {
 }
 
 func BuildStoreResults(certs []StoreCertificate) StoreScanResponse {
-	return buildStoreResults(certs, maxStoreResponseBytes, time.Now())
+	return buildStoreResults(certs, maxStoreResponseBytes, maxSignatureChecks, time.Now())
 }
 
-func buildStoreResults(certs []StoreCertificate, budget int, now time.Time) StoreScanResponse {
+func buildStoreResults(certs []StoreCertificate, budget, maxChecks int, now time.Time) StoreScanResponse {
 	parsed := make([]*x509.Certificate, len(certs))
 	var all []*x509.Certificate
 	for i, c := range certs {
@@ -92,6 +95,7 @@ func buildStoreResults(certs []StoreCertificate, budget int, now time.Time) Stor
 		all = append(all, cert)
 	}
 	issuers := newIssuerIndex(dedupeCertificates(all))
+	checker := newSignatureChecker(maxChecks)
 
 	builder := &storeResultBuilder{indexOf: map[string]int{}, budget: budget}
 	response := StoreScanResponse{Pool: [][]byte{}, Certificates: []StoreCertificateResult{}}
@@ -113,7 +117,7 @@ func buildStoreResults(certs []StoreCertificate, budget int, now time.Time) Stor
 			response.Certificates = append(response.Certificates, result)
 			continue
 		}
-		kind, chain := chainForStoreCertificate(cert, issuers, now)
+		kind, chain := chainForStoreCertificate(cert, issuers, checker, now)
 		indexes, ok := builder.add(chain)
 		if !ok {
 			response.TruncatedReason = TruncatedResponseSize
@@ -142,15 +146,15 @@ func newIssuerIndex(certs []*x509.Certificate) issuerIndex {
 	return idx
 }
 
-func chainForStoreCertificate(cert *x509.Certificate, issuers issuerIndex, now time.Time) (ChainKind, []*x509.Certificate) {
+func chainForStoreCertificate(cert *x509.Certificate, issuers issuerIndex, checker *signatureChecker, now time.Time) (ChainKind, []*x509.Certificate) {
 	if isCACert(cert) {
 		return ChainKindCA, []*x509.Certificate{cert}
 	}
 	chain := []*x509.Certificate{cert}
 	visited := map[string]bool{string(cert.Raw): true}
 	current := cert
-	for !isSelfSigned(current) && len(chain) < maxChainLength {
-		next := findStoreIssuer(current, issuers.bySubject[string(current.RawIssuer)], visited, now)
+	for !checker.isSelfSigned(current) && len(chain) < maxChainLength {
+		next := findStoreIssuer(current, issuers.bySubject[string(current.RawIssuer)], visited, checker, now)
 		if next == nil {
 			break
 		}
@@ -174,17 +178,44 @@ func signedBy(child, parent *x509.Certificate) (ok, checked bool) {
 	return false, false
 }
 
+type signaturePair struct{ child, parent *x509.Certificate }
+
+type signatureResult struct{ ok, checked bool }
+
+type signatureChecker struct {
+	remaining int
+	results   map[signaturePair]signatureResult
+}
+
+func newSignatureChecker(maxChecks int) *signatureChecker {
+	return &signatureChecker{remaining: maxChecks, results: map[signaturePair]signatureResult{}}
+}
+
+func (s *signatureChecker) signedBy(child, parent *x509.Certificate) (ok, checked bool) {
+	key := signaturePair{child, parent}
+	if r, hit := s.results[key]; hit {
+		return r.ok, r.checked
+	}
+	if s.remaining <= 0 {
+		return true, false
+	}
+	s.remaining--
+	ok, checked = signedBy(child, parent)
+	s.results[key] = signatureResult{ok, checked}
+	return ok, checked
+}
+
 // A self-issued certificate can be signed by a previous CA key during a rollover, so names alone don't end a chain.
-func isSelfSigned(c *x509.Certificate) bool {
+func (s *signatureChecker) isSelfSigned(c *x509.Certificate) bool {
 	if !isSelfIssued(c) {
 		return false
 	}
-	ok, _ := signedBy(c, c)
+	ok, _ := s.signedBy(c, c)
 	return ok
 }
 
 // Prefers a valid, self-signed issuer: Windows CA stores keep expired cross-signed copies of roots.
-func findStoreIssuer(cert *x509.Certificate, candidates []*x509.Certificate, visited map[string]bool, now time.Time) *x509.Certificate {
+func findStoreIssuer(cert *x509.Certificate, candidates []*x509.Certificate, visited map[string]bool, checker *signatureChecker, now time.Time) *x509.Certificate {
 	var best *x509.Certificate
 	bestScore := -1
 	for _, candidate := range candidates {
@@ -195,7 +226,7 @@ func findStoreIssuer(cert *x509.Certificate, candidates []*x509.Certificate, vis
 			!bytes.Equal(cert.AuthorityKeyId, candidate.SubjectKeyId) {
 			continue
 		}
-		ok, checked := signedBy(cert, candidate)
+		ok, checked := checker.signedBy(cert, candidate)
 		if !ok {
 			continue
 		}
@@ -206,7 +237,7 @@ func findStoreIssuer(cert *x509.Certificate, candidates []*x509.Certificate, vis
 		if !now.Before(candidate.NotBefore) && !now.After(candidate.NotAfter) {
 			score += 4
 		}
-		if isSelfSigned(candidate) {
+		if checker.isSelfSigned(candidate) {
 			score++
 		}
 		if score > bestScore {

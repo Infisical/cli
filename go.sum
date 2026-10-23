@@ -49,8 +49,8 @@ github.com/Infisical/ch-go v0.74.1-0.20261002151420-508f99a1ef44 h1:8DqZiKO8P08O
 github.com/Infisical/ch-go v0.74.1-0.20261002151420-508f99a1ef44/go.mod h1:sZ/r+8ttZMjyrP9PuFbgoVbth1ywIu2LIQNA2vgko6M=
 github.com/Infisical/go-keyring v1.0.2 h1:dWOkI/pB/7RocfSJgGXbXxLDcVYsdslgjEPmVhb+nl8=
 github.com/Infisical/go-keyring v1.0.2/go.mod h1:LWOnn/sw9FxDW/0VY+jHFAfOFEe03xmwBVSfJnBowto=
-github.com/Infisical/winrm v0.0.0-20261023190702-67026512f262 h1:XWRdLnDNPKxs8RFF/2Lh3tiCI68rYgFGOPenlv0n54E=
-github.com/Infisical/winrm v0.0.0-20261023190702-67026512f262/go.mod h1:JajVhkiG2bYSNYYPYuWG7WZHr42CTjMTcCjfInRNCqc=
+github.com/Infisical/winrm v0.0.0-20261023194427-b255ce1c3d5e h1:ZbKQvAw/NehmBgfQ4jhn7DUedfxTNpuPRGImV8KlI6o=
+github.com/Infisical/winrm v0.0.0-20261023194427-b255ce1c3d5e/go.mod h1:JajVhkiG2bYSNYYPYuWG7WZHr42CTjMTcCjfInRNCqc=
 github.com/Masterminds/goutils v1.1.1 h1:5nUrii3FMTL5diU80unEVvNevw1nH4+ZV4DSLVJLSYI=
 github.com/Masterminds/goutils v1.1.1/go.mod h1:8cTjp+g8YejhMuvIA5y2vz3BpJxksy863GQaJW2MFNU=
 github.com/Masterminds/semver/v3 v3.4.0 h1:Zog+i5UMtVoCU8oKka5P7i9q9HgrJeGzI9SA1Xbatp0=

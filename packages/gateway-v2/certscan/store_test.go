@@ -98,7 +98,7 @@ func TestBuildStoreResultsStopsAtTheResponseBudget(t *testing.T) {
 		certs = append(certs, StoreCertificate{Store: "My", Thumbprint: string(rune('A' + i)), Requested: true, DER: leaf.Raw})
 	}
 	budget := len(p.root.Raw) + len(p.inter.Raw) + 2*len(certs[2].DER) + 10
-	resp := buildStoreResults(certs, budget, time.Now())
+	resp := buildStoreResults(certs, budget, maxSignatureChecks, time.Now())
 	if resp.TruncatedReason != TruncatedResponseSize || len(resp.Certificates) != 2 {
 		t.Fatalf("expected 2 results and a responseSize cut, got %d results and %q", len(resp.Certificates), resp.TruncatedReason)
 	}
@@ -191,5 +191,43 @@ func TestBuildStoreResultsFollowsARolloverCertificateToTheOldRoot(t *testing.T) 
 	got := chainDER(t, resp, resp.Certificates[0])
 	if len(got) != 4 || !bytes.Equal(got[2], newWithOld.Raw) || !bytes.Equal(got[3], oldRoot.Raw) {
 		t.Fatalf("expected leaf, intermediate, rollover certificate, old root; got %d certificates", len(got))
+	}
+}
+
+func TestSignatureCheckerVerifiesSharedIssuersOnce(t *testing.T) {
+	p := newTestPKI(t)
+	var certs []StoreCertificate
+	for i := 0; i < 20; i++ {
+		leaf := mustCert(t, &x509.Certificate{
+			SerialNumber: big.NewInt(int64(200 + i)), Subject: pkix.Name{CommonName: "leaf"}, DNSNames: []string{"leaf.example.com"},
+			NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), BasicConstraintsValid: true,
+		}, p.inter, &p.leafKey.PublicKey, p.interKey)
+		certs = append(certs, StoreCertificate{DER: leaf.Raw})
+	}
+	issuers := newIssuerIndex([]*x509.Certificate{p.inter, p.root})
+	checker := newSignatureChecker(maxSignatureChecks)
+	for _, c := range certs {
+		leaf, err := x509.ParseCertificate(c.DER)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, chain := chainForStoreCertificate(leaf, issuers, checker, time.Now()); len(chain) != 3 {
+			t.Fatalf("expected a 3-certificate chain, got %d", len(chain))
+		}
+	}
+	if used := maxSignatureChecks - checker.remaining; used > len(certs)+3 {
+		t.Fatalf("expected about one check per leaf plus the shared issuers, used %d", used)
+	}
+}
+
+func TestBuildStoreResultsMatchesByNamePastTheSignatureBudget(t *testing.T) {
+	p := newTestPKI(t)
+	resp := buildStoreResults([]StoreCertificate{
+		{Store: "CA", Thumbprint: "BB", DER: p.inter.Raw},
+		{Store: "Root", Thumbprint: "CC", DER: p.root.Raw},
+		{Store: "My", Thumbprint: "AA", Requested: true, DER: p.leaf.Raw},
+	}, maxStoreResponseBytes, 0, time.Now())
+	if got := chainDER(t, resp, resp.Certificates[0]); len(got) != 3 || !bytes.Equal(got[2], p.root.Raw) {
+		t.Fatalf("expected the name-matched chain to reach the root, got %d certificates", len(got))
 	}
 }
