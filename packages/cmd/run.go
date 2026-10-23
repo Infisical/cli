@@ -29,10 +29,11 @@ func buildRunCmd() *cobra.Command {
 	runCmd := &cobra.Command{
 		Example: `
 	infisical run --env=dev -- npm run dev
+	infisical run --env=dev -- docker compose up
 	infisical run --command "first-command && second-command; more-commands..."
 	`,
 		Use:                   "run [any infisical run command flags] -- [your application start command]",
-		Short:                 "Used to inject environments variables into your application process",
+		Short:                 "Used to inject environment variables into your application process",
 		DisableFlagsInUseLine: true,
 		Args:                  validateRunArgs,
 		Run:                   runRun,
@@ -178,7 +179,7 @@ func runRun(cmd *cobra.Command, args []string) {
 			}
 
 		} else {
-			err = executeSingleCommandWithEnvs(args, injectableEnvironment.SecretsCount, injectableEnvironment.Variables)
+			err = executeSingleCommandWithEnvs(args, injectableEnvironment.SecretsCount, injectableEnvironment.Variables, injectableEnvironment.SecretNames)
 			if err != nil {
 				util.PrintlnStderr(err)
 				os.Exit(1)
@@ -219,19 +220,23 @@ func filterReservedEnvVars(env map[string]models.SingleEnvironmentVariable) {
 }
 
 // Will execute a single command and pass in the given secrets into the process
-func executeSingleCommandWithEnvs(args []string, secretsCount int, env []string) error {
+func executeSingleCommandWithEnvs(args []string, secretsCount int, env []string, secretNames []string) error {
 	command := args[0]
 	argsForCommand := args[1:]
 
 	log.Info().Msg(color.GreenString("Injecting %v Infisical secrets into your application process", secretsCount))
 
-	cmd := exec.Command(command, argsForCommand...)
+	commandArgs, cleanup, err := prepareComposeCommand(append([]string{command}, argsForCommand...), secretNames, env)
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(commandArgs[0], commandArgs[1:]...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = env
 
-	return execBasicCmd(cmd)
+	return execBasicCmd(cmd, cleanup)
 }
 
 func executeMultipleCommandWithEnvs(fullCommand string, secretsCount int, env []string) error {
@@ -257,7 +262,14 @@ func executeMultipleCommandWithEnvs(fullCommand string, secretsCount int, env []
 	return execBasicCmd(cmd)
 }
 
-func execBasicCmd(cmd *exec.Cmd) error {
+func execBasicCmd(cmd *exec.Cmd, cleanups ...func()) error {
+	cleanup := func() {
+		for _, fn := range cleanups {
+			fn()
+		}
+	}
+	defer cleanup()
+
 	sigChannel := make(chan os.Signal, 1)
 	signal.Notify(sigChannel)
 
@@ -278,6 +290,7 @@ func execBasicCmd(cmd *exec.Cmd) error {
 	}
 
 	waitStatus := cmd.ProcessState.Sys().(syscall.WaitStatus)
+	cleanup()
 	os.Exit(waitStatus.ExitStatus())
 	return nil
 }
@@ -372,8 +385,21 @@ func executeCommandWithWatchMode(commandFlag string, args []string, watchModeInt
 		// start the process
 		log.Info().Msg(color.GreenString("Injecting %v Infisical secrets into your application process", environmentVariables.SecretsCount))
 
-		cmd, err = util.RunCommand(commandFlag, args, environmentVariables.Variables, false)
+		commandArgs := args
+		cleanup := func() {}
+		if commandFlag == "" {
+			commandArgs, cleanup, err = prepareComposeCommand(args, environmentVariables.SecretNames, environmentVariables.Variables)
+			if err != nil {
+				defer watcherWaitGroup.Done()
+				processMutex.Unlock()
+				util.HandleError(err)
+				return
+			}
+		}
+
+		cmd, err = util.RunCommand(commandFlag, commandArgs, environmentVariables.Variables, false)
 		if err != nil {
+			cleanup()
 			defer watcherWaitGroup.Done()
 			util.HandleError(err)
 		}
@@ -381,6 +407,7 @@ func executeCommandWithWatchMode(commandFlag string, args []string, watchModeInt
 		go func() {
 			defer processMutex.Unlock()
 			defer watcherWaitGroup.Done()
+			defer cleanup()
 
 			exitCode, err := waitForExitCommand(cmd)
 
@@ -395,6 +422,7 @@ func executeCommandWithWatchMode(commandFlag string, args []string, watchModeInt
 					}
 				}
 
+				cleanup()
 				os.Exit(exitCode)
 			}
 		}()
@@ -490,8 +518,14 @@ func formatSecretsForShell(secrets []models.SingleEnvironmentVariable) models.In
 		env = append(env, key+"="+value)
 	}
 
+	secretNames := make([]string, 0, len(secretsByKey))
+	for key := range secretsByKey {
+		secretNames = append(secretNames, key)
+	}
+
 	return models.InjectableEnvironmentResult{
 		Variables:    env,
+		SecretNames:  secretNames,
 		ETag:         util.GenerateETagFromSecrets(secrets),
 		SecretsCount: len(secretsByKey),
 	}
