@@ -41,8 +41,12 @@ func WriteToFile(fileName string, dataToWrite []byte, filePerm os.FileMode) erro
 }
 
 func ValidateInfisicalAPIConnection() (ok bool) {
-	_, err := http.Get(fmt.Sprintf("%v/status", config.INFISICAL_URL))
-	return err == nil
+	resp, err := http.Get(fmt.Sprintf("%v/status", config.INFISICAL_URL))
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }
 
 // GetRestyClientWithCustomHeaders is the single place API clients are built, which is what applies
