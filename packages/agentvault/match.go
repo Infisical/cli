@@ -104,6 +104,22 @@ func hostsEqual(a, b string) bool {
 	return ipA != nil && ipB != nil && ipA.Equal(ipB)
 }
 
+func hostRank(svc *resolvedService, host, port string) (matchDetail, bool) {
+	var best matchDetail
+	ok := false
+	for _, pat := range svc.hostPatterns {
+		matched, detail := pat.match(host, port)
+		if !matched {
+			continue
+		}
+		if !ok || detail.betterThan(best) {
+			best = detail
+			ok = true
+		}
+	}
+	return best, ok
+}
+
 // The ladder is exact host, then slice order. Slice order is access bundle position, so it is not incidental.
 func bestMatch(services []*resolvedService, host, port string) *resolvedService {
 	var best *resolvedService
