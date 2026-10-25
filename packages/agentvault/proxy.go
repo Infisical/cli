@@ -504,16 +504,14 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 		return nil, nil, outcome, errOpaqueTarget
 	}
 
-	matched := bestMatch(services, hostname, port)
+	matched, policyErr := policyMatch(services, hostname, port, req)
 
 	if ps.blocksOffBundle(matched, hostname, port) {
 		return nil, nil, outcome, fmt.Errorf("no service covers host %q: %w", hostname, errHostBlocked)
 	}
 
-	if matched != nil {
-		if err := checkServicePolicy(matched, req); err != nil {
-			return nil, matched, outcome, err
-		}
+	if policyErr != nil {
+		return nil, matched, outcome, policyErr
 	}
 
 	req.URL.Scheme = scheme
@@ -553,7 +551,7 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 
 		// After the brokered headers rather than before them, so a custom header cannot reintroduce an
 		// override of the method the allowlist already judged.
-		if matched.allowedMethods != nil {
+		if matched.allowedMethods != nil || prefixesRestrictMethod(matched.allowedPathPrefixes) {
 			stripMethodOverrideHeaders(req.Header)
 		}
 		if len(outcome.substituted) > 0 {
@@ -561,7 +559,7 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 		}
 
 		if len(matched.allowedPathPrefixes) > 0 && containsSurface(outcome.substituted, surfacePath) {
-			if !pathAllowedAfterSubstitution(requestPath(req), req.URL.Path, matched.allowedPathPrefixes) {
+			if !pathAllowedAfterSubstitution(requestPath(req), req.URL.Path, applicablePrefixes(req.Method, matched.allowedPathPrefixes)) {
 				// The path now carries the real credential, so it must not reach the body or the log.
 				return nil, matched, outcome, fmt.Errorf(
 					"service %q does not allow the path this request substitutes to: %w",

@@ -15,6 +15,43 @@ var errPolicyBlocked = errors.New("blocked by service policy")
 // own status rather than landing in either of theirs.
 var errBodyUnreadable = errors.New("could not read the request body")
 
+// bestMatch is host-only. Two services on the same host used to leave the later one unreachable,
+// so a POST-only exact path could not sit beside a GET prefix. A refusal falls through only to a
+// service of the same host rank. A weaker host, including a wildcard, stays refused.
+func policyMatch(services []*resolvedService, host, port string, req *http.Request) (*resolvedService, error) {
+	matched := bestMatch(services, host, port)
+	if matched == nil {
+		return nil, nil
+	}
+	if err := checkServicePolicy(matched, req); err != nil {
+		if alt := equalRankAllowing(services, matched, host, port, req); alt != nil {
+			return alt, nil
+		}
+		return matched, err
+	}
+	return matched, nil
+}
+
+func equalRankAllowing(services []*resolvedService, winner *resolvedService, host, port string, req *http.Request) *resolvedService {
+	want, ok := hostRank(winner, host, port)
+	if !ok {
+		return nil
+	}
+	for _, svc := range services {
+		if svc == winner {
+			continue
+		}
+		detail, matched := hostRank(svc, host, port)
+		if !matched || detail.betterThan(want) || want.betterThan(detail) {
+			continue
+		}
+		if checkServicePolicy(svc, req) == nil {
+			return svc
+		}
+	}
+	return nil
+}
+
 func checkServicePolicy(svc *resolvedService, req *http.Request) error {
 	// First, so the refusal names what the agent's owner can fix rather than a method or path rule.
 	if svc.personalValuesMissing {
@@ -25,7 +62,7 @@ func checkServicePolicy(svc *resolvedService, req *http.Request) error {
 	}
 	if len(svc.allowedPathPrefixes) > 0 {
 		path := requestPath(req)
-		if !pathAllowed(path, svc.allowedPathPrefixes) {
+		if !pathAllowed(path, applicablePrefixes(req.Method, svc.allowedPathPrefixes)) {
 			return fmt.Errorf("service %q does not allow path %q: %w", svc.name, truncatePath(path), errPolicyBlocked)
 		}
 	}
@@ -40,7 +77,8 @@ func (s *resolvedService) allowsMethod(method string) bool {
 }
 
 // Rails, Laravel and Symfony all honour these, so a POST carrying one performs the method it names. The
-// wire method is what the allowlist judged, so where there is an allowlist the header has to go.
+// wire method is what the allowlist judged, so where there is an allowlist the header has to go. A
+// method-scoped prefix is an allowlist too, even when allowedMethods is unset.
 func stripMethodOverrideHeaders(header http.Header) {
 	for _, name := range []string{"X-HTTP-Method-Override", "X-Method-Override", "X-HTTP-Method"} {
 		header.Del(name)
@@ -168,15 +206,82 @@ func pathAllowedAfterSubstitution(escaped, decoded string, prefixes []string) bo
 	return matchesPrefix(escaped, prefixes)
 }
 
+// A prefix may name one method: /POST:/drafts$ applies only to POST. The backend stores it as a
+// path prefix, so one service can split methods without a second host row. An unscoped prefix still
+// applies to every allowed method.
+func applicablePrefixes(method string, prefixes []string) []string {
+	method = strings.ToUpper(method)
+	out := make([]string, 0, len(prefixes))
+	for _, prefix := range prefixes {
+		scoped, path, ok := splitMethodPrefix(prefix)
+		if !ok {
+			out = append(out, prefix)
+			continue
+		}
+		if scoped == method {
+			out = append(out, path)
+		}
+	}
+	return out
+}
+
+func splitMethodPrefix(prefix string) (method, path string, ok bool) {
+	if len(prefix) < 5 || prefix[0] != '/' {
+		return "", "", false
+	}
+	rest := prefix[1:]
+	colon := strings.IndexByte(rest, ':')
+	if colon < 3 {
+		return "", "", false
+	}
+	method = rest[:colon]
+	switch method {
+	case "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS":
+	default:
+		return "", "", false
+	}
+	path = rest[colon+1:]
+	// The backend strips a trailing slash, so /GET:/ arrives as /GET:. That is still the root.
+	if path == "" {
+		return method, "/", true
+	}
+	if path[0] != '/' {
+		return "", "", false
+	}
+	return method, path, true
+}
+
+func prefixesRestrictMethod(prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if _, _, ok := splitMethodPrefix(prefix); ok {
+			return true
+		}
+	}
+	return false
+}
+
 func matchesPrefix(escaped string, prefixes []string) bool {
 	for _, prefix := range prefixes {
 		if prefix == "/" {
 			return true
 		}
-		if !strings.HasPrefix(escaped, prefix) {
+		// A trailing $ is an exact path, not a prefix. /drafts$ allows /drafts and
+		// /drafts/, and refuses /drafts/{id}/send. A $ anywhere else stays literal.
+		exact := strings.HasSuffix(prefix, "$") && len(prefix) > 1
+		if exact {
+			prefix = prefix[:len(prefix)-1]
+		}
+		if prefix == "" || !strings.HasPrefix(escaped, prefix) {
 			continue
 		}
-		if rest := escaped[len(prefix):]; rest == "" || rest[0] == '/' {
+		rest := escaped[len(prefix):]
+		if exact {
+			if rest == "" || rest == "/" {
+				return true
+			}
+			continue
+		}
+		if rest == "" || rest[0] == '/' {
 			return true
 		}
 	}

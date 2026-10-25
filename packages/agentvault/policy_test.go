@@ -70,6 +70,123 @@ func TestMethodPolicy(t *testing.T) {
 	})
 }
 
+func TestEqualHostPolicyFallsThrough(t *testing.T) {
+	read := &resolvedService{
+		name:                "gmail-read",
+		hostPatterns:        parseHostPatterns("gmail.googleapis.com"),
+		allowedMethods:      toMethodSet([]string{"GET", "HEAD"}),
+		allowedPathPrefixes: toPathPrefixes([]string{"/gmail/v1/users/me/messages", "/gmail/v1/users/me/drafts"}),
+	}
+	draft := &resolvedService{
+		name:                "gmail-draft-create",
+		hostPatterns:        parseHostPatterns("gmail.googleapis.com"),
+		allowedMethods:      toMethodSet([]string{"POST"}),
+		allowedPathPrefixes: toPathPrefixes([]string{"/gmail/v1/users/me/drafts$"}),
+	}
+	wild := &resolvedService{
+		name:           "wildcard",
+		hostPatterns:   parseHostPatterns("*.googleapis.com"),
+		allowedMethods: nil,
+	}
+	services := []*resolvedService{read, draft, wild}
+
+	got, err := policyMatch(services, "gmail.googleapis.com", "443", requestTo(t, "POST", "/gmail/v1/users/me/drafts"))
+	if err != nil || got != draft {
+		t.Fatalf("exact draft create should fall through to the POST service, got %v err %v", got, err)
+	}
+
+	got, err = policyMatch(services, "gmail.googleapis.com", "443", requestTo(t, "GET", "/gmail/v1/users/me/messages"))
+	if err != nil || got != read {
+		t.Fatalf("a listed GET should stay on the read service, got %v err %v", got, err)
+	}
+
+	got, err = policyMatch(services, "gmail.googleapis.com", "443", requestTo(t, "POST", "/gmail/v1/users/me/drafts/abc/send"))
+	if !errors.Is(err, errPolicyBlocked) || got == wild {
+		t.Fatalf("send must stay blocked and must not fall through to the wildcard, got %v err %v", got, err)
+	}
+
+	got, err = policyMatch(services, "gmail.googleapis.com", "443", requestTo(t, "POST", "/gmail/v1/users/me/messages/send"))
+	if !errors.Is(err, errPolicyBlocked) || got == wild {
+		t.Fatalf("message send must stay blocked, got %v err %v", got, err)
+	}
+}
+
+func TestScopedRootPrefixAllowsReads(t *testing.T) {
+	for _, root := range []string{"/GET:/", "/GET:"} {
+		svc := serviceWithPolicy([]string{"GET", "POST"}, []string{root, "/POST:/drafts$"})
+		if err := checkServicePolicy(svc, requestTo(t, "GET", "/")); err != nil {
+			t.Fatalf("%s should allow GET /: %v", root, err)
+		}
+		if err := checkServicePolicy(svc, requestTo(t, "GET", "/repos")); err != nil {
+			t.Fatalf("%s should allow GET /repos: %v", root, err)
+		}
+		err := checkServicePolicy(svc, requestTo(t, "POST", "/repos"))
+		if !errors.Is(err, errPolicyBlocked) {
+			t.Fatalf("%s should still block POST /repos, got %v", root, err)
+		}
+	}
+}
+
+func TestMethodScopedPath(t *testing.T) {
+	svc := serviceWithPolicy([]string{"GET", "HEAD", "POST"}, []string{
+		"/GET:/gmail/v1/users/me/messages",
+		"/HEAD:/gmail/v1/users/me/messages",
+		"/GET:/gmail/v1/users/me/drafts",
+		"/POST:/gmail/v1/users/me/drafts$",
+	})
+
+	if err := checkServicePolicy(svc, requestTo(t, "GET", "/gmail/v1/users/me/messages/abc")); err != nil {
+		t.Fatalf("GET message should be allowed: %v", err)
+	}
+	if err := checkServicePolicy(svc, requestTo(t, "POST", "/gmail/v1/users/me/drafts")); err != nil {
+		t.Fatalf("exact draft create should be allowed: %v", err)
+	}
+	for _, path := range []string{
+		"/gmail/v1/users/me/messages/send",
+		"/gmail/v1/users/me/drafts/abc/send",
+	} {
+		err := checkServicePolicy(svc, requestTo(t, "POST", path))
+		if !errors.Is(err, errPolicyBlocked) {
+			t.Fatalf("POST %s should be blocked, got %v", path, err)
+		}
+	}
+}
+
+func TestExactPathPolicy(t *testing.T) {
+	svc := serviceWithPolicy([]string{"POST"}, []string{"/gmail/v1/users/me/drafts$"})
+
+	allowed := []string{"/gmail/v1/users/me/drafts", "/gmail/v1/users/me/drafts/"}
+	for _, path := range allowed {
+		t.Run("allows "+path, func(t *testing.T) {
+			if err := checkServicePolicy(svc, requestTo(t, "POST", path)); err != nil {
+				t.Fatalf("%s should be allowed: %v", path, err)
+			}
+		})
+	}
+
+	blocked := []string{
+		"/gmail/v1/users/me/drafts/abc/send",
+		"/gmail/v1/users/me/drafts/send",
+		"/gmail/v1/users/me/messages/send",
+		"/gmail/v1/users/me/drafts-extra",
+	}
+	for _, path := range blocked {
+		t.Run("blocks "+path, func(t *testing.T) {
+			err := checkServicePolicy(svc, requestTo(t, "POST", path))
+			if !errors.Is(err, errPolicyBlocked) {
+				t.Fatalf("%s should be blocked, got %v", path, err)
+			}
+		})
+	}
+
+	t.Run("a dollar that is not trailing stays a prefix", func(t *testing.T) {
+		literal := serviceWithPolicy(nil, []string{"/repo$s"})
+		if err := checkServicePolicy(literal, requestTo(t, "GET", "/repo$s/child")); err != nil {
+			t.Fatalf("a non-trailing dollar should still be a prefix: %v", err)
+		}
+	})
+}
+
 func TestPathPolicy(t *testing.T) {
 	svc := serviceWithPolicy(nil, []string{"/repos"})
 
