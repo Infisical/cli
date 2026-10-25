@@ -145,12 +145,44 @@ func runInteractiveShell(session *ssh.Session) error {
 	return session.Wait()
 }
 
-// runSSHCommand joins arguments with spaces for the remote shell to re-parse, as `ssh host cmd` does
+// runSSHCommand runs the command on the target and returns once it has exited
 func runSSHCommand(session *ssh.Session, command []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	session.Stdin = stdin
 	session.Stdout = stdout
 	session.Stderr = stderr
-	return session.Run(strings.Join(command, " "))
+	return session.Run(shellJoin(command))
+}
+
+// shellJoin builds the command line the remote shell re-parses. A single argument is passed through
+// untouched, as `ssh host cmd` does; several arguments are quoted so each reaches the command as
+// given, so that `-- sh -c "echo a && echo b"` runs on the target the way it was typed locally.
+func shellJoin(command []string) string {
+	if len(command) == 1 {
+		return command[0]
+	}
+	quoted := make([]string, len(command))
+	for i, arg := range command {
+		quoted[i] = shellQuote(arg)
+	}
+	return strings.Join(quoted, " ")
+}
+
+// shellQuote single-quotes an argument for a POSIX shell unless it only holds characters no shell interprets
+func shellQuote(arg string) string {
+	if arg != "" && strings.IndexFunc(arg, isShellSpecial) < 0 {
+		return arg
+	}
+	return "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
+}
+
+func isShellSpecial(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		return false
+	case strings.ContainsRune("@%+=:,./-_", r):
+		return false
+	}
+	return true
 }
 
 func makeTerminalRaw(fd int) (restore func(), err error) {
