@@ -99,6 +99,16 @@ func TestRunSSHCommandThroughGateway(t *testing.T) {
 			command:  []string{"exit-7"},
 			wantCode: 7,
 		},
+		{
+			name:       "quotes arguments the remote shell would otherwise split",
+			command:    []string{"sh", "-c", "echo o1 && echo o2", "it's"},
+			wantStdout: "ran: sh -c 'echo o1 && echo o2' 'it'\\''s'\n",
+		},
+		{
+			name:       "passes a single argument through for the remote shell",
+			command:    []string{"echo one && echo $HOME"},
+			wantStdout: "ran: echo one && echo $HOME\n",
+		},
 	}
 
 	for _, tc := range cases {
