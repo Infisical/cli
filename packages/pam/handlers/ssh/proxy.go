@@ -317,8 +317,10 @@ func (p *SSHProxy) handleChannel(ctx context.Context, newChannel ssh.NewChannel,
 
 	// When client→server finishes first, the client has only closed the remote's stdin (a piped
 	// script, SCP's request): the command may run and print for as long as it needs, so wait for
-	// server→client to end. When server→client finishes first (exec), proceed immediately since
-	// the client→server goroutine may be blocked on stdin that never arrives.
+	// server→client to end, unless the client closes the channel itself while keeping the
+	// connection (multiplexed clients), which must stop the command. When server→client finishes
+	// first (exec), proceed immediately since the client→server goroutine may be blocked on stdin
+	// that never arrives.
 	select {
 	case err := <-clientToServerDone:
 		if err != nil && err != io.EOF {
@@ -329,6 +331,7 @@ func (p *SSHProxy) handleChannel(ctx context.Context, newChannel ssh.NewChannel,
 			if err != nil && err != io.EOF {
 				log.Debug().Err(err).Str("sessionID", sessionID).Msg("server→client proxy error")
 			}
+		case <-clientReqDone:
 		case <-ctx.Done():
 		}
 	case err := <-serverToClientDone:
