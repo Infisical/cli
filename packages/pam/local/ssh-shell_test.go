@@ -128,6 +128,70 @@ func TestRunSSHCommandThroughGateway(t *testing.T) {
 	}
 }
 
+// The session must last as long as the remote command, however early local stdin ends.
+func TestRunSSHCommandOutlivesStdinEOF(t *testing.T) {
+	if testing.Short() {
+		t.Skip("waits longer than the gateway's old grace period")
+	}
+	t.Parallel()
+	gatewayAddr := startGatewaySSHProxy(t, startFakeSSHTarget(t))
+	client := dialTestClient(t, gatewayAddr)
+
+	sshSession, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer sshSession.Close()
+
+	var stdout, stderr bytes.Buffer
+	runErr := runSSHCommand(sshSession, []string{"late-output"}, strings.NewReader(""), &stdout, &stderr)
+
+	code, err := sshExitCode(runErr, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+	if stdout.String() != "late\n" {
+		t.Errorf("stdout = %q, want %q", stdout.String(), "late\n")
+	}
+}
+
+// The remote exiting ends the session even while local stdin is still open.
+func TestRunSSHCommandReturnsWhileStdinOpen(t *testing.T) {
+	t.Parallel()
+	gatewayAddr := startGatewaySSHProxy(t, startFakeSSHTarget(t))
+	client := dialTestClient(t, gatewayAddr)
+
+	sshSession, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer sshSession.Close()
+
+	stdin, stdinWriter := io.Pipe()
+	defer stdinWriter.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runSSHCommand(sshSession, []string{"exit-7"}, stdin, io.Discard, io.Discard)
+	}()
+
+	select {
+	case runErr := <-done:
+		code, err := sshExitCode(runErr, false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if code != 7 {
+			t.Errorf("exit code = %d, want 7", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("command did not return after the remote exited")
+	}
+}
+
 func dialTestClient(t *testing.T, gatewayAddr string) *ssh.Client {
 	t.Helper()
 
@@ -265,10 +329,18 @@ func serveFakeTargetChannel(channel ssh.Channel, requests <-chan *ssh.Request) {
 	}
 }
 
+// Longer than the grace the gateway used to give a command after its stdin closed.
+const lateOutputDelay = 7 * time.Second
+
 func runFakeCommand(channel ssh.Channel, command string) uint32 {
 	switch command {
 	case "exit-7":
 		return 7
+	case "late-output":
+		_, _ = io.Copy(io.Discard, channel)
+		time.Sleep(lateOutputDelay)
+		_, _ = fmt.Fprintln(channel, "late")
+		return 0
 	default:
 		_, _ = fmt.Fprintf(channel, "ran: %s\n", command)
 		return 0
