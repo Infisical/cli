@@ -128,6 +128,105 @@ func TestRunSSHCommandThroughGateway(t *testing.T) {
 	}
 }
 
+// The session must last as long as the remote command, however early local stdin ends.
+func TestRunSSHCommandOutlivesStdinEOF(t *testing.T) {
+	if testing.Short() {
+		t.Skip("waits longer than the gateway's old grace period")
+	}
+	t.Parallel()
+	gatewayAddr := startGatewaySSHProxy(t, startFakeSSHTarget(t))
+	client := dialTestClient(t, gatewayAddr)
+
+	sshSession, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer sshSession.Close()
+
+	var stdout, stderr bytes.Buffer
+	done := make(chan error, 1)
+	go func() {
+		done <- runSSHCommand(sshSession, []string{"late-output"}, strings.NewReader(""), &stdout, &stderr)
+	}()
+
+	var runErr error
+	select {
+	case runErr = <-done:
+	case <-time.After(lateOutputDelay + 10*time.Second):
+		sshSession.Close()
+		t.Fatal("command did not return after the remote printed and exited")
+	}
+
+	code, err := sshExitCode(runErr, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+	if stdout.String() != "late\n" {
+		t.Errorf("stdout = %q, want %q", stdout.String(), "late\n")
+	}
+}
+
+// The remote exiting ends the session even while local stdin is still open.
+func TestRunSSHCommandReturnsWhileStdinOpen(t *testing.T) {
+	t.Parallel()
+	gatewayAddr := startGatewaySSHProxy(t, startFakeSSHTarget(t))
+	client := dialTestClient(t, gatewayAddr)
+
+	sshSession, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer sshSession.Close()
+
+	stdin, stdinWriter := io.Pipe()
+	defer stdinWriter.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runSSHCommand(sshSession, []string{"exit-7"}, stdin, io.Discard, io.Discard)
+	}()
+
+	select {
+	case runErr := <-done:
+		code, err := sshExitCode(runErr, false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if code != 7 {
+			t.Errorf("exit code = %d, want 7", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("command did not return after the remote exited")
+	}
+}
+
+// A client that closes one session but keeps its connection, as multiplexing clients do, must
+// stop the command on the target instead of leaving it running until the connection ends.
+func TestGatewayClosesTargetChannelWhenClientClosesSession(t *testing.T) {
+	t.Parallel()
+	targetChannelClosed := make(chan struct{}, 1)
+	gatewayAddr := startGatewaySSHProxy(t, startObservedFakeSSHTarget(t, targetChannelClosed))
+	client := dialTestClient(t, gatewayAddr)
+
+	sshSession, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if err := sshSession.Start("wait-for-close"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	sshSession.Close()
+
+	select {
+	case <-targetChannelClosed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the gateway kept the target channel open after the client closed the session")
+	}
+}
+
 func dialTestClient(t *testing.T, gatewayAddr string) *ssh.Client {
 	t.Helper()
 
@@ -183,6 +282,13 @@ func startGatewaySSHProxy(t *testing.T, targetAddr string) string {
 // startFakeSSHTarget stands in for the machine a PAM account points at.
 func startFakeSSHTarget(t *testing.T) string {
 	t.Helper()
+	return startObservedFakeSSHTarget(t, nil)
+}
+
+// startObservedFakeSSHTarget also reports on channelClosed when the gateway closes a channel
+// running `wait-for-close`.
+func startObservedFakeSSHTarget(t *testing.T, channelClosed chan<- struct{}) string {
+	t.Helper()
 
 	config := &ssh.ServerConfig{
 		PasswordCallback: func(conn ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
@@ -206,14 +312,14 @@ func startFakeSSHTarget(t *testing.T) string {
 			if err != nil {
 				return
 			}
-			go serveFakeTarget(conn, config)
+			go serveFakeTarget(conn, config, channelClosed)
 		}
 	}()
 
 	return listener.Addr().String()
 }
 
-func serveFakeTarget(conn net.Conn, config *ssh.ServerConfig) {
+func serveFakeTarget(conn net.Conn, config *ssh.ServerConfig, channelClosed chan<- struct{}) {
 	defer conn.Close()
 
 	_, channels, requests, err := ssh.NewServerConn(conn, config)
@@ -231,11 +337,11 @@ func serveFakeTarget(conn net.Conn, config *ssh.ServerConfig) {
 		if err != nil {
 			return
 		}
-		go serveFakeTargetChannel(channel, channelRequests)
+		go serveFakeTargetChannel(channel, channelRequests, channelClosed)
 	}
 }
 
-func serveFakeTargetChannel(channel ssh.Channel, requests <-chan *ssh.Request) {
+func serveFakeTargetChannel(channel ssh.Channel, requests <-chan *ssh.Request, channelClosed chan<- struct{}) {
 	defer channel.Close()
 
 	for req := range requests {
@@ -244,7 +350,17 @@ func serveFakeTargetChannel(channel ssh.Channel, requests <-chan *ssh.Request) {
 			if req.WantReply {
 				_ = req.Reply(true, nil)
 			}
-			exitStatus := runFakeCommand(channel, sshStringPayload(req.Payload))
+			command := sshStringPayload(req.Payload)
+			if command == "wait-for-close" {
+				// Runs like `sleep 600`: only the peer closing the channel ends its requests.
+				for range requests {
+				}
+				if channelClosed != nil {
+					channelClosed <- struct{}{}
+				}
+				return
+			}
+			exitStatus := runFakeCommand(channel, command)
 			sendExitStatus(channel, exitStatus)
 			_ = channel.CloseWrite()
 			return
@@ -265,10 +381,18 @@ func serveFakeTargetChannel(channel ssh.Channel, requests <-chan *ssh.Request) {
 	}
 }
 
+// Longer than the grace the gateway used to give a command after its stdin closed.
+const lateOutputDelay = 7 * time.Second
+
 func runFakeCommand(channel ssh.Channel, command string) uint32 {
 	switch command {
 	case "exit-7":
 		return 7
+	case "late-output":
+		_, _ = io.Copy(io.Discard, channel)
+		time.Sleep(lateOutputDelay)
+		_, _ = fmt.Fprintln(channel, "late")
+		return 0
 	default:
 		_, _ = fmt.Fprintf(channel, "ran: %s\n", command)
 		return 0
