@@ -69,3 +69,24 @@ func TestMapPkcs11GenerateError(t *testing.T) {
 	expectCode(t, mapPkcs11GenerateError(pkcs11.Error(pkcs11.CKR_TEMPLATE_INCONSISTENT), KeyAlgorithmRSA2048), Pkcs11ErrInternal)
 	expectCode(t, mapPkcs11GenerateError(pkcs11.Error(pkcs11.CKR_DEVICE_REMOVED), KeyAlgorithmMLDSA44), Pkcs11ErrDriverUnavailable)
 }
+
+func TestMlDsaAttributeReadErrorKeepsDeviceFailures(t *testing.T) {
+	der, err := marshalMlDsaSpki(KeyAlgorithmMLDSA44, make([]byte, 1312))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mlDsaKey, err := parseExpectedPublicKey(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectCode(t, mlDsaAttributeReadError(pkcs11.Error(pkcs11.CKR_DEVICE_REMOVED), mlDsaKey), Pkcs11ErrDriverUnavailable)
+	expectCode(t, mlDsaAttributeReadError(pkcs11.Error(pkcs11.CKR_GENERAL_ERROR), mlDsaKey), Pkcs11ErrInternal)
+	for _, hidden := range []error{pkcs11.Error(pkcs11.CKR_ATTRIBUTE_SENSITIVE), pkcs11.Error(pkcs11.CKR_ATTRIBUTE_TYPE_INVALID), nil} {
+		if got := mlDsaAttributeReadError(hidden, mlDsaKey); got != nil {
+			t.Fatalf("hidden attributes (%v) must fall through to the ML-DSA refusal, got %v", hidden, got)
+		}
+	}
+	if got := mlDsaAttributeReadError(pkcs11.Error(pkcs11.CKR_DEVICE_REMOVED), nil); got != nil {
+		t.Fatalf("non ML-DSA requests keep their existing behaviour, got %v", got)
+	}
+}

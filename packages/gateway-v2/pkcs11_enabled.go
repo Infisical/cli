@@ -470,6 +470,16 @@ func keyAttributeReadError(err error) error {
 	return &Pkcs11Error{Code: Pkcs11ErrInternal, Message: fmt.Sprintf("Failed to read key attributes: %v", err)}
 }
 
+func mlDsaAttributeReadError(err error, expectedPublicKey crypto.PublicKey) error {
+	if _, isMlDsa := expectedPublicKey.(*mlDsaPublicKey); !isMlDsa {
+		return nil
+	}
+	if classified := keyAttributeReadError(err); classified != errKeyAttributeUnreadable {
+		return classified
+	}
+	return nil
+}
+
 func isTolerableKeyLookupError(err error) bool {
 	var p11Err *Pkcs11Error
 	return err == errKeyAttributeUnreadable || (errors.As(err, &p11Err) && p11Err.Code == Pkcs11ErrMechanismInvalid)
@@ -532,7 +542,14 @@ func (m *pkcs11ModuleImpl) Sign(slotLabel string, pin []byte, key KeyRef, mechan
 			pkcs11.NewAttribute(pkcs11.CKA_ID, nil),
 		})
 		attrsReadable := err == nil && len(attrs) == 2
+		if !attrsReadable {
+			if readErr := mlDsaAttributeReadError(err, expectedPublicKey); readErr != nil {
+				log.Warn().Err(err).Str("keyLabel", key.Label).Msg("pkcs11: failed to read the ML-DSA key's type and ID")
+				return readErr
+			}
+		}
 		if verifiableErr := requireVerifiableKey(attrsReadable, expectedPublicKey); verifiableErr != nil {
+			log.Warn().Err(err).Str("keyLabel", key.Label).Msg("pkcs11: the HSM hides the ML-DSA key's type and ID, refusing to sign")
 			return verifiableErr
 		}
 		switch {
