@@ -135,10 +135,13 @@ func (ps *proxyServer) reportInsufficientScope(resp *http.Response, sessionToken
 	if len(scopes) == 0 {
 		return true
 	}
-	if err := ps.cache.reportMissingScopes(sessionToken, svc.id, svc.hostPattern, sent, scopes); err != nil {
-		log.Warn().Err(err).Str("service", svc.name).Str("serviceId", svc.id).
-			Msg("agent-vault: could not report the upstream's required scopes to Infisical")
-	}
+	// In the background: the agent's answer does not depend on the report, so it need not wait for Infisical.
+	go func() {
+		if err := ps.cache.reportMissingScopes(sessionToken, svc.id, svc.hostPattern, sent, scopes); err != nil {
+			log.Warn().Err(err).Str("service", svc.name).Str("serviceId", svc.id).
+				Msg("agent-vault: could not report the upstream's required scopes to Infisical")
+		}
+	}()
 	return true
 }
 

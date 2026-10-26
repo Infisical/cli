@@ -3,6 +3,8 @@ package agentvault
 import (
 	"bytes"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -135,7 +137,7 @@ type mcpUpstream struct {
 func newMCPUpstream(t *testing.T) *mcpUpstream {
 	t.Helper()
 	u := &mcpUpstream{bodies: make(chan []byte, 1), auth: make(chan string, 1)}
-	u.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	u.server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		u.bodies <- body
 		u.auth <- r.Header.Get("Authorization")
@@ -145,7 +147,44 @@ func newMCPUpstream(t *testing.T) *mcpUpstream {
 	return u
 }
 
-func (u *mcpUpstream) host() string { return strings.TrimPrefix(u.server.URL, "http://") }
+func (u *mcpUpstream) host() string { return strings.TrimPrefix(u.server.URL, "https://") }
+
+// newRecordingProxy with the TLS the proxy insists on for an MCP service: the proxy trusts the upstream's
+// certificate and the returned client trusts the proxy's CA, as well as the upstream for an unmatched host.
+func newMCPRecordingProxy(t *testing.T, up *mcpUpstream, services []*resolvedService) (*http.Client, *sessionLogRecorder) {
+	t.Helper()
+
+	key, cert, err := generateRootCa()
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstreamPool := x509.NewCertPool()
+	upstreamPool.AddCert(up.server.Certificate())
+	transport := newUpstreamTransport()
+	transport.TLSClientConfig = &tls.Config{RootCAs: upstreamPool}
+
+	ps := &proxyServer{transport: transport, ca: newCaManager(key, cert)}
+	ps.setConfig(ProxyConfig{TrafficPolicy: TrafficPolicyAnyHost})
+	ps.cache = newSessionCache(grantingResolver{services: services}, ps.pollInterval)
+	ps.sessionLogs = newSessionLogRecorder("proxy-1", &fakeShipper{})
+
+	front := httptest.NewServer(http.HandlerFunc(ps.dispatch))
+	t.Cleanup(front.Close)
+
+	proxyURL, err := url.Parse(front.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyURL.User = url.UserPassword("infisical", "agv_test-token")
+	clientPool := x509.NewCertPool()
+	clientPool.AddCert(cert)
+	clientPool.AddCert(up.server.Certificate())
+	client := &http.Client{Transport: &http.Transport{
+		Proxy:           http.ProxyURL(proxyURL),
+		TLSClientConfig: &tls.Config{RootCAs: clientPool},
+	}}
+	return client, ps.sessionLogs
+}
 
 func mcpService(host string, subs ...substitution) *resolvedService {
 	svc := policyService(host, nil, nil, nil, subs)
@@ -155,15 +194,8 @@ func mcpService(host string, subs ...substitution) *resolvedService {
 	return svc
 }
 
-func proxiedDo(t *testing.T, front *httptest.Server, method, target, contentType string, body io.Reader, header http.Header) *http.Response {
+func proxiedDo(t *testing.T, client *http.Client, method, target, contentType string, body io.Reader, header http.Header) *http.Response {
 	t.Helper()
-	proxyURL, err := url.Parse(front.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	proxyURL.User = url.UserPassword("infisical", "agv_test-token")
-	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
-
 	req, err := http.NewRequest(method, target, body)
 	if err != nil {
 		t.Fatal(err)
@@ -194,10 +226,10 @@ func recordJSON(t *testing.T, rec sessionLogRecord) string {
 
 func TestAnMCPToolCallIsRecordedAndForwardedUnchanged(t *testing.T) {
 	up := newMCPUpstream(t)
-	front, log, _ := newRecordingProxy(t, TrafficPolicyAnyHost, []*resolvedService{mcpService(up.host())})
+	client, log := newMCPRecordingProxy(t, up, []*resolvedService{mcpService(up.host())})
 
 	body := `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"create_issue","arguments":{"title":"Bug","Authorization":"x"}}}`
-	proxiedDo(t, front, http.MethodPost, up.server.URL+"/mcp", "application/json; charset=utf-8", strings.NewReader(body), nil)
+	proxiedDo(t, client, http.MethodPost, up.server.URL+"/mcp", "application/json; charset=utf-8", strings.NewReader(body), nil)
 
 	if got := <-up.bodies; string(got) != body {
 		t.Fatalf("upstream body changed:\n got %s\nwant %s", got, body)
@@ -228,10 +260,10 @@ func TestAnMCPToolCallIsRecordedAndForwardedUnchanged(t *testing.T) {
 
 func TestAnMCPBatchAndNotificationAreRecorded(t *testing.T) {
 	up := newMCPUpstream(t)
-	front, log, _ := newRecordingProxy(t, TrafficPolicyAnyHost, []*resolvedService{mcpService(up.host())})
+	client, log := newMCPRecordingProxy(t, up, []*resolvedService{mcpService(up.host())})
 
 	body := `[{"jsonrpc":"2.0","method":"notifications/initialized"},{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search"}}]`
-	proxiedDo(t, front, http.MethodPost, up.server.URL+"/mcp", "application/json", strings.NewReader(body), nil)
+	proxiedDo(t, client, http.MethodPost, up.server.URL+"/mcp", "application/json", strings.NewReader(body), nil)
 	<-up.bodies
 
 	rec := drainOneRecord(t, log)
@@ -258,13 +290,13 @@ func TestAnMCPBodyTheProxyCannotTrustIsRecordedUnparsedAndForwarded(t *testing.T
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			up := newMCPUpstream(t)
-			front, log, _ := newRecordingProxy(t, TrafficPolicyAnyHost, []*resolvedService{mcpService(up.host())})
+			client, log := newMCPRecordingProxy(t, up, []*resolvedService{mcpService(up.host())})
 
 			var reader io.Reader = strings.NewReader(tc.body)
 			if tc.chunked {
 				reader = io.MultiReader(reader)
 			}
-			res := proxiedDo(t, front, http.MethodPost, up.server.URL+"/mcp", "application/json", reader, tc.header)
+			res := proxiedDo(t, client, http.MethodPost, up.server.URL+"/mcp", "application/json", reader, tc.header)
 			if res.StatusCode != http.StatusOK {
 				t.Fatalf("status %d; parsing must never block a request", res.StatusCode)
 			}
@@ -303,13 +335,13 @@ func TestMCPDetailIsOmittedWhereNoParseIsAttempted(t *testing.T) {
 			up := newMCPUpstream(t)
 			svc := mcpService(up.host())
 			svc.kind = tc.kind
-			front, log, _ := newRecordingProxy(t, TrafficPolicyAnyHost, []*resolvedService{svc})
+			client, log := newMCPRecordingProxy(t, up, []*resolvedService{svc})
 
 			var body io.Reader
 			if tc.body != "" {
 				body = strings.NewReader(tc.body)
 			}
-			proxiedDo(t, front, tc.method, up.server.URL+"/mcp", tc.contentType, body, nil)
+			proxiedDo(t, client, tc.method, up.server.URL+"/mcp", tc.contentType, body, nil)
 			if got := <-up.bodies; string(got) != tc.body {
 				t.Fatalf("upstream body changed: %q", got)
 			}
@@ -330,10 +362,10 @@ func TestMCPDetailIsOmittedWhereNoParseIsAttempted(t *testing.T) {
 
 func TestAnUnmatchedHostRecordsANullServiceType(t *testing.T) {
 	up := newMCPUpstream(t)
-	front, log, _ := newRecordingProxy(t, TrafficPolicyAnyHost, nil)
+	client, log := newMCPRecordingProxy(t, up, nil)
 
 	body := `{"method":"tools/call","params":{"name":"x"}}`
-	proxiedDo(t, front, http.MethodPost, up.server.URL+"/mcp", "application/json", strings.NewReader(body), nil)
+	proxiedDo(t, client, http.MethodPost, up.server.URL+"/mcp", "application/json", strings.NewReader(body), nil)
 	<-up.bodies
 
 	rec := drainOneRecord(t, log)
@@ -348,12 +380,12 @@ func TestAnUnmatchedHostRecordsANullServiceType(t *testing.T) {
 
 func TestMCPParsingSeesTheBodyBeforeABodySubstitution(t *testing.T) {
 	up := newMCPUpstream(t)
-	front, log, _ := newRecordingProxy(t, TrafficPolicyAnyHost, []*resolvedService{
+	client, log := newMCPRecordingProxy(t, up, []*resolvedService{
 		mcpService(up.host(), subOn("__TOOL__", "secret_tool", surfaceBody)),
 	})
 
 	body := `{"method":"tools/call","params":{"name":"lookup","arguments":{"key":"__TOOL__"}}}`
-	proxiedDo(t, front, http.MethodPost, up.server.URL+"/mcp", "application/json", strings.NewReader(body), nil)
+	proxiedDo(t, client, http.MethodPost, up.server.URL+"/mcp", "application/json", strings.NewReader(body), nil)
 
 	want := strings.Replace(body, "__TOOL__", "secret_tool", 1)
 	if got := <-up.bodies; string(got) != want {
@@ -371,11 +403,11 @@ func TestMCPParsingSeesTheBodyBeforeABodySubstitution(t *testing.T) {
 
 func TestASubstitutedToolNameIsLoggedAsTheAgentSentIt(t *testing.T) {
 	up := newMCPUpstream(t)
-	front, log, _ := newRecordingProxy(t, TrafficPolicyAnyHost, []*resolvedService{
+	client, log := newMCPRecordingProxy(t, up, []*resolvedService{
 		mcpService(up.host(), subOn("__TOOL__", "secret_tool", surfaceBody)),
 	})
 
-	proxiedDo(t, front, http.MethodPost, up.server.URL+"/mcp", "application/json",
+	proxiedDo(t, client, http.MethodPost, up.server.URL+"/mcp", "application/json",
 		strings.NewReader(`{"method":"tools/call","params":{"name":"__TOOL__"}}`), nil)
 	if got := <-up.bodies; !bytes.Contains(got, []byte("secret_tool")) {
 		t.Fatalf("the substitution never fired, so this proves nothing: %s", got)

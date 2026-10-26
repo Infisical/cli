@@ -583,7 +583,7 @@ func (c *sessionCache) currentCredential(key, serviceID, hostPattern string) (cr
 }
 
 // Copy on write: requests in flight hold pointers into the old slice and read it without the lock. A newer
-// cached credential wins over a delayed refresh or scope report, including the credential returned for retry.
+// cached credential wins over a delayed refresh, including the credential returned for retry.
 // A poll that removed the session or the service during the refresh revoked that access, so the fresh token
 // is refused rather than handed to a retry.
 func (c *sessionCache) swapCredential(key, serviceID, hostPattern, replacedHash string, cred credential) (credential, error) {
@@ -628,7 +628,7 @@ func (c *sessionCache) swapCredential(key, serviceID, hostPattern, replacedHash 
 		}
 		swap.replaced[replacedHash] = true
 		swap.gen = c.swapGen
-		// A scope report swaps in the token it reported, which is current rather than stale.
+		// A refresh can hand back the token it replaced, which is then current rather than stale.
 		delete(swap.replaced, credentialHash(&cred))
 		return cred, nil
 	}

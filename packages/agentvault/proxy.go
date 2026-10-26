@@ -543,6 +543,12 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 		return nil, matched, outcome, fmt.Errorf(
 			"service %q expects TLS on port 443; refusing to broker plain HTTP: %w", matched.name, errPolicyBlocked)
 	}
+	// Infisical only accepts an https:// URL for an MCP server, so plain HTTP is refused whatever the port: a
+	// server on a custom port would otherwise get its token in cleartext.
+	if matched != nil && scheme == "http" && matched.kind == serviceKindMCP {
+		return nil, matched, outcome, fmt.Errorf(
+			"MCP service %q expects TLS; refusing to broker plain HTTP: %w", matched.name, errPolicyBlocked)
+	}
 
 	if matched != nil {
 		// Before anything is injected, so the names it records can only have come from the agent. Parsed

@@ -85,6 +85,19 @@ func (r *oauthResolver) refreshCalls() []refreshCall {
 	return append([]refreshCall(nil), r.calls...)
 }
 
+// Waits for n calls, since a scope report reaches Infisical after the agent already has its answer.
+func (r *oauthResolver) waitForCalls(t *testing.T, n int) []refreshCall {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		calls := r.refreshCalls()
+		if len(calls) >= n || time.Now().After(deadline) {
+			return calls
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func oauthToken(value string) credential {
 	return credential{kind: credentialBearer, headerPrefix: "Bearer", value: []byte(value), refreshable: true}
 }
@@ -445,7 +458,7 @@ func TestInsufficientScopeIsReportedAndNotRetried(t *testing.T) {
 	if got := len(up.recorded()); got != 1 {
 		t.Fatalf("upstream saw %d requests, want no retry", got)
 	}
-	calls := resolver.refreshCalls()
+	calls := resolver.waitForCalls(t, 1)
 	if len(calls) != 1 {
 		t.Fatalf("refresh called %d times, want 1", len(calls))
 	}
@@ -1142,7 +1155,7 @@ func TestOpenAuthErrorBodiesDoNotBlockRecovery(t *testing.T) {
 			if tc.want == http.StatusBadGateway {
 				assertUpstreamAuthFailed(t, resp, body, tc.wantBody)
 			}
-			if got := len(resolver.refreshCalls()); got != tc.refreshes {
+			if got := len(resolver.waitForCalls(t, tc.refreshes)); got != tc.refreshes {
 				t.Fatalf("refresh calls = %d, want %d", got, tc.refreshes)
 			}
 			wantAttempts := 2
