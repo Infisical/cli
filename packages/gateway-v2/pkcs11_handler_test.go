@@ -53,6 +53,7 @@ func (m noopPkcs11Module) Sign(string, []byte, KeyRef, string, []byte, bool, cry
 	return SignResult{}, nil
 }
 func (noopPkcs11Module) FindPrivateKeys(string, []byte, string) ([]KeyInfo, error) { return nil, nil }
+func (noopPkcs11Module) SupportsMlDsa() bool                                       { return false }
 func (noopPkcs11Module) Finalize() error                                           { return nil }
 
 func TestBadRequestKeepsItsMessage(t *testing.T) {

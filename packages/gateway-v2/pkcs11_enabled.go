@@ -35,8 +35,9 @@ const (
 )
 
 type pkcs11ModuleImpl struct {
-	mu  sync.Mutex
-	ctx *pkcs11.Ctx
+	mu            sync.Mutex
+	ctx           *pkcs11.Ctx
+	supportsMlDsa bool
 }
 
 func LoadPkcs11Module(path string) (Pkcs11Module, error) {
@@ -62,7 +63,8 @@ func LoadPkcs11Module(path string) (Pkcs11Module, error) {
 			}
 		}
 	}
-	if _, err := ctx.GetSlotList(true); err != nil {
+	slots, err := ctx.GetSlotList(true)
+	if err != nil {
 		_ = ctx.Finalize()
 		ctx.Destroy()
 		return nil, &Pkcs11Error{
@@ -70,7 +72,37 @@ func LoadPkcs11Module(path string) (Pkcs11Module, error) {
 			Message: fmt.Sprintf("PKCS#11 C_GetSlotList failed: %v", err),
 		}
 	}
-	return &pkcs11ModuleImpl{ctx: ctx}, nil
+	return &pkcs11ModuleImpl{ctx: ctx, supportsMlDsa: slotsSupportMlDsa(ctx, slots)}, nil
+}
+
+func slotsSupportMlDsa(ctx *pkcs11.Ctx, slots []uint) bool {
+	for _, slot := range slots {
+		mechanisms, err := ctx.GetMechanismList(slot)
+		if err != nil {
+			continue
+		}
+		hasKeyGen, hasSign := false, false
+		for _, mechanism := range mechanisms {
+			switch mechanism.Mechanism {
+			case ckmMlDsaKeyPairGen:
+				hasKeyGen = true
+			case ckmMlDsa:
+				hasSign = true
+			}
+		}
+		if hasKeyGen && hasSign {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *pkcs11ModuleImpl) SupportsMlDsa() bool {
+	return m.supportsMlDsa
+}
+
+func isDeviceUnavailable(e pkcs11.Error) bool {
+	return e == pkcs11.CKR_TOKEN_NOT_PRESENT || e == pkcs11.CKR_DEVICE_REMOVED || e == pkcs11.CKR_DEVICE_ERROR
 }
 
 func (m *pkcs11ModuleImpl) Finalize() error {
@@ -151,7 +183,8 @@ func mapPkcs11LoginError(err error) error {
 			return &Pkcs11Error{Code: Pkcs11ErrPinIncorrect, Message: "The HSM rejected the PIN"}
 		case pkcs11.CKR_PIN_LOCKED:
 			return &Pkcs11Error{Code: Pkcs11ErrPinLocked, Message: "The HSM has locked the slot"}
-		case pkcs11.CKR_TOKEN_NOT_PRESENT, pkcs11.CKR_DEVICE_REMOVED, pkcs11.CKR_DEVICE_ERROR:
+		}
+		if isDeviceUnavailable(e) {
 			return &Pkcs11Error{Code: Pkcs11ErrDriverUnavailable, Message: "Driver unavailable"}
 		}
 	}
@@ -186,18 +219,27 @@ func (m *pkcs11ModuleImpl) GenerateKeyPair(slotLabel string, pin []byte, keyLabe
 		if err != nil {
 			return err
 		}
-		pubHandle, _, err := m.ctx.GenerateKeyPair(session, mech, pubTpl, privTpl)
+		pubHandle, privHandle, err := m.ctx.GenerateKeyPair(session, mech, pubTpl, privTpl)
 		if err != nil {
-			return &Pkcs11Error{Code: Pkcs11ErrInternal, Message: "GenerateKeyPair failed"}
+			return mapPkcs11GenerateError(err, keyAlgorithm)
 		}
 		der, err := buildSpkiFromHandle(m.ctx, session, pubHandle, keyAlgorithm)
 		if err != nil {
+			destroyGeneratedKeyPair(m.ctx, session, keyLabel, pubHandle, privHandle)
 			return err
 		}
 		generated = GeneratedKey{PublicKey: der, KeyID: keyID}
 		return nil
 	})
 	return generated, err
+}
+
+func destroyGeneratedKeyPair(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, keyLabel string, handles ...pkcs11.ObjectHandle) {
+	for _, handle := range handles {
+		if err := ctx.DestroyObject(session, handle); err != nil {
+			log.Warn().Err(err).Str("keyLabel", keyLabel).Msg("pkcs11: failed to remove a generated key whose public key could not be read")
+		}
+	}
 }
 
 func generateKeyPairTemplates(keyLabel string, keyID []byte, keyAlgorithm string) ([]*pkcs11.Mechanism, []*pkcs11.Attribute, []*pkcs11.Attribute, error) {
@@ -233,6 +275,10 @@ func generateKeyPairTemplates(keyLabel string, keyID []byte, keyAlgorithm string
 	case KeyAlgorithmECCP384:
 		pubTpl := append(commonPub, pkcs11.NewAttribute(pkcs11.CKA_EC_PARAMS, ecParamsP384))
 		return []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_EC_KEY_PAIR_GEN, nil)}, pubTpl, commonPriv, nil
+	case KeyAlgorithmMLDSA44, KeyAlgorithmMLDSA65, KeyAlgorithmMLDSA87:
+		params, _ := mlDsaParamsByKeyAlgorithm(keyAlgorithm)
+		pubTpl := append(commonPub, pkcs11.NewAttribute(ckaParameterSet, params.parameterSet))
+		return []*pkcs11.Mechanism{pkcs11.NewMechanism(ckmMlDsaKeyPairGen, nil)}, pubTpl, commonPriv, nil
 	default:
 		return nil, nil, nil, &Pkcs11Error{Code: Pkcs11ErrMechanismInvalid, Message: fmt.Sprintf("Unsupported keyAlgorithm %q", keyAlgorithm)}
 	}
@@ -304,6 +350,19 @@ func buildSpkiFromHandle(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, pubHandl
 			return nil, &Pkcs11Error{Code: Pkcs11ErrInternal, Message: "MarshalPKIXPublicKey failed"}
 		}
 		return der, nil
+
+	case KeyAlgorithmMLDSA44, KeyAlgorithmMLDSA65, KeyAlgorithmMLDSA87:
+		attrs, err := ctx.GetAttributeValue(session, pubHandle, []*pkcs11.Attribute{
+			pkcs11.NewAttribute(pkcs11.CKA_VALUE, nil),
+		})
+		if err != nil || len(attrs) == 0 {
+			return nil, &Pkcs11Error{Code: Pkcs11ErrInternal, Message: "ML-DSA GetAttributeValue failed"}
+		}
+		der, err := mlDsaSpkiFromValue(keyAlgorithm, attrs[0].Value)
+		if err != nil {
+			return nil, &Pkcs11Error{Code: Pkcs11ErrInternal, Message: err.Error()}
+		}
+		return der, nil
 	}
 	return nil, &Pkcs11Error{Code: Pkcs11ErrMechanismInvalid, Message: "Unsupported keyAlgorithm for SPKI build"}
 }
@@ -330,6 +389,15 @@ func (m *pkcs11ModuleImpl) GetPublicKey(slotLabel string, pin []byte, key KeyRef
 		return nil
 	})
 	return spkiDer, err
+}
+
+func mlDsaParamsByParameterSet(parameterSet uint) (mlDsaParams, bool) {
+	for _, p := range mlDsaParamsList {
+		if p.parameterSet == parameterSet {
+			return p, true
+		}
+	}
+	return mlDsaParams{}, false
 }
 
 func detectKeyAlgorithm(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, handle pkcs11.ObjectHandle) (string, error) {
@@ -368,6 +436,16 @@ func detectKeyAlgorithm(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, handle pk
 			return KeyAlgorithmECCP384, nil
 		}
 		return "", &Pkcs11Error{Code: Pkcs11ErrMechanismInvalid, Message: "Unsupported EC curve"}
+	case ckkMlDsa:
+		paramAttrs, err := ctx.GetAttributeValue(session, handle, []*pkcs11.Attribute{pkcs11.NewAttribute(ckaParameterSet, nil)})
+		if err != nil || len(paramAttrs) == 0 {
+			return "", keyAttributeReadError(err)
+		}
+		params, ok := mlDsaParamsByParameterSet(decodeUlong(paramAttrs[0].Value))
+		if !ok {
+			return "", &Pkcs11Error{Code: Pkcs11ErrMechanismInvalid, Message: "Unsupported ML-DSA parameter set"}
+		}
+		return params.keyAlgorithm, nil
 	}
 	return "", &Pkcs11Error{Code: Pkcs11ErrMechanismInvalid, Message: fmt.Sprintf("Unsupported PKCS#11 key type: %d", keyType)}
 }
@@ -379,7 +457,7 @@ func keyAttributeReadError(err error) error {
 	if err == nil || (ok && (e == pkcs11.CKR_ATTRIBUTE_TYPE_INVALID || e == pkcs11.CKR_ATTRIBUTE_SENSITIVE)) {
 		return errKeyAttributeUnreadable
 	}
-	if ok && (e == pkcs11.CKR_TOKEN_NOT_PRESENT || e == pkcs11.CKR_DEVICE_REMOVED || e == pkcs11.CKR_DEVICE_ERROR) {
+	if ok && isDeviceUnavailable(e) {
 		return &Pkcs11Error{Code: Pkcs11ErrDriverUnavailable, Message: "Driver unavailable"}
 	}
 	return &Pkcs11Error{Code: Pkcs11ErrInternal, Message: fmt.Sprintf("Failed to read key attributes: %v", err)}
@@ -559,6 +637,8 @@ func assertKeyTypeMatchesMechanism(keyType []byte, mechanism string) error {
 		expected = pkcs11.CKK_RSA
 	case strings.Contains(mechanism, "ECDSA"):
 		expected = pkcs11.CKK_EC
+	case mechanism == mechanismMlDsa:
+		expected = ckkMlDsa
 	default:
 		return nil
 	}
@@ -611,8 +691,30 @@ func resolveMechanism(name string, isDigest bool) (uint, []byte, error) {
 		return pkcs11.CKM_ECDSA_SHA384, nil, nil
 	case "CKM_ECDSA":
 		return pkcs11.CKM_ECDSA, nil, nil
+	case mechanismMlDsa:
+		if isDigest {
+			return 0, nil, &Pkcs11Error{Code: Pkcs11ErrBadRequest, Message: "CKM_ML_DSA signs the full message, so it requires isDigest=false"}
+		}
+		return ckmMlDsa, nil, nil
 	}
 	return 0, nil, &Pkcs11Error{Code: Pkcs11ErrMechanismInvalid, Message: fmt.Sprintf("Unsupported mechanism %q", name)}
+}
+
+func mapPkcs11GenerateError(err error, keyAlgorithm string) error {
+	e, ok := err.(pkcs11.Error)
+	if !ok {
+		return &Pkcs11Error{Code: Pkcs11ErrInternal, Message: "GenerateKeyPair failed"}
+	}
+	_, isMlDsa := mlDsaParamsByKeyAlgorithm(keyAlgorithm)
+	switch {
+	case e == pkcs11.CKR_MECHANISM_INVALID:
+		return &Pkcs11Error{Code: Pkcs11ErrMechanismInvalid, Message: "The HSM does not support the requested key algorithm"}
+	case isMlDsa && (e == pkcs11.CKR_ATTRIBUTE_TYPE_INVALID || e == pkcs11.CKR_ATTRIBUTE_VALUE_INVALID || e == pkcs11.CKR_TEMPLATE_INCONSISTENT):
+		return &Pkcs11Error{Code: Pkcs11ErrMechanismInvalid, Message: "The HSM does not support the requested ML-DSA parameter set"}
+	case isDeviceUnavailable(e):
+		return &Pkcs11Error{Code: Pkcs11ErrDriverUnavailable, Message: "Driver unavailable"}
+	}
+	return &Pkcs11Error{Code: Pkcs11ErrInternal, Message: fmt.Sprintf("GenerateKeyPair failed: %v", e)}
 }
 
 func mapPkcs11SignError(err error) error {
@@ -622,7 +724,8 @@ func mapPkcs11SignError(err error) error {
 			return &Pkcs11Error{Code: Pkcs11ErrKeyNotFound, Message: "The HSM rejected the key handle"}
 		case pkcs11.CKR_MECHANISM_INVALID, pkcs11.CKR_KEY_TYPE_INCONSISTENT:
 			return &Pkcs11Error{Code: Pkcs11ErrMechanismInvalid, Message: "The HSM does not support the requested signing algorithm"}
-		case pkcs11.CKR_TOKEN_NOT_PRESENT, pkcs11.CKR_DEVICE_REMOVED, pkcs11.CKR_DEVICE_ERROR:
+		}
+		if isDeviceUnavailable(e) {
 			return &Pkcs11Error{Code: Pkcs11ErrDriverUnavailable, Message: "Driver unavailable"}
 		}
 	}

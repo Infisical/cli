@@ -5,12 +5,15 @@ import (
 	"crypto/ecdsa"
 	"crypto/rsa"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"math/big"
 	"strings"
 )
 
 var errSignatureMismatch = &Pkcs11Error{Code: Pkcs11ErrSignatureMismatch, Message: "Signature does not verify with the expected public key"}
+
+var errMlDsaKeyUnverifiable = &Pkcs11Error{Code: Pkcs11ErrBadRequest, Message: "The HSM does not reveal this key's type and ID, so the gateway cannot confirm it is the expected ML-DSA key"}
 
 func mechanismHash(mechanism string) (crypto.Hash, error) {
 	switch mechanism {
@@ -27,13 +30,20 @@ func mechanismHash(mechanism string) (crypto.Hash, error) {
 }
 
 const (
-	maxPublicKeySpkiBytes = 1024
+	maxPublicKeySpkiBytes = 4096
 	maxRsaModulusBits     = 4096
 )
 
 func parseExpectedPublicKey(publicKeySpki []byte) (crypto.PublicKey, error) {
 	if len(publicKeySpki) > maxPublicKeySpkiBytes {
 		return nil, &Pkcs11Error{Code: Pkcs11ErrBadRequest, Message: "publicKey is too large"}
+	}
+	mlDsaKey, err := parseMlDsaSpki(publicKeySpki)
+	if err == nil {
+		return mlDsaKey, nil
+	}
+	if !errors.Is(err, errNotMlDsaSpki) {
+		return nil, &Pkcs11Error{Code: Pkcs11ErrBadRequest, Message: fmt.Sprintf("publicKey is a %v", err)}
 	}
 	pub, err := x509.ParsePKIXPublicKey(publicKeySpki)
 	if err != nil {
@@ -48,6 +58,9 @@ func parseExpectedPublicKey(publicKeySpki []byte) (crypto.PublicKey, error) {
 func completeSign(signature []byte, attrsReadable bool, readKeyID []byte, key KeyRef, expectedPublicKey crypto.PublicKey, mechanism string, isDigest bool, data []byte) (SignResult, error) {
 	if attrsReadable {
 		return SignResult{Signature: signature, KeyID: readKeyID}, nil
+	}
+	if _, ok := expectedPublicKey.(*mlDsaPublicKey); ok {
+		return SignResult{}, errMlDsaKeyUnverifiable
 	}
 	if expectedPublicKey != nil {
 		if err := verifySignature(expectedPublicKey, mechanism, isDigest, data, signature); err != nil {

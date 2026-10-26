@@ -9,3 +9,5 @@ const CapabilitySupportedAccountTypes = "supported_account_types"
 const CapabilityClickhouseNativeProtocol = "clickhouseNativeProtocol"
 
 const CapabilityCertificateScan = "certificateScan"
+
+const CapabilityPkcs11MlDsa = "pkcs11MlDsa"
