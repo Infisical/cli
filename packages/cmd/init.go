@@ -28,7 +28,7 @@ var initCmd = &cobra.Command{
 	Example: `# Pick an organization and project interactively
 infisical init
 
-# Link this directory to a known project without prompting (the ID is in the project's settings in the dashboard)
+# Link this directory to a known project without prompting (see infisical sm projects list)
 infisical init --project-id <project-id>`,
 	Args: cobra.ExactArgs(0),
 	PreRun: func(cmd *cobra.Command, args []string) {
@@ -36,6 +36,8 @@ infisical init --project-id <project-id>`,
 	},
 	Run: func(cmd *cobra.Command, args []string) {
 		projectID, _ := cmd.Flags().GetString("project-id")
+		silent, _ := cmd.Flags().GetBool("silent")
+		showMessages := !silent && !isStructuredOutputRequested(cmd)
 
 		if util.WorkspaceConfigFileExistsInCurrentPath() {
 			if !isatty.IsTerminal(os.Stdin.Fd()) {
@@ -57,7 +59,7 @@ infisical init --project-id <project-id>`,
 		// The org and project pickers below need a terminal. Without one, exit and
 		// point at --project-id instead of prompting.
 		if projectID == "" && !isatty.IsTerminal(os.Stdin.Fd()) {
-			util.PrintErrorMessageAndExit("No terminal available to pick a project. Pass --project-id <id> (you can find it in your project's settings in the Infisical dashboard).")
+			util.PrintErrorMessageAndExit("No terminal available to pick a project. Pass --project-id <id> (see [infisical sm projects list], or create one with [infisical sm projects create --name <name>]).")
 		}
 
 		userCreds, err := util.GetCurrentLoggedInUserDetails(true)
@@ -77,7 +79,7 @@ infisical init --project-id <project-id>`,
 			if userCreds.OrganizationID != "" {
 				rejectTransientOrgOverride(userCreds)
 			}
-			if err := writeWorkspaceFile(models.Workspace{ID: projectID}); err != nil {
+			if err := writeWorkspaceFile(models.Workspace{ID: projectID}, showMessages); err != nil {
 				util.HandleError(err)
 			}
 			hintDirectoryProfileBinding(userCreds)
@@ -167,7 +169,7 @@ infisical init --project-id <project-id>`,
 			util.HandleError(err)
 		}
 
-		err = writeWorkspaceFile(filteredWorkspaces[index])
+		err = writeWorkspaceFile(filteredWorkspaces[index], showMessages)
 		if err != nil {
 			util.HandleError(err)
 		}
@@ -335,8 +337,9 @@ func pickOrganization(httpClient *resty.Client, label string, username string) (
 	return subItems[subIndex].ID, &selectedSubOrgName, nil
 }
 
-func writeWorkspaceFile(selectedWorkspace models.Workspace) error {
+func writeWorkspaceFile(selectedWorkspace models.Workspace, showMessages bool) error {
 	workspaceFileToSave := models.WorkspaceConfigFileYaml{
+		Version: util.INFISICAL_WORKSPACE_CONFIG_YAML_VERSION,
 		SecretsManagement: models.SecretsManagementConfigSection{
 			ProjectID: selectedWorkspace.ID,
 		},
@@ -347,14 +350,14 @@ func writeWorkspaceFile(selectedWorkspace models.Workspace) error {
 		return err
 	}
 
-	err = util.WriteFileAtomic(util.INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, marshalledWorkspaceFile, 0o600)
+	err = util.WriteFileAtomic(util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME, marshalledWorkspaceFile, 0o600)
 	if err != nil {
 		return err
 	}
 
 	// the legacy file is left in place; .infisical.yaml takes precedence over it from now on
-	if _, err := os.Stat(util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME); err == nil {
-		util.PrintWarning(fmt.Sprintf("The legacy %s in this directory is no longer used because %s takes precedence. You can delete it.", util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME, util.INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME))
+	if _, err := os.Stat(util.LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME); err == nil && showMessages {
+		util.PrintWarning(fmt.Sprintf("The legacy %s in this directory is no longer used because %s takes precedence. You can delete it.", util.LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME, util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME))
 	}
 
 	return nil

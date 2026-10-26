@@ -12,14 +12,12 @@ import (
 	"github.com/Infisical/infisical-merge/packages/util"
 )
 
-// The data directory persists because of the CA, not the enrollment: an agent that trusted this proxy's
-// certificate must keep trusting it across restarts.
+// What a proxy enrolled before proxy tokens saved in its data directory. It is only read now, apart from
+// settings changes the heartbeat brings.
 const (
 	caKeyFile      = "ca.key"
 	caCertFile     = "ca.crt"
 	proxyStateFile = "proxy.json"
-
-	probeBytes = 8 << 10
 )
 
 func DefaultDataDir() (string, error) {
@@ -35,11 +33,10 @@ func DefaultDataDir() (string, error) {
 
 // Same keys as the enroll response it was built from, so the file reads like the API did.
 type persistedState struct {
-	ProxyID         string      `json:"proxyId"`
-	ProxyName       string      `json:"proxyName"`
-	AccessToken     string      `json:"accessToken"`
-	EnrollmentToken string      `json:"enrollmentToken"`
-	Config          ProxyConfig `json:"config"`
+	ProxyID     string      `json:"proxyId"`
+	ProxyName   string      `json:"proxyName"`
+	AccessToken string      `json:"accessToken"`
+	Config      ProxyConfig `json:"config"`
 }
 
 type ProxyConfig struct {
@@ -59,25 +56,6 @@ func (s *store) ensureDir() error {
 		return fmt.Errorf("failed to create the data directory %q: %w", s.dir, err)
 	}
 	return nil
-}
-
-// Enrollment spends a one-time token on the server, so the directory is proved writable first. MkdirAll
-// passes on a read-only directory that already exists, and an empty file can be created on a full disk,
-// so the probe writes about as many bytes as the CA and state files will.
-func (s *store) probeWritable() error {
-	if err := s.ensureDir(); err != nil {
-		return err
-	}
-	probe, err := os.CreateTemp(s.dir, ".probe-*")
-	if err != nil {
-		return fmt.Errorf("the data directory %q is not writable, so enrolling would spend the token with nowhere to store the result: %w", s.dir, err)
-	}
-	defer func() { _ = os.Remove(probe.Name()) }()
-	if _, err := probe.Write(make([]byte, probeBytes)); err != nil {
-		_ = probe.Close()
-		return fmt.Errorf("the data directory %q cannot take new files, so enrolling would spend the token with nowhere to store the result: %w", s.dir, err)
-	}
-	return probe.Close()
 }
 
 func (s *store) path(name string) string { return filepath.Join(s.dir, name) }
@@ -112,36 +90,13 @@ func (s *store) loadCa() (*ecdsa.PrivateKey, *x509.Certificate, error) {
 		return nil, nil, fmt.Errorf("failed to parse the stored certificate authority: %w", err)
 	}
 
-	// A re-enrollment interrupted between the two files leaves a new key beside the old certificate, and
+	// A re-enrollment interrupted between the two files left a new key beside the old certificate, and
 	// both parse, so the pair is checked here.
-	certKey, ok := cert.PublicKey.(*ecdsa.PublicKey)
-	if !ok || !certKey.Equal(&key.PublicKey) {
+	if !keyMatchesCert(key, cert) {
 		return nil, nil, fmt.Errorf(
-			"the certificate authority in %s does not match its private key, so an earlier re-enrollment was interrupted. Enroll again with a new token from the Proxies page", s.dir)
+			"the certificate authority in %s does not match its private key. Restore both files from a backup, or start the proxy with a proxy token from the Proxies page", s.dir)
 	}
 	return key, cert, nil
-}
-
-func (s *store) saveCa(key *ecdsa.PrivateKey, cert *x509.Certificate) error {
-	if err := s.ensureDir(); err != nil {
-		return err
-	}
-
-	der, err := x509.MarshalECPrivateKey(key)
-	if err != nil {
-		return err
-	}
-
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
-	if err := util.WriteFileAtomic(s.path(caKeyFile), keyPEM, 0o600); err != nil {
-		return fmt.Errorf("failed to write %s: %w", caKeyFile, err)
-	}
-
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
-	if err := util.WriteFileAtomic(s.path(caCertFile), certPEM, 0o644); err != nil {
-		return fmt.Errorf("failed to write %s: %w", caCertFile, err)
-	}
-	return nil
 }
 
 // found tells a missing file from an empty one, which is the difference between a first run and damage.
@@ -155,7 +110,7 @@ func (s *store) loadState() (state persistedState, found bool, err error) {
 	}
 	if err := json.Unmarshal(data, &state); err != nil {
 		return persistedState{}, true, fmt.Errorf(
-			"%s in %s is not valid JSON (%v). Restore it from a backup, or enroll again with a new token from the Proxies page, which replaces the certificate authority", proxyStateFile, s.dir, err)
+			"%s in %s is not valid JSON (%v). Restore it from a backup, or start the proxy with a proxy token from the Proxies page", proxyStateFile, s.dir, err)
 	}
 	return state, true, nil
 }

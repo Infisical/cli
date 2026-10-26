@@ -26,6 +26,7 @@ import (
 const (
 	releaseURLBase            = "https://github.com/Infisical/cli/releases/download"
 	envReleaseURLBaseOverride = "INFISICAL_PKCS11_RELEASE_URL_BASE"
+	pkcs11SystemBinDir        = "/var/lib/infisical/bin"
 )
 
 var pkcs11HTTPClient = &http.Client{Timeout: 90 * time.Second}
@@ -52,12 +53,15 @@ func MaybeExecPkcs11Launcher(pkcs11ModulePath string, originalArgs []string) err
 	return syscall.Exec(binPath, newArgv, os.Environ())
 }
 
-func ensurePkcs11Binary(version, goos, goarch string) (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
+func pkcs11BinDir() string {
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".infisical", "bin")
 	}
-	binDir := filepath.Join(home, ".infisical", "bin")
+	return pkcs11SystemBinDir
+}
+
+func ensurePkcs11Binary(version, goos, goarch string) (string, error) {
+	binDir := pkcs11BinDir()
 	binPath := filepath.Join(binDir, "infisical-pkcs11")
 	verPath := binPath + ".version"
 
@@ -68,7 +72,7 @@ func ensurePkcs11Binary(version, goos, goarch string) (string, error) {
 	}
 
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to create %s for the infisical-pkcs11 binary, set HOME to a writable directory: %w", binDir, err)
 	}
 
 	base := releaseURLBase

@@ -194,13 +194,6 @@ func init() {
 
 		if !util.IsRunningInDocker() && !silent && !isStructuredOutputRequested(cmd) {
 			util.CheckForUpdateWithWriter(cmd.ErrOrStderr())
-			if cmd != migrateConfigCmd {
-				projectConfigDir := ""
-				if f := cmd.Flags().Lookup("project-config-dir"); f != nil {
-					projectConfigDir = f.Value.String()
-				}
-				util.DisplayWorkspaceConfigMigrationNoticeWithWriter(silent, projectConfigDir, cmd.ErrOrStderr())
-			}
 		}
 
 		loggedInDetails, err := util.GetCurrentLoggedInUserDetails(false)
@@ -208,7 +201,7 @@ func init() {
 		if !silent && err == nil && loggedInDetails.IsUserLoggedIn && !loggedInDetails.LoginExpired {
 			token, err := util.GetInfisicalToken(cmd)
 
-			if err == nil && token != nil {
+			if err == nil && token != nil && !ignoresEnvServiceToken(cmd, token) {
 				util.PrintWarningWithWriter(fmt.Sprintf("Your logged-in session is being overwritten by the token provided from the %s.", token.Source), cmd.ErrOrStderr())
 			}
 		}

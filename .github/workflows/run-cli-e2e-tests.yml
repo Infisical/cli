@@ -16,7 +16,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
       - name: Install dependencies
         run: go get .
       - name: Build the CLI
@@ -52,7 +52,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
       - name: Install dependencies
         run: go get .
       - name: Build the CLI
@@ -87,7 +87,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
       - name: Install dependencies
         run: go get .
       - name: Cache cargo registry + target
@@ -151,13 +151,133 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
       - name: Build the CLI
         run: go build -o infisical-cli${{ runner.os == 'Windows' && '.exe' || '' }}
       # --exit-code 0 so leaks in test fixtures don't fail the job; a failed git scan still exits 1.
       - name: Run infisical scan
         run: ./infisical-cli scan -v --exit-code 0
-      # Windows regression check for agent source-path templates (backslash paths).
       # -vet=off: packages/cmd/run.go has existing printf vet failures.
-      - name: Run template path tests
-        run: go test -vet=off -count=1 -run TestProcessTemplate ./packages/cmd/
+      # TestProcessTemplate is the Windows regression check for backslash source-paths in agent templates.
+      - name: Run agent unit tests
+        run: go test -vet=off -count=1 -run 'TestProcessTemplate|AgentService|AgentSystemd|RevokeCredentials|PathsVisibleToSystemd' ./packages/cmd/ ./packages/agent/
+      # The agent points at a closed port, so auth keeps failing and being retried and the service stays up.
+      # Auth failing on the network rather than on reading ./client-id proves relative paths resolve from the config's directory.
+      - name: Test agent service (systemd)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          # the shared systemd unit runs `infisical agent start` from PATH, makes /home inaccessible and has its own /tmp and /var/tmp
+          sudo cp ./infisical-cli /usr/local/bin/infisical
+          dir=/etc/infisical/agents/ci
+          sudo mkdir -p "$dir"
+          echo "client-id" | sudo tee "$dir/client-id" > /dev/null
+          echo "client-secret" | sudo tee "$dir/client-secret" > /dev/null
+          printf '%s\n' 'infisical:' '  address: "http://127.0.0.1:1"' 'auth:' '  type: "universal-auth"' '  config:' '    client-id: "./client-id"' '    client-secret: "./client-secret"' | sudo tee "$dir/agent-config.yaml" > /dev/null
+          # the service logs to the systemd journal
+          journal() { sudo journalctl -u ci-agent.service --no-pager; }
+
+          # a config under /home is refused, since the service could not read it
+          cp "$dir/agent-config.yaml" "$RUNNER_TEMP/agent-config.yaml"
+          if sudo ./infisical-cli agent service install ci-agent --config "$RUNNER_TEMP/agent-config.yaml"; then
+            echo "install accepted a config under /home"
+            exit 1
+          fi
+
+          # a name systemd already uses would override that service
+          if sudo ./infisical-cli agent service install systemd-journald --config "$dir/agent-config.yaml"; then
+            echo "install accepted the name of a system service"
+            exit 1
+          fi
+          test ! -e /etc/systemd/system/systemd-journald.service
+
+          sudo ./infisical-cli agent service install ci-agent --config "$dir/agent-config.yaml"
+          # the service runs as root, so it runs its own copy of the config that only root can change
+          test "$(sudo stat -c '%U %a' /etc/infisical/agents/ci-agent.service-config.yaml)" = "root 600"
+          sudo cmp "$dir/agent-config.yaml" /etc/infisical/agents/ci-agent.service-config.yaml
+          # Type=notify: start only returns once the agent reported it is ready
+          sudo ./infisical-cli agent service start ci-agent
+          systemctl is-active --quiet ci-agent
+
+          for _ in $(seq 1 60); do
+            grep -q "unable to authenticate" <(journal) && break
+            sleep 1
+          done
+          journal
+          grep -q "unable to authenticate" <(journal)
+          if grep -q "unable to get client id" <(journal); then
+            echo "client-id was not resolved from the config directory"
+            exit 1
+          fi
+
+          sudo ./infisical-cli agent service stop ci-agent
+          if systemctl is-active --quiet ci-agent; then
+            echo "service is still active after stop"
+            exit 1
+          fi
+
+          sudo ./infisical-cli agent service uninstall ci-agent
+          test ! -e /etc/systemd/system/ci-agent.service
+          test ! -e /etc/infisical/agents/ci-agent.env.conf
+          test ! -e /etc/infisical/agents/ci-agent.service-config.yaml
+      - name: Test agent service (Windows Service Control Manager)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $dir = Join-Path $env:RUNNER_TEMP 'agent-service'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Set-Content -Path (Join-Path $dir 'client-id') -Value 'client-id'
+          Set-Content -Path (Join-Path $dir 'client-secret') -Value 'client-secret'
+          Set-Content -Path (Join-Path $dir 'agent-config.yaml') -Value @"
+          infisical:
+            address: "http://127.0.0.1:1"
+          auth:
+            type: "universal-auth"
+            config:
+              client-id: "./client-id"
+              client-secret: "./client-secret"
+          "@
+          $config = Join-Path $dir 'agent-config.yaml'
+          $log = Join-Path $env:ProgramData 'Infisical\Agent\ci-agent.log'
+
+          $exe = './infisical-cli.exe'
+          $serviceDir = Join-Path $env:ProgramFiles 'Infisical\Agent\ci-agent'
+
+          & $exe agent service install ci-agent --config $config
+          # the service runs as LocalSystem: it runs its own copies of infisical.exe and the config, and what it runs, obeys
+          # and logs is closed to standard users
+          $configCopy = Join-Path $serviceDir 'service-config.yaml'
+          $binary = (Get-CimInstance Win32_Service -Filter "Name='ci-agent'").PathName
+          if ($binary -notlike "*$serviceDir\infisical.exe*--config*$configCopy*") { throw "the service does not run its own copies of infisical.exe and the config: $binary" }
+          if ((Get-FileHash $configCopy).Hash -ne (Get-FileHash $config).Hash) { throw 'the config copy differs from the config' }
+          foreach ($path in @($configCopy, (Split-Path $log), (Split-Path (Split-Path $log)), $serviceDir)) {
+            if ((Get-Acl $path).Access | Where-Object { $_.IdentityReference -match 'Users' }) { throw "$path is still accessible to standard users" }
+          }
+          & $exe agent service start ci-agent
+          if ((Get-Service ci-agent).Status -ne 'Running') { throw 'service is not running after start' }
+
+          $deadline = (Get-Date).AddSeconds(60)
+          while (-not ((Test-Path $log) -and (Select-String -Path $log -Pattern 'unable to authenticate' -Quiet))) {
+            if ((Get-Date) -gt $deadline) { throw 'the agent did not log an authentication attempt' }
+            Start-Sleep -Seconds 1
+          }
+          Get-Content $log
+          if (Select-String -Path $log -Pattern 'unable to get client id' -Quiet) { throw 'client-id was not resolved from the config directory' }
+
+          # errors are copied into the Application event log under the service name
+          $errors = Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'ci-agent'; Level = 2 } -MaxEvents 5
+          $errors | Format-List TimeCreated, Message
+
+          & $exe agent service stop ci-agent
+          if ((Get-Service ci-agent).Status -ne 'Stopped') { throw 'service did not stop' }
+
+          & $exe agent service uninstall ci-agent
+          # the SCM removes a deleted service once the last handle to it closes
+          $deadline = (Get-Date).AddSeconds(15)
+          while (Get-Service ci-agent -ErrorAction SilentlyContinue) {
+            if ((Get-Date) -gt $deadline) { throw 'service still exists after uninstall' }
+            Start-Sleep -Seconds 1
+          }
+          if (Test-Path $serviceDir) { throw "uninstall left $serviceDir behind" }

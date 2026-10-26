@@ -19,12 +19,13 @@ var secretsManagementCommands = []func() *cobra.Command{
 func init() {
 	smCmd := &cobra.Command{
 		Use:   smCommandName,
-		Short: "Secrets Management commands (run, export, secrets, dynamic-secrets, agent-proxy)",
+		Short: "Secrets Management commands (run, export, secrets, dynamic-secrets, agent-proxy, projects)",
 		Example: `  infisical sm run --env=dev -- npm run dev
   infisical sm export --env=prod --format=json
   infisical sm secrets get DB_PASSWORD
   infisical sm dynamic-secrets lease create my-db-credentials
-  infisical sm agent-proxy run --env=dev --path=/myapp -- claude`,
+  infisical sm agent-proxy run --env=dev --path=/myapp -- claude
+  infisical sm projects create --name my-app`,
 		DisableFlagsInUseLine: true,
 		// Without Args and Run, cobra prints help and exits 0 for `infisical sm rnu`, so a typo
 		// would look like success. NoArgs turns it into an "unknown command" error instead.
@@ -42,6 +43,7 @@ func init() {
 	}
 
 	smCmd.AddCommand(buildAgentProxyCmd())
+	smCmd.AddCommand(buildProjectsCmd())
 
 	RootCmd.AddCommand(smCmd)
 }

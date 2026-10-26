@@ -45,6 +45,7 @@ certificates:
         timeout: 10
 
     file-output:
+      combine-certificate-chain: false # Set true to write leaf + chain to certificate.path, skipping chain.path
       private-key:
         path: "./certs/web-server/private.key"
         permission: "0600"

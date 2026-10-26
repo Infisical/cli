@@ -37,7 +37,7 @@ func writeWorkspaceYaml(t *testing.T, contents string) {
 	t.Helper()
 	dir := t.TempDir()
 	t.Chdir(dir)
-	if err := os.WriteFile(filepath.Join(dir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME), []byte(contents), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME), []byte(contents), 0o600); err != nil {
 		t.Fatalf("write workspace yaml: %v", err)
 	}
 }
@@ -142,17 +142,116 @@ func TestResolveEnvironmentName(t *testing.T) {
 		}
 	})
 
+	t.Run("yaml environment used when flag and env unset", func(t *testing.T) {
+		writeWorkspaceYaml(t, "secrets-management:\n  environment: fromyaml\n")
+		t.Setenv(INFISICAL_ENVIRONMENT_NAME, "")
+		if got := ResolveEnvironmentName(newResolveTestCmd(t)); got != "fromyaml" {
+			t.Fatalf("got %q, want fromyaml", got)
+		}
+	})
+
+	t.Run("yaml environment wins over the deprecated default-environment", func(t *testing.T) {
+		writeWorkspaceYaml(t, "secrets-management:\n  default-environment: fromdeprecated\n  environment: fromyaml\n")
+		t.Setenv(INFISICAL_ENVIRONMENT_NAME, "")
+		if got := ResolveEnvironmentName(newResolveTestCmd(t)); got != "fromyaml" {
+			t.Fatalf("got %q, want fromyaml", got)
+		}
+	})
+
+	t.Run("yaml git-branch override wins over environment", func(t *testing.T) {
+		mockCurrentBranch(t, "main")
+		writeWorkspaceYaml(t, `secrets-management:
+  environment: fromyaml
+  overrides:
+    git-branch:
+      - branch: main
+        environment: frombranch
+`)
+		t.Setenv(INFISICAL_ENVIRONMENT_NAME, "")
+		if got := ResolveEnvironmentName(newResolveTestCmd(t)); got != "frombranch" {
+			t.Fatalf("got %q, want frombranch", got)
+		}
+	})
+
+	t.Run("yaml environment used when the branch has no override", func(t *testing.T) {
+		mockCurrentBranch(t, "feature")
+		writeWorkspaceYaml(t, `secrets-management:
+  environment: fromyaml
+  overrides:
+    git-branch:
+      - branch: main
+        environment: frombranch
+`)
+		t.Setenv(INFISICAL_ENVIRONMENT_NAME, "")
+		if got := ResolveEnvironmentName(newResolveTestCmd(t)); got != "fromyaml" {
+			t.Fatalf("got %q, want fromyaml", got)
+		}
+	})
+
+	t.Run("yaml git-branch override matches the last segment of the branch", func(t *testing.T) {
+		mockCurrentBranch(t, "feature/login")
+		writeWorkspaceYaml(t, `secrets-management:
+  environment: fromyaml
+  overrides:
+    git-branch:
+      - branch: login
+        environment: frombranch
+`)
+		t.Setenv(INFISICAL_ENVIRONMENT_NAME, "")
+		if got := ResolveEnvironmentName(newResolveTestCmd(t)); got != "frombranch" {
+			t.Fatalf("got %q, want frombranch", got)
+		}
+	})
+
+	t.Run("yaml deprecated default-environment used when only overrides are set and the branch has no override", func(t *testing.T) {
+		mockCurrentBranch(t, "main")
+		writeWorkspaceYaml(t, `secrets-management:
+  default-environment: fromyaml
+  overrides:
+    git-branch:
+      - branch: feature/x
+        environment: frombranch
+`)
+		t.Setenv(INFISICAL_ENVIRONMENT_NAME, "")
+		if got := ResolveEnvironmentName(newResolveTestCmd(t)); got != "fromyaml" {
+			t.Fatalf("got %q, want fromyaml", got)
+		}
+	})
+
+	t.Run("deprecated yaml mapping still matches the last segment of the branch", func(t *testing.T) {
+		mockCurrentBranch(t, "feature/login")
+		writeWorkspaceYaml(t, `secrets-management:
+  default-environment: fromyaml
+  mappings:
+    git-branch-to-environment:
+      login: frombranch
+`)
+		t.Setenv(INFISICAL_ENVIRONMENT_NAME, "")
+		if got := ResolveEnvironmentName(newResolveTestCmd(t)); got != "frombranch" {
+			t.Fatalf("got %q, want frombranch", got)
+		}
+	})
+
+	t.Run("legacy json mapping still matches the last segment of the branch", func(t *testing.T) {
+		mockCurrentBranch(t, "feature/login")
+		writeWorkspace(t, `{"defaultEnvironment":"fromfile","gitBranchToEnvironmentMapping":{"login":"frombranch"}}`)
+		t.Setenv(INFISICAL_ENVIRONMENT_NAME, "")
+		if got := ResolveEnvironmentName(newResolveTestCmd(t)); got != "frombranch" {
+			t.Fatalf("got %q, want frombranch", got)
+		}
+	})
+
 	t.Run("legacy json is read without being migrated", func(t *testing.T) {
 		writeWorkspace(t, `{"defaultEnvironment":"fromfile"}`)
 		t.Setenv(INFISICAL_ENVIRONMENT_NAME, "")
 		if got := ResolveEnvironmentName(newResolveTestCmd(t)); got != "fromfile" {
 			t.Fatalf("got %q, want fromfile", got)
 		}
-		if !fileExists(INFISICAL_WORKSPACE_CONFIG_FILE_NAME) {
-			t.Fatalf("legacy %s should not be removed", INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+		if !fileExists(LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME) {
+			t.Fatalf("legacy %s should not be removed", LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 		}
-		if fileExists(INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME) {
-			t.Fatalf("%s should not be created", INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
+		if fileExists(INFISICAL_WORKSPACE_CONFIG_FILE_NAME) {
+			t.Fatalf("%s should not be created", INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 		}
 		// the second resolve still reads the legacy json
 		if got := ResolveEnvironmentName(newResolveTestCmd(t)); got != "fromfile" {
@@ -162,7 +261,7 @@ func TestResolveEnvironmentName(t *testing.T) {
 
 	t.Run("yaml file wins over legacy json in the same directory", func(t *testing.T) {
 		writeWorkspaceYaml(t, "secrets-management:\n  default-environment: fromyaml\n")
-		writeTestFile(t, INFISICAL_WORKSPACE_CONFIG_FILE_NAME, `{"defaultEnvironment":"fromjson"}`)
+		writeTestFile(t, LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME, `{"defaultEnvironment":"fromjson"}`)
 		t.Setenv(INFISICAL_ENVIRONMENT_NAME, "")
 		if got := ResolveEnvironmentName(newResolveTestCmd(t)); got != "fromyaml" {
 			t.Fatalf("got %q, want fromyaml", got)
@@ -231,7 +330,23 @@ func TestResolveSecretPath(t *testing.T) {
 		}
 	})
 
-	t.Run("defaults to / when yaml file has no default-secret-path", func(t *testing.T) {
+	t.Run("yaml secret-path when flag and env unset", func(t *testing.T) {
+		writeWorkspaceYaml(t, "secrets-management:\n  secret-path: /fromyaml\n")
+		t.Setenv(INFISICAL_SECRET_PATH_NAME, "")
+		if got := ResolveSecretPath(newResolveTestCmd(t)); got != "/fromyaml" {
+			t.Fatalf("got %q, want /fromyaml", got)
+		}
+	})
+
+	t.Run("yaml secret-path wins over the deprecated default-secret-path", func(t *testing.T) {
+		writeWorkspaceYaml(t, "secrets-management:\n  default-secret-path: /fromdeprecated\n  secret-path: /fromyaml\n")
+		t.Setenv(INFISICAL_SECRET_PATH_NAME, "")
+		if got := ResolveSecretPath(newResolveTestCmd(t)); got != "/fromyaml" {
+			t.Fatalf("got %q, want /fromyaml", got)
+		}
+	})
+
+	t.Run("defaults to / when yaml file has no secret path", func(t *testing.T) {
 		writeWorkspaceYaml(t, "secrets-management:\n  project-id: proj-123\n")
 		t.Setenv(INFISICAL_SECRET_PATH_NAME, "")
 		if got := ResolveSecretPath(newResolveTestCmd(t)); got != "/" {

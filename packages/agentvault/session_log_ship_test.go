@@ -2,6 +2,7 @@ package agentvault
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -240,5 +241,22 @@ func TestAChunkAlreadyStoredCountsAsUploaded(t *testing.T) {
 
 	if err := shipper.putObject(context.Background(), bucket.URL+"/object", []byte("bytes")); err != nil {
 		t.Fatalf("a chunk that is already stored was treated as a failed upload: %v", err)
+	}
+}
+
+// The real clock, not newTestLog's: its fake times never carry a monotonic reading, so the check would always pass.
+// == rather than Equal: Equal ignores the monotonic reading, which pauses while the machine sleeps.
+func TestAnUploadLinkExpiryIgnoresTheSleepingClock(t *testing.T) {
+	// A failing upload keeps the chunk queued, so the link it was given can be read back.
+	log := newSessionLogRecorder("proxy-1", &fakeShipper{putDefault: errors.New("bucket down")})
+	log.record(testGrant("s1"), aRecord("api.github.com"))
+	log.flush(context.Background(), flushFinal)
+
+	pending := log.spools["s1"].pending
+	if len(pending) != 1 {
+		t.Fatalf("%d chunks queued, want the one whose upload failed", len(pending))
+	}
+	if exp := pending[0].urlExpires; exp.IsZero() || exp != exp.Round(0) {
+		t.Fatal("the upload link expiry carries a monotonic reading, so time asleep would not count toward it")
 	}
 }
