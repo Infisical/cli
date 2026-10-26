@@ -98,6 +98,13 @@ func slotsSupportMlDsa(ctx *pkcs11.Ctx, slots []uint) bool {
 }
 
 func (m *pkcs11ModuleImpl) SupportsMlDsa() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.supportsMlDsa && m.ctx != nil {
+		if slots, err := m.ctx.GetSlotList(true); err == nil {
+			m.supportsMlDsa = slotsSupportMlDsa(m.ctx, slots)
+		}
+	}
 	return m.supportsMlDsa
 }
 
@@ -525,6 +532,9 @@ func (m *pkcs11ModuleImpl) Sign(slotLabel string, pin []byte, key KeyRef, mechan
 			pkcs11.NewAttribute(pkcs11.CKA_ID, nil),
 		})
 		attrsReadable := err == nil && len(attrs) == 2
+		if verifiableErr := requireVerifiableKey(attrsReadable, expectedPublicKey); verifiableErr != nil {
+			return verifiableErr
+		}
 		switch {
 		case attrsReadable:
 			if err := assertKeyTypeMatchesMechanism(attrs[0].Value, mechanism); err != nil {

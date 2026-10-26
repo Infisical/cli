@@ -55,12 +55,19 @@ func parseExpectedPublicKey(publicKeySpki []byte) (crypto.PublicKey, error) {
 	return pub, nil
 }
 
+func requireVerifiableKey(attrsReadable bool, expectedPublicKey crypto.PublicKey) error {
+	if attrsReadable {
+		return nil
+	}
+	if _, ok := expectedPublicKey.(*mlDsaPublicKey); ok {
+		return errMlDsaKeyUnverifiable
+	}
+	return nil
+}
+
 func completeSign(signature []byte, attrsReadable bool, readKeyID []byte, key KeyRef, expectedPublicKey crypto.PublicKey, mechanism string, isDigest bool, data []byte) (SignResult, error) {
 	if attrsReadable {
 		return SignResult{Signature: signature, KeyID: readKeyID}, nil
-	}
-	if _, ok := expectedPublicKey.(*mlDsaPublicKey); ok {
-		return SignResult{}, errMlDsaKeyUnverifiable
 	}
 	if expectedPublicKey != nil {
 		if err := verifySignature(expectedPublicKey, mechanism, isDigest, data, signature); err != nil {

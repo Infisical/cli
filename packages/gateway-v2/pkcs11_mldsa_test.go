@@ -70,7 +70,7 @@ func TestParseExpectedPublicKeyAcceptsMlDsa(t *testing.T) {
 	}
 }
 
-func TestCompleteSignRefusesUnverifiableMlDsaKeys(t *testing.T) {
+func TestRequireVerifiableKeyRefusesHiddenMlDsaKeys(t *testing.T) {
 	der, err := marshalMlDsaSpki(KeyAlgorithmMLDSA44, randomBytes(t, 1312))
 	if err != nil {
 		t.Fatal(err)
@@ -79,17 +79,18 @@ func TestCompleteSignRefusesUnverifiableMlDsaKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref := KeyRef{Label: "ca-key", ID: []byte{0x0a}}
-	for _, mechanism := range []string{mechanismMlDsa, "CKM_SHA256_RSA_PKCS"} {
-		result, err := completeSign([]byte("signature"), false, nil, ref, pub, mechanism, false, []byte("tbs"))
-		expectCode(t, err, Pkcs11ErrBadRequest)
-		if len(result.Signature) != 0 {
-			t.Fatalf("%s: an unverifiable signature must not be returned", mechanism)
-		}
+	expectCode(t, requireVerifiableKey(false, pub), Pkcs11ErrBadRequest)
+	if err := requireVerifiableKey(true, pub); err != nil {
+		t.Fatalf("readable attributes must be allowed, got %v", err)
 	}
-	result, err := completeSign([]byte("signature"), true, []byte{0x0b}, ref, pub, mechanismMlDsa, false, []byte("tbs"))
-	if err != nil || len(result.Signature) == 0 {
-		t.Fatalf("readable attributes still return the signature, got %+v, %v", result, err)
+	if err := requireVerifiableKey(false, nil); err != nil {
+		t.Fatalf("a request without an expected key keeps the existing behaviour, got %v", err)
+	}
+	for _, mechanism := range []string{mechanismMlDsa, "CKM_SHA256_RSA_PKCS"} {
+		result, err := completeSign([]byte("signature"), false, nil, KeyRef{Label: "ca-key"}, pub, mechanism, false, []byte("tbs"))
+		if err == nil || len(result.Signature) != 0 {
+			t.Fatalf("%s: an unchecked ML-DSA signature must never be returned, got %+v, %v", mechanism, result, err)
+		}
 	}
 }
 
