@@ -2,11 +2,8 @@ package cmd
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -16,65 +13,49 @@ import (
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/fatih/color"
+	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
 )
 
-const (
-	// Infisical caps one skill at 1 MB, but not how many a session can reach.
-	agentVaultSkillsResponseLimit = 64 << 20
-	agentVaultSkillsTimeout       = 30 * time.Second
-)
+const agentVaultSkillsTimeout = 30 * time.Second
 
-// No client timeout: the skills step has its own deadline, and a response for many skills takes longer
-// than the certificate request the shared client is sized for.
-var agentVaultSkillsHTTPClient = &http.Client{Transport: &http.Transport{Proxy: nil}}
+// Fastify's own answer for a route it does not have, which is how an Infisical older than skills answers. A
+// NotFoundError thrown by a handler is named "NotFound" and never carries documentationUrl.
+const infisicalRouteMissingName = "Not Found"
 
-var errAgentVaultSkillsUnsupported = errors.New("skills unsupported")
+func isInfisicalRouteMissing(err error) bool {
+	var apiErr *api.APIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound &&
+		apiErr.Name == infisicalRouteMissingName && apiErr.DocumentationURL != ""
+}
+
+func isAgentVaultSessionInvalid(err error) bool {
+	var apiErr *api.APIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusUnauthorized
+}
 
 type agentVaultSkillsLister interface {
-	list(ctx context.Context) (api.AgentVaultProxySkillsResponse, error)
+	list(ctx context.Context) (api.ListAgentVaultSessionSkillsResponse, error)
 }
 
 type agentVaultSkillsClient struct {
-	proxyAddr    string
+	httpClient   *resty.Client
 	sessionToken string
-	httpClient   *http.Client
 }
 
-func (c *agentVaultSkillsClient) list(ctx context.Context) (api.AgentVaultProxySkillsResponse, error) {
-	var out api.AgentVaultProxySkillsResponse
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://%s%s", c.proxyAddr, agentvault.SkillsPath), nil)
-	if err != nil {
-		return out, err
-	}
-	req.Header.Set("User-Agent", api.USER_AGENT)
-	req.Header.Set("Proxy-Authorization", "Basic "+base64.StdEncoding.EncodeToString(
-		[]byte(agentvault.ProxyAuthUsername+":"+c.sessionToken)))
+func (c *agentVaultSkillsClient) list(ctx context.Context) (api.ListAgentVaultSessionSkillsResponse, error) {
+	return api.CallListAgentVaultSessionSkills(ctx, c.httpClient, c.sessionToken)
+}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return out, err
+func agentVaultSkillsFailureReason(err error) string {
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) {
+		if apiErr.ErrorMessage != "" {
+			return fmt.Sprintf("Infisical answered %d: %s", apiErr.StatusCode, apiErr.ErrorMessage)
+		}
+		return fmt.Sprintf("Infisical answered %d", apiErr.StatusCode)
 	}
-	defer resp.Body.Close()
-	switch resp.StatusCode {
-	case http.StatusOK:
-	case http.StatusNotFound, http.StatusNotImplemented:
-		return out, errAgentVaultSkillsUnsupported
-	case http.StatusForbidden:
-		return out, errors.New("the proxy reports the session is no longer valid")
-	case http.StatusProxyAuthRequired:
-		return out, errors.New("the proxy did not accept the session token")
-	case http.StatusServiceUnavailable:
-		return out, errors.New("the proxy's own token was rejected by Infisical")
-	case http.StatusBadGateway:
-		return out, errors.New("the proxy could not fetch them from Infisical")
-	default:
-		return out, fmt.Errorf("the proxy answered %d", resp.StatusCode)
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, agentVaultSkillsResponseLimit)).Decode(&out); err != nil {
-		return out, fmt.Errorf("the proxy's response could not be read: %w", err)
-	}
-	return out, nil
+	return err.Error()
 }
 
 // installAgentVaultRunSkills fetches the session's skills once and installs them before the agent starts. No
@@ -82,16 +63,19 @@ func (c *agentVaultSkillsClient) list(ctx context.Context) (api.AgentVaultProxyS
 func installAgentVaultRunSkills(ctx context.Context, skillsDir string, client agentVaultSkillsLister, symlink func(oldname, newname string) error) {
 	listed, err := client.list(ctx)
 	switch {
-	case errors.Is(err, errAgentVaultSkillsUnsupported):
-		log.Debug().Msg("agent-vault: the proxy or Infisical does not deliver skills, starting without them")
-		return
 	case errors.Is(ctx.Err(), context.Canceled):
 		return
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
-		util.PrintWarning(fmt.Sprintf("Starting without skills: the proxy did not send them within %s.", agentVaultSkillsTimeout))
+		util.PrintWarning(fmt.Sprintf("Starting without skills: Infisical did not send them within %s.", agentVaultSkillsTimeout))
+		return
+	case isInfisicalRouteMissing(err):
+		log.Debug().Msg("agent-vault: this Infisical does not deliver skills, starting without them")
+		return
+	case isAgentVaultSessionInvalid(err):
+		util.PrintWarning("Starting without skills: the session is no longer valid.")
 		return
 	case err != nil:
-		util.PrintWarning(fmt.Sprintf("Starting without skills: %v.", err))
+		util.PrintWarning(fmt.Sprintf("Starting without skills: %s.", agentVaultSkillsFailureReason(err)))
 		return
 	case len(listed.Skills) == 0:
 		return

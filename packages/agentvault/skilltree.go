@@ -42,7 +42,7 @@ type linkTarget struct {
 // InstallSkills writes each skill as a real folder under the install directory, replacing whatever has that
 // name, and links it into the skills folder of every agent found on this machine. Skills stay after the run.
 // Every skill ctx leaves unwritten is named, so the failures account for all of them.
-func InstallSkills(ctx context.Context, skills []api.AgentVaultProxySkill, opts InstallOptions) (InstallResult, error) {
+func InstallSkills(ctx context.Context, skills []api.AgentVaultSessionSkill, opts InstallOptions) (InstallResult, error) {
 	var result InstallResult
 	dir := opts.Dir
 	if dir == "" {
@@ -122,10 +122,7 @@ func (r *InstallResult) prepareLinks(canonical string) []linkTarget {
 		}
 		return filepath.Join(home, fallback)
 	}
-	resolvedCanonical, err := filepath.EvalSymlinks(canonical)
-	if err != nil {
-		resolvedCanonical = canonical
-	}
+	canonicalInfo, canonicalErr := os.Stat(canonical)
 
 	var targets []linkTarget
 	for _, agent := range []struct{ name, dir string }{
@@ -143,7 +140,9 @@ func (r *InstallResult) prepareLinks(canonical string) []linkTarget {
 			r.LinkFailed = append(r.LinkFailed, fmt.Sprintf("all skills for %s (failed to create %s: %v)", agent.name, skillsDir, err))
 			continue
 		}
-		if resolved, err := filepath.EvalSymlinks(skillsDir); err == nil && resolved == resolvedCanonical {
+		// By identity, not path: a relative agent folder or a link through another name still lands on the
+		// install directory, and linking a skill there would replace it with a link to itself.
+		if info, err := os.Stat(skillsDir); err == nil && canonicalErr == nil && os.SameFile(info, canonicalInfo) {
 			targets = append(targets, linkTarget{agent: agent.name})
 			continue
 		}

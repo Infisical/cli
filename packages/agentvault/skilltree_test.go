@@ -18,8 +18,8 @@ func skillFile(path, mode, content string) api.AgentVaultSkillFile {
 	return api.AgentVaultSkillFile{Path: path, Mode: mode, ContentBase64: base64.StdEncoding.EncodeToString([]byte(content))}
 }
 
-func proxySkill(name string, files ...api.AgentVaultSkillFile) api.AgentVaultProxySkill {
-	return api.AgentVaultProxySkill{Name: name, Version: 1, Sha256: SkillFilesSha256(files), Files: files}
+func sessionSkill(name string, files ...api.AgentVaultSkillFile) api.AgentVaultSessionSkill {
+	return api.AgentVaultSessionSkill{Name: name, Version: 1, Sha256: SkillFilesSha256(files), Files: files}
 }
 
 func readFile(t *testing.T, path string) string {
@@ -56,7 +56,7 @@ func isolateHome(t *testing.T) string {
 	return home
 }
 
-func install(t *testing.T, opts InstallOptions, skills ...api.AgentVaultProxySkill) InstallResult {
+func install(t *testing.T, opts InstallOptions, skills ...api.AgentVaultSessionSkill) InstallResult {
 	t.Helper()
 	result, err := InstallSkills(t.Context(), skills, opts)
 	if err != nil {
@@ -78,7 +78,7 @@ func assertLinked(t *testing.T, link, canonical string) {
 
 func TestInstallSkillsWritesToTheHomeFolder(t *testing.T) {
 	home := isolateHome(t)
-	result := install(t, InstallOptions{}, proxySkill("code-review", skillFile("SKILL.md", "0644", "v1")))
+	result := install(t, InstallOptions{}, sessionSkill("code-review", skillFile("SKILL.md", "0644", "v1")))
 
 	dir := filepath.Join(home, ".agents", "skills")
 	if result.Dir != dir || result.Installed != 1 || len(result.Failed) != 0 || len(result.Linked) != 0 {
@@ -103,7 +103,7 @@ func TestInstallSkillsReplacesAnExistingFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	install(t, InstallOptions{}, proxySkill("code-review", skillFile("SKILL.md", "0644", "v2")))
+	install(t, InstallOptions{}, sessionSkill("code-review", skillFile("SKILL.md", "0644", "v2")))
 	if got := readFile(t, filepath.Join(dest, "SKILL.md")); got != "v2" {
 		t.Fatalf("SKILL.md %q", got)
 	}
@@ -115,7 +115,7 @@ func TestInstallSkillsReplacesAnExistingFolder(t *testing.T) {
 func TestInstallSkillsLinksOnlyForAgentsThatAreInstalled(t *testing.T) {
 	home := isolateHome(t)
 	mkdir(t, filepath.Join(home, ".claude"))
-	result := install(t, InstallOptions{}, proxySkill("code-review", skillFile("SKILL.md", "0644", "x")))
+	result := install(t, InstallOptions{}, sessionSkill("code-review", skillFile("SKILL.md", "0644", "x")))
 
 	canonical := filepath.Join(home, ".agents", "skills", "code-review")
 	assertLinked(t, filepath.Join(home, ".claude", "skills", "code-review"), canonical)
@@ -127,7 +127,7 @@ func TestInstallSkillsLinksOnlyForAgentsThatAreInstalled(t *testing.T) {
 	}
 
 	mkdir(t, filepath.Join(home, ".hermes"))
-	result = install(t, InstallOptions{}, proxySkill("code-review", skillFile("SKILL.md", "0644", "x")))
+	result = install(t, InstallOptions{}, sessionSkill("code-review", skillFile("SKILL.md", "0644", "x")))
 	assertLinked(t, filepath.Join(home, ".claude", "skills", "code-review"), canonical)
 	assertLinked(t, filepath.Join(home, ".hermes", "skills", "code-review"), canonical)
 	if !reflect.DeepEqual(result.Linked, []string{ClaudeCodeAgent, HermesAgent}) {
@@ -143,7 +143,7 @@ func TestInstallSkillsFollowsTheAgentFolderVariables(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", claude)
 	t.Setenv("HERMES_HOME", hermes)
 
-	result := install(t, InstallOptions{}, proxySkill("code-review", skillFile("SKILL.md", "0644", "x")))
+	result := install(t, InstallOptions{}, sessionSkill("code-review", skillFile("SKILL.md", "0644", "x")))
 	canonical := filepath.Join(home, ".agents", "skills", "code-review")
 	assertLinked(t, filepath.Join(claude, "skills", "code-review"), canonical)
 	assertLinked(t, filepath.Join(hermes, "skills", "code-review"), canonical)
@@ -162,7 +162,7 @@ func TestInstallSkillsReplacesWhateverIsInTheAgentFolder(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(userSkill, "SKILL.md"), []byte("mine"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	install(t, InstallOptions{}, proxySkill("code-review", skillFile("SKILL.md", "0644", "ours")))
+	install(t, InstallOptions{}, sessionSkill("code-review", skillFile("SKILL.md", "0644", "ours")))
 	assertLinked(t, userSkill, filepath.Join(home, ".agents", "skills", "code-review"))
 	if got := readFile(t, filepath.Join(userSkill, "SKILL.md")); got != "ours" {
 		t.Fatalf("SKILL.md %q", got)
@@ -178,7 +178,31 @@ func TestInstallSkillsDoesNotLinkASkillsFolderThatIsTheInstallFolder(t *testing.
 		t.Fatal(err)
 	}
 
-	result := install(t, InstallOptions{}, proxySkill("code-review", skillFile("SKILL.md", "0644", "x")))
+	result := install(t, InstallOptions{}, sessionSkill("code-review", skillFile("SKILL.md", "0644", "x")))
+	info, err := os.Lstat(filepath.Join(canonical, "code-review"))
+	if err != nil || !info.IsDir() {
+		t.Fatalf("the installed skill was replaced by a link to itself: %v", err)
+	}
+	if got := readFile(t, filepath.Join(canonical, "code-review", "SKILL.md")); got != "x" {
+		t.Fatalf("SKILL.md %q", got)
+	}
+	if len(result.LinkFailed) != 0 || !reflect.DeepEqual(result.Linked, []string{ClaudeCodeAgent}) {
+		t.Fatalf("result %+v", result)
+	}
+}
+
+func TestInstallSkillsDoesNotLinkARelativeAgentFolderIntoTheInstallFolder(t *testing.T) {
+	home := isolateHome(t)
+	canonical := filepath.Join(home, ".agents", "skills")
+	mkdir(t, canonical)
+	mkdir(t, filepath.Join(home, "claude"))
+	if err := os.Symlink(filepath.Join("..", ".agents", "skills"), filepath.Join(home, "claude", "skills")); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "claude")
+
+	result := install(t, InstallOptions{}, sessionSkill("code-review", skillFile("SKILL.md", "0644", "x")))
 	info, err := os.Lstat(filepath.Join(canonical, "code-review"))
 	if err != nil || !info.IsDir() {
 		t.Fatalf("the installed skill was replaced by a link to itself: %v", err)
@@ -196,7 +220,7 @@ func TestInstallSkillsCopiesWhereLinksAreRefused(t *testing.T) {
 	mkdir(t, filepath.Join(home, ".claude"))
 	refuse := func(string, string) error { return errors.New("links are not allowed") }
 
-	result := install(t, InstallOptions{Symlink: refuse}, proxySkill("code-review", skillFile("SKILL.md", "0644", "x")))
+	result := install(t, InstallOptions{Symlink: refuse}, sessionSkill("code-review", skillFile("SKILL.md", "0644", "x")))
 	dest := filepath.Join(home, ".claude", "skills", "code-review")
 	info, err := os.Lstat(dest)
 	if err != nil || !info.IsDir() {
@@ -216,7 +240,7 @@ func TestInstallSkillsIntoAChosenFolderMakesNoLinks(t *testing.T) {
 	mkdir(t, filepath.Join(home, ".hermes"))
 	dir := filepath.Join(t.TempDir(), "skills")
 
-	result := install(t, InstallOptions{Dir: dir}, proxySkill("code-review", skillFile("SKILL.md", "0644", "x")))
+	result := install(t, InstallOptions{Dir: dir}, sessionSkill("code-review", skillFile("SKILL.md", "0644", "x")))
 	if result.Dir != dir || result.Installed != 1 || len(result.Linked) != 0 {
 		t.Fatalf("result %+v", result)
 	}
@@ -236,9 +260,9 @@ func TestInstallSkillsIntoAChosenFolderMakesNoLinks(t *testing.T) {
 
 func TestInstallSkillsSkipsASkillThatFailsItsChecksum(t *testing.T) {
 	dir := t.TempDir()
-	bad := proxySkill("tampered", skillFile("SKILL.md", "0644", "x"))
+	bad := sessionSkill("tampered", skillFile("SKILL.md", "0644", "x"))
 	bad.Files[0] = skillFile("SKILL.md", "0644", "changed")
-	result := install(t, InstallOptions{Dir: dir}, bad, proxySkill("code-review", skillFile("SKILL.md", "0644", "y")))
+	result := install(t, InstallOptions{Dir: dir}, bad, sessionSkill("code-review", skillFile("SKILL.md", "0644", "y")))
 	if result.Installed != 1 || !reflect.DeepEqual(result.Failed, []string{"tampered (its files do not match their checksum)"}) {
 		t.Fatalf("result %+v", result)
 	}
@@ -249,9 +273,9 @@ func TestInstallSkillsSkipsASkillThatFailsItsChecksum(t *testing.T) {
 
 func TestInstallSkillsNamesWhatTheDeadlineLeft(t *testing.T) {
 	dir := t.TempDir()
-	skills := []api.AgentVaultProxySkill{
-		proxySkill("code-review", skillFile("SKILL.md", "0644", "x")),
-		proxySkill("deploy", skillFile("SKILL.md", "0644", "y")),
+	skills := []api.AgentVaultSessionSkill{
+		sessionSkill("code-review", skillFile("SKILL.md", "0644", "x")),
+		sessionSkill("deploy", skillFile("SKILL.md", "0644", "y")),
 	}
 
 	expired, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
@@ -273,7 +297,7 @@ func TestInstallSkillsRefusesPathsOutsideTheSkill(t *testing.T) {
 	base := t.TempDir()
 	dir := filepath.Join(base, "skills")
 	for _, path := range []string{"../escape", "/etc/escape", "a/../../escape", "", "a\\..\\..\\escape", "."} {
-		result := install(t, InstallOptions{Dir: dir}, proxySkill("code-review", skillFile("SKILL.md", "0644", "x"), skillFile(path, "0644", "x")))
+		result := install(t, InstallOptions{Dir: dir}, sessionSkill("code-review", skillFile("SKILL.md", "0644", "x"), skillFile(path, "0644", "x")))
 		if result.Installed != 0 || len(result.Failed) != 1 {
 			t.Fatalf("%q was accepted", path)
 		}
@@ -289,7 +313,7 @@ func TestInstallSkillsRefusesPathsOutsideTheSkill(t *testing.T) {
 
 func TestInstallSkillsNeverWritesThroughAnExistingFile(t *testing.T) {
 	dir := t.TempDir()
-	result := install(t, InstallOptions{Dir: dir}, proxySkill("code-review",
+	result := install(t, InstallOptions{Dir: dir}, sessionSkill("code-review",
 		skillFile("SKILL.md", "0644", "first"),
 		skillFile("SKILL.md", "0644", "second"),
 	))
@@ -318,7 +342,7 @@ func TestInstallSkillsRefusesNamesThatAreNotFolders(t *testing.T) {
 	dir := filepath.Join(base, "skills")
 	mkdir(t, filepath.Join(base, "keep"))
 	for _, name := range []string{"..", "../keep", "a/b", ".hidden", ""} {
-		result := install(t, InstallOptions{Dir: dir}, proxySkill(name, skillFile("SKILL.md", "0644", "x")))
+		result := install(t, InstallOptions{Dir: dir}, sessionSkill(name, skillFile("SKILL.md", "0644", "x")))
 		if result.Installed != 0 {
 			t.Fatalf("%q was installed", name)
 		}
@@ -333,7 +357,7 @@ func TestInstallSkillsMasksModes(t *testing.T) {
 		t.Skip("no unix modes")
 	}
 	dir := t.TempDir()
-	install(t, InstallOptions{Dir: dir}, proxySkill("code-review",
+	install(t, InstallOptions{Dir: dir}, sessionSkill("code-review",
 		skillFile("SKILL.md", "0666", "x"),
 		skillFile("scripts/run.sh", "4777", "#!/bin/sh"),
 	))

@@ -433,10 +433,17 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	printAgentVaultRunSummary(proxyAddr, caResp, servedFingerprint, minted, tokenSource, bundleSource)
 
 	skillsDir, _ := cmd.Flags().GetString("skills-dir")
-	skillsClient := &agentVaultSkillsClient{proxyAddr: proxyAddr, sessionToken: sessionToken, httpClient: agentVaultSkillsHTTPClient}
 	signalCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	interrupted := prepareAgentVaultRunSkills(signalCtx,
-		func(ctx context.Context) { installAgentVaultRunSkills(ctx, skillsDir, skillsClient, os.Symlink) },
+		func(ctx context.Context) {
+			skillsHTTPClient, clientErr := util.GetRestyClientWithCustomHeaders()
+			if clientErr != nil {
+				util.PrintWarning(fmt.Sprintf("Starting without skills: %v.", clientErr))
+				return
+			}
+			skillsClient := &agentVaultSkillsClient{httpClient: skillsHTTPClient, sessionToken: sessionToken}
+			installAgentVaultRunSkills(ctx, skillsDir, skillsClient, os.Symlink)
+		},
 		stopSignals,
 		func() { revokeAgentVaultRunSession(cmd, minted, keepSession, "The run was interrupted") })
 	stopSignals()

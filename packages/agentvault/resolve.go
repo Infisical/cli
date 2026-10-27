@@ -85,10 +85,6 @@ func (r *infisicalResolver) resolve(sessionToken string, held *sessionLogGrant) 
 	}, nil
 }
 
-func (r *infisicalResolver) listSkills(sessionToken string) (api.AgentVaultProxySkillsResponse, error) {
-	return api.CallListAgentVaultProxySkills(r.client, sessionToken)
-}
-
 // Bounded by the resolver client's timeout, so a stalled control plane fails the refresh rather than
 // holding the agent's request open.
 func (r *infisicalResolver) refreshCredential(sessionToken, serviceID, hostPattern, rejectedHash string) (credential, string, error) {

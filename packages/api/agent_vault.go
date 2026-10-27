@@ -294,7 +294,7 @@ type AgentVaultSkillFile struct {
 	ContentBase64 string `json:"contentBase64"`
 }
 
-type AgentVaultProxySkill struct {
+type AgentVaultSessionSkill struct {
 	ID      string                `json:"id"`
 	Name    string                `json:"name"`
 	Version int                   `json:"version"`
@@ -302,24 +302,29 @@ type AgentVaultProxySkill struct {
 	Files   []AgentVaultSkillFile `json:"files"`
 }
 
-type AgentVaultProxySkillsResponse struct {
-	Skills []AgentVaultProxySkill `json:"skills"`
+type ListAgentVaultSessionSkillsResponse struct {
+	Skills []AgentVaultSessionSkill `json:"skills"`
 }
 
-func CallListAgentVaultProxySkills(httpClient *resty.Client, sessionToken string) (AgentVaultProxySkillsResponse, error) {
-	var res AgentVaultProxySkillsResponse
+// Infisical caps one skill at 1 MB, but not how many a session can reach.
+const agentVaultSessionSkillsResponseLimit = 64 << 20
+
+func CallListAgentVaultSessionSkills(ctx context.Context, httpClient *resty.Client, sessionToken string) (ListAgentVaultSessionSkillsResponse, error) {
+	var res ListAgentVaultSessionSkillsResponse
 	response, err := httpClient.
 		R().
+		SetContext(ctx).
+		SetResponseBodyLimit(agentVaultSessionSkillsResponseLimit).
 		SetResult(&res).
 		SetHeader("User-Agent", USER_AGENT).
-		SetHeader(AgentVaultSessionHeader, sessionToken).
-		Get(fmt.Sprintf("%v/v1/agent-vault/proxy/skills", config.INFISICAL_URL))
+		SetAuthToken(sessionToken).
+		Get(fmt.Sprintf("%v/v1/agent-vault/session/skills", config.INFISICAL_URL))
 
 	if err != nil {
-		return AgentVaultProxySkillsResponse{}, NewGenericRequestError("CallListAgentVaultProxySkills", err)
+		return ListAgentVaultSessionSkillsResponse{}, NewGenericRequestError("CallListAgentVaultSessionSkills", err)
 	}
 	if response.IsError() {
-		return AgentVaultProxySkillsResponse{}, NewAPIErrorWithResponse("CallListAgentVaultProxySkills", response, nil)
+		return ListAgentVaultSessionSkillsResponse{}, NewAPIErrorWithResponse("CallListAgentVaultSessionSkills", response, nil)
 	}
 	return res, nil
 }

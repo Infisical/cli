@@ -10,43 +10,61 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/agentvault"
 	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/Infisical/infisical-merge/packages/config"
+	"github.com/go-resty/resty/v2"
 )
 
 const testRunSkillID = "8f0e7c1a-3b9e-4c55-9d3e-2a1b7c6d5e4f"
 
-func testProxySkill(name, content string) api.AgentVaultProxySkill {
+func testSessionSkill(name, content string) api.AgentVaultSessionSkill {
 	files := []api.AgentVaultSkillFile{{Path: "SKILL.md", Mode: "0644", ContentBase64: base64.StdEncoding.EncodeToString([]byte(content))}}
-	return api.AgentVaultProxySkill{ID: testRunSkillID, Name: name, Version: 1, Sha256: agentvault.SkillFilesSha256(files), Files: files}
+	return api.AgentVaultSessionSkill{ID: testRunSkillID, Name: name, Version: 1, Sha256: agentvault.SkillFilesSha256(files), Files: files}
 }
 
-// A stand-in for `infisical agent-vault proxy`, answering the skills endpoint with status and skills.
-func fakeSkillsProxy(t *testing.T, status int, skills ...api.AgentVaultProxySkill) *agentVaultSkillsClient {
+// A stand-in for Infisical's session skills route. A status other than 200 answers with body.
+func fakeSessionSkills(t *testing.T, status int, body map[string]any, skills ...api.AgentVaultSessionSkill) *agentVaultSkillsClient {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != agentvault.SkillsPath {
+		if r.URL.Path != "/api/v1/agent-vault/session/skills" {
 			http.NotFound(w, r)
 			return
 		}
-		if !strings.HasPrefix(r.Header.Get("Proxy-Authorization"), "Basic ") {
-			w.WriteHeader(http.StatusProxyAuthRequired)
-			return
-		}
-		if status != http.StatusOK {
-			w.WriteHeader(status)
-			return
+		if r.Header.Get("Authorization") != "Bearer agv_tok" {
+			t.Errorf("the session token was not sent as a bearer token: %q", r.Header.Get("Authorization"))
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(api.AgentVaultProxySkillsResponse{Skills: skills})
+		if status != http.StatusOK {
+			w.WriteHeader(status)
+			_ = json.NewEncoder(w).Encode(body)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(api.ListAgentVaultSessionSkillsResponse{Skills: skills})
 	}))
 	t.Cleanup(srv.Close)
-	return &agentVaultSkillsClient{proxyAddr: strings.TrimPrefix(srv.URL, "http://"), sessionToken: "agv_tok", httpClient: agentVaultSkillsHTTPClient}
+	useInfisicalURL(t, srv.URL+"/api")
+	return &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok"}
 }
+
+func useInfisicalURL(t *testing.T, url string) {
+	t.Helper()
+	old := config.INFISICAL_URL
+	config.INFISICAL_URL = url
+	t.Cleanup(func() { config.INFISICAL_URL = old })
+}
+
+var (
+	routeMissingBody = map[string]any{
+		"statusCode": 404, "error": "Not Found", "message": "Route GET:/api/v1/agent-vault/session/skills not found",
+		"documentationUrl": "https://infisical.com/docs",
+	}
+	handlerNotFoundBody = map[string]any{"statusCode": 404, "error": "NotFound", "message": "Project not found"}
+	sessionInvalidBody  = map[string]any{"statusCode": 401, "error": "UnauthorizedError", "message": "Invalid session"}
+)
 
 func isolateSkillsHome(t *testing.T) string {
 	t.Helper()
@@ -65,7 +83,7 @@ func TestSkillsAreInstalledInTheHomeFolderAndLinkedForClaude(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	client := fakeSkillsProxy(t, http.StatusOK, testProxySkill("code-review", "---\nname: code-review\n---\n"))
+	client := fakeSessionSkills(t, http.StatusOK, nil, testSessionSkill("code-review", "---\nname: code-review\n---\n"))
 
 	installAgentVaultRunSkills(context.Background(), "", client, os.Symlink)
 	canonical := filepath.Join(home, ".agents", "skills", "code-review")
@@ -83,7 +101,7 @@ func TestSkillsDirInstallsThereWithoutLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := filepath.Join(t.TempDir(), "skills")
-	client := fakeSkillsProxy(t, http.StatusOK, testProxySkill("code-review", "x"))
+	client := fakeSessionSkills(t, http.StatusOK, nil, testSessionSkill("code-review", "x"))
 	linked := false
 
 	installAgentVaultRunSkills(context.Background(), dir, client, func(string, string) error { linked = true; return nil })
@@ -102,20 +120,61 @@ func exists(path string) bool {
 
 func TestTheAgentStartsPlainlyWithoutSkills(t *testing.T) {
 	home := isolateSkillsHome(t)
-	unreachable := &agentVaultSkillsClient{proxyAddr: "127.0.0.1:1", sessionToken: "agv_tok", httpClient: agentVaultSkillsHTTPClient}
-	cases := map[string]*agentVaultSkillsClient{
-		"old proxy":            fakeSkillsProxy(t, http.StatusNotFound),
-		"Infisical too old":    fakeSkillsProxy(t, http.StatusNotImplemented),
-		"session gone":         fakeSkillsProxy(t, http.StatusForbidden),
-		"Infisical failing":    fakeSkillsProxy(t, http.StatusBadGateway),
-		"no skills":            fakeSkillsProxy(t, http.StatusOK),
-		"proxy is unreachable": unreachable,
+	cases := map[string]func() *agentVaultSkillsClient{
+		"Infisical too old": func() *agentVaultSkillsClient { return fakeSessionSkills(t, http.StatusNotFound, routeMissingBody) },
+		"session gone": func() *agentVaultSkillsClient {
+			return fakeSessionSkills(t, http.StatusUnauthorized, sessionInvalidBody)
+		},
+		"Infisical failing": func() *agentVaultSkillsClient {
+			return fakeSessionSkills(t, http.StatusInternalServerError, map[string]any{})
+		},
+		"no skills": func() *agentVaultSkillsClient { return fakeSessionSkills(t, http.StatusOK, nil) },
+		"Infisical is unreachable": func() *agentVaultSkillsClient {
+			useInfisicalURL(t, "http://127.0.0.1:1/api")
+			return &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok"}
+		},
 	}
 	for name, client := range cases {
-		installAgentVaultRunSkills(context.Background(), "", client, os.Symlink)
+		installAgentVaultRunSkills(context.Background(), "", client(), os.Symlink)
 		if exists(filepath.Join(home, ".agents")) {
 			t.Fatalf("%s: a skills folder was created", name)
 		}
+	}
+}
+
+func TestSkillsFailuresAreToldApart(t *testing.T) {
+	cases := []struct {
+		name         string
+		status       int
+		body         map[string]any
+		routeMissing bool
+		invalid      bool
+	}{
+		{name: "route missing", status: http.StatusNotFound, body: routeMissingBody, routeMissing: true},
+		{name: "a handler's not found", status: http.StatusNotFound, body: handlerNotFoundBody},
+		{name: "session invalid", status: http.StatusUnauthorized, body: sessionInvalidBody, invalid: true},
+		{name: "server error", status: http.StatusInternalServerError, body: map[string]any{"message": "boom"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := fakeSessionSkills(t, tc.status, tc.body).list(context.Background())
+			if err == nil {
+				t.Fatal("want an error")
+			}
+			if got := isInfisicalRouteMissing(err); got != tc.routeMissing {
+				t.Errorf("route missing = %v, want %v", got, tc.routeMissing)
+			}
+			if got := isAgentVaultSessionInvalid(err); got != tc.invalid {
+				t.Errorf("session invalid = %v, want %v", got, tc.invalid)
+			}
+		})
+	}
+}
+
+func TestSkillsFailureReasonNamesInfisicalsAnswer(t *testing.T) {
+	_, err := fakeSessionSkills(t, http.StatusInternalServerError, map[string]any{"message": "boom"}).list(context.Background())
+	if got, want := agentVaultSkillsFailureReason(err), "Infisical answered 500: boom"; got != want {
+		t.Fatalf("reason %q, want %q", got, want)
 	}
 }
 
@@ -141,7 +200,7 @@ func TestTheInstalledLineNamesOnlyTheLinkedAgents(t *testing.T) {
 
 func TestInterruptingTheSkillsStepRevokes(t *testing.T) {
 	home := isolateSkillsHome(t)
-	client := fakeSkillsProxy(t, http.StatusOK, testProxySkill("code-review", "x"))
+	client := fakeSessionSkills(t, http.StatusOK, nil, testSessionSkill("code-review", "x"))
 
 	ctx, interrupt := context.WithCancel(context.Background())
 	defer interrupt()
@@ -161,13 +220,14 @@ func TestInterruptingTheSkillsStepRevokes(t *testing.T) {
 	}
 }
 
-func TestInterruptingAWaitForTheProxyRevokes(t *testing.T) {
+func TestInterruptingAWaitForInfisicalRevokes(t *testing.T) {
 	isolateSkillsHome(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
 	}))
 	defer srv.Close()
-	client := &agentVaultSkillsClient{proxyAddr: strings.TrimPrefix(srv.URL, "http://"), sessionToken: "agv_tok", httpClient: agentVaultSkillsHTTPClient}
+	useInfisicalURL(t, srv.URL+"/api")
+	client := &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok"}
 
 	ctx, interrupt := context.WithCancel(context.Background())
 	time.AfterFunc(50*time.Millisecond, interrupt)
@@ -187,7 +247,7 @@ func TestInterruptingAWaitForTheProxyRevokes(t *testing.T) {
 
 func TestAnUninterruptedSkillsStepDoesNotRevoke(t *testing.T) {
 	home := isolateSkillsHome(t)
-	client := fakeSkillsProxy(t, http.StatusOK, testProxySkill("code-review", "x"))
+	client := fakeSessionSkills(t, http.StatusOK, nil, testSessionSkill("code-review", "x"))
 	interrupted := prepareAgentVaultRunSkills(context.Background(),
 		func(stepCtx context.Context) { installAgentVaultRunSkills(stepCtx, "", client, os.Symlink) },
 		func() { t.Fatal("signals stopped without an interrupt") },

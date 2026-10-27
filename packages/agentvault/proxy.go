@@ -82,8 +82,6 @@ type proxyServer struct {
 	sessionLogs *sessionLogRecorder
 	transport   http.RoundTripper
 
-	skillsSource skillsSource
-
 	configMu sync.RWMutex
 	config   ProxyConfig
 
@@ -821,10 +819,6 @@ func (ps *proxyServer) serveSelfEndpoint(w http.ResponseWriter, r *http.Request)
 	}
 	if !strings.HasPrefix(r.URL.Path, "/_agent-vault/") {
 		return false
-	}
-
-	if ps.serveSkills(w, r) {
-		return true
 	}
 
 	switch r.URL.Path {
