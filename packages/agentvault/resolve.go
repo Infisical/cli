@@ -82,6 +82,10 @@ func (r *infisicalResolver) resolve(sessionToken string, held *sessionLogGrant) 
 	}, nil
 }
 
+func (r *infisicalResolver) listSkills(sessionToken string) (api.AgentVaultProxySkillsResponse, error) {
+	return api.CallListAgentVaultProxySkills(r.client, sessionToken)
+}
+
 func toSessionLogGrant(sessionID string, wire api.AgentVaultSessionLogGrant, held *sessionLogGrant) *sessionLogGrant {
 	if !wire.Enabled {
 		return nil

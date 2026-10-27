@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"net/url"
 
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/go-resty/resty/v2"
@@ -206,9 +207,10 @@ func CallCreateAgentVaultSession(httpClient *resty.Client, request CreateAgentVa
 	return res, nil
 }
 
-func CallRevokeAgentVaultSession(httpClient *resty.Client, sessionID string) error {
+func CallRevokeAgentVaultSession(ctx context.Context, httpClient *resty.Client, sessionID string) error {
 	response, err := httpClient.
 		R().
+		SetContext(ctx).
 		SetHeader("User-Agent", USER_AGENT).
 		Post(fmt.Sprintf("%v/v1/agent-vault/sessions/%s/revoke", config.INFISICAL_URL, sessionID))
 
@@ -219,4 +221,132 @@ func CallRevokeAgentVaultSession(httpClient *resty.Client, sessionID string) err
 		return NewAPIErrorWithResponse("CallRevokeAgentVaultSession", response, nil)
 	}
 	return nil
+}
+
+type AgentVaultSkillFile struct {
+	Path          string `json:"path"`
+	Mode          string `json:"mode"`
+	ContentBase64 string `json:"contentBase64"`
+}
+
+type AgentVaultProxySkill struct {
+	ID      string                `json:"id"`
+	Name    string                `json:"name"`
+	Version int                   `json:"version"`
+	Sha256  string                `json:"sha256"`
+	Files   []AgentVaultSkillFile `json:"files"`
+}
+
+type AgentVaultProxySkillsResponse struct {
+	Skills []AgentVaultProxySkill `json:"skills"`
+}
+
+func CallListAgentVaultProxySkills(httpClient *resty.Client, sessionToken string) (AgentVaultProxySkillsResponse, error) {
+	var res AgentVaultProxySkillsResponse
+	response, err := httpClient.
+		R().
+		SetResult(&res).
+		SetHeader("User-Agent", USER_AGENT).
+		SetHeader(AgentVaultSessionHeader, sessionToken).
+		Get(fmt.Sprintf("%v/v1/agent-vault/proxy/skills", config.INFISICAL_URL))
+
+	if err != nil {
+		return AgentVaultProxySkillsResponse{}, NewGenericRequestError("CallListAgentVaultProxySkills", err)
+	}
+	if response.IsError() {
+		return AgentVaultProxySkillsResponse{}, NewAPIErrorWithResponse("CallListAgentVaultProxySkills", response, nil)
+	}
+	return res, nil
+}
+
+type AgentVaultSkill struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Description   string `json:"description"`
+	LatestVersion int    `json:"latestVersion"`
+	CreatedAt     string `json:"createdAt"`
+	UpdatedAt     string `json:"updatedAt"`
+}
+
+type AgentVaultSkillVersion struct {
+	ID        string `json:"id"`
+	Version   int    `json:"version"`
+	Sha256    string `json:"sha256"`
+	SizeBytes int    `json:"sizeBytes"`
+	FileCount int    `json:"fileCount"`
+	CreatedAt string `json:"createdAt"`
+}
+
+type ListAgentVaultSkillsResponse struct {
+	Skills     []AgentVaultSkill `json:"skills"`
+	TotalCount int               `json:"totalCount"`
+}
+
+func CallListAgentVaultSkillsByName(httpClient *resty.Client, name string) (ListAgentVaultSkillsResponse, error) {
+	var res ListAgentVaultSkillsResponse
+	response, err := httpClient.
+		R().
+		SetResult(&res).
+		SetHeader("User-Agent", USER_AGENT).
+		SetQueryParam("name", name).
+		Get(fmt.Sprintf("%v/v1/agent-vault/skills", config.INFISICAL_URL))
+
+	if err != nil {
+		return ListAgentVaultSkillsResponse{}, NewGenericRequestError("CallListAgentVaultSkillsByName", err)
+	}
+	if response.IsError() {
+		return ListAgentVaultSkillsResponse{}, NewAPIErrorWithResponse("CallListAgentVaultSkillsByName", response, nil)
+	}
+	return res, nil
+}
+
+type AgentVaultSkillFilesRequest struct {
+	Files  []AgentVaultSkillFile `json:"files"`
+	Source string                `json:"source,omitempty"`
+}
+
+type CreateAgentVaultSkillResponse struct {
+	Skill   AgentVaultSkill        `json:"skill"`
+	Version AgentVaultSkillVersion `json:"version"`
+}
+
+func CallCreateAgentVaultSkill(httpClient *resty.Client, request AgentVaultSkillFilesRequest) (CreateAgentVaultSkillResponse, error) {
+	var res CreateAgentVaultSkillResponse
+	response, err := httpClient.
+		R().
+		SetResult(&res).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/agent-vault/skills", config.INFISICAL_URL))
+
+	if err != nil {
+		return CreateAgentVaultSkillResponse{}, NewGenericRequestError("CallCreateAgentVaultSkill", err)
+	}
+	if response.IsError() {
+		return CreateAgentVaultSkillResponse{}, NewAPIErrorWithResponse("CallCreateAgentVaultSkill", response, nil)
+	}
+	return res, nil
+}
+
+type PublishAgentVaultSkillVersionResponse struct {
+	Version   AgentVaultSkillVersion `json:"version"`
+	Unchanged bool                   `json:"unchanged"`
+}
+
+func CallPublishAgentVaultSkillVersion(httpClient *resty.Client, skillID string, request AgentVaultSkillFilesRequest) (PublishAgentVaultSkillVersionResponse, error) {
+	var res PublishAgentVaultSkillVersionResponse
+	response, err := httpClient.
+		R().
+		SetResult(&res).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/agent-vault/skills/%s/versions", config.INFISICAL_URL, url.PathEscape(skillID)))
+
+	if err != nil {
+		return PublishAgentVaultSkillVersionResponse{}, NewGenericRequestError("CallPublishAgentVaultSkillVersion", err)
+	}
+	if response.IsError() {
+		return PublishAgentVaultSkillVersionResponse{}, NewAPIErrorWithResponse("CallPublishAgentVaultSkillVersion", response, nil)
+	}
+	return res, nil
 }

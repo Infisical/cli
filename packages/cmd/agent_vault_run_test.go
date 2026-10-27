@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -8,11 +9,15 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Infisical/infisical-merge/packages/config"
+	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/spf13/cobra"
 )
 
@@ -437,5 +442,36 @@ func TestDecideAgentVaultSessionTieErrorNamesBothVariables(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the message should name %q, got %q", want, err)
 		}
+	}
+}
+
+func TestRevocationTokenGivesUpOnALoginThatNeverAnswers(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+	old := config.INFISICAL_URL
+	config.INFISICAL_URL = srv.URL + "/api"
+	t.Cleanup(func() { config.INFISICAL_URL = old })
+	t.Setenv(util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME, "id")
+	t.Setenv(util.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME, "secret")
+
+	cmd := &cobra.Command{}
+	cmd.Flags().String("client-id", "", "")
+	cmd.Flags().String("client-secret", "", "")
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	if _, err := revocationToken(ctx, cmd); err == nil {
+		t.Fatal("a login that never answered returned a token")
+	}
+	if waited := time.Since(start); waited > 3*time.Second {
+		t.Fatalf("the login held the run for %s", waited)
 	}
 }

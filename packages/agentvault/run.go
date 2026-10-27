@@ -373,6 +373,7 @@ func serve(opts Options, s startup) error {
 		return err
 	}
 	ps.cache = newSessionCache(resolver, ps.pollInterval)
+	ps.skillsSource = resolver
 
 	shipper, err := newSessionLogShipper(opts.ProxyToken)
 	if err != nil {
