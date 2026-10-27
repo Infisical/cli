@@ -425,7 +425,7 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	if outcome.sessionLog != nil {
 		var service, bundle, serviceType *string
 		if matched != nil {
-			kind := matched.serviceType()
+			kind := toServiceKind(matched.kind)
 			service, bundle, serviceType = &matched.name, &matched.accessBundleName, &kind
 		}
 		ps.sessionLogs.record(outcome.sessionLog, sessionLogRecord{
@@ -614,7 +614,10 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 	if err != nil {
 		return nil, matched, outcome, err
 	}
-	if staticMCP && resp.StatusCode == http.StatusUnauthorized {
+	// An insufficient_scope challenge too, or the agent's MCP client would start an authorization of its own
+	// whose token the proxy then overwrites with the stored one.
+	_, insufficientScope := insufficientScopeChallenge(resp)
+	if staticMCP && (resp.StatusCode == http.StatusUnauthorized || insufficientScope) {
 		_ = resp.Body.Close()
 		log.Warn().Str("service", matched.name).Str("serviceId", matched.id).
 			Msg("agent-vault: the MCP server rejected the service's credential")

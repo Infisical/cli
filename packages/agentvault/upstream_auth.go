@@ -3,6 +3,7 @@ package agentvault
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -74,12 +75,22 @@ func (ps *proxyServer) handleUpstreamAuth(req *http.Request, resp *http.Response
 		// An auth-error body can stay open indefinitely; draining it would stall the refresh.
 		_ = resp.Body.Close()
 		fresh, status, err := ps.cache.refreshCredential(sessionToken, svc.id, svc.hostPattern, sent)
+		// forwardHTTP answers these as it does for any request on a revoked session or proxy.
+		if refreshEndedSession(err) {
+			return nil, err
+		}
+		var notRecovered *refreshNotRecoveredError
+		if errors.As(err, &notRecovered) {
+			log.Warn().Str("service", svc.name).Str("serviceId", svc.id).Str("status", notRecovered.status).
+				Msg("agent-vault: the upstream rejected the OAuth token and Infisical has no other, not retrying")
+			return upstreamAuthFailed(req, refreshFailedBody(svc.name, notRecovered.status)), nil
+		}
 		if err != nil {
 			log.Warn().Err(err).Str("service", svc.name).Str("serviceId", svc.id).
 				Msg("agent-vault: the upstream rejected the OAuth token and Infisical could not refresh it")
 			return upstreamAuthFailed(req, credentialUnavailableBody(svc.name)), nil
 		}
-		if !replayable || bytes.Equal(fresh.value, sent.value) {
+		if !replayable {
 			log.Warn().Str("service", svc.name).Str("serviceId", svc.id).Bool("replayable", replayable).Str("status", status).
 				Msg("agent-vault: the upstream rejected the OAuth token, not retrying")
 			return upstreamAuthFailed(req, refreshFailedBody(svc.name, status)), nil
@@ -105,6 +116,7 @@ func (ps *proxyServer) handleUpstreamAuth(req *http.Request, resp *http.Response
 			status = oauthStatusNeedsAdditionalScopes
 		}
 		_ = retryResp.Body.Close()
+		ps.cache.rememberRejectedRefresh(sessionToken, svc.id, svc.hostPattern, &fresh, status)
 		log.Warn().Str("service", svc.name).Str("serviceId", svc.id).Int("retryStatus", retryResp.StatusCode).
 			Msg("agent-vault: the upstream rejected the refreshed OAuth token too")
 		return upstreamAuthFailed(req, refreshFailedBody(svc.name, status)), nil
@@ -124,11 +136,8 @@ func (ps *proxyServer) handleUpstreamAuth(req *http.Request, resp *http.Response
 // Reports whether the response was an insufficient_scope challenge. The scopes go to Infisical so the
 // service shows what reauthorizing has to request; a challenge naming none has nothing to record.
 func (ps *proxyServer) reportInsufficientScope(resp *http.Response, sessionToken string, svc *resolvedService, sent *credential) bool {
-	if resp.StatusCode != http.StatusForbidden {
-		return false
-	}
-	params := bearerChallengeParams(resp.Header.Values("WWW-Authenticate"))
-	if params["error"] != "insufficient_scope" {
+	params, ok := insufficientScopeChallenge(resp)
+	if !ok {
 		return false
 	}
 	scopes := challengedScopes(params["scope"])
@@ -143,6 +152,15 @@ func (ps *proxyServer) reportInsufficientScope(resp *http.Response, sessionToken
 		}
 	}()
 	return true
+}
+
+// A 403 whose Bearer challenge says the token lacks a scope, with the challenge's params.
+func insufficientScopeChallenge(resp *http.Response) (map[string]string, bool) {
+	if resp.StatusCode != http.StatusForbidden {
+		return nil, false
+	}
+	params := bearerChallengeParams(resp.Header.Values("WWW-Authenticate"))
+	return params, params["error"] == "insufficient_scope"
 }
 
 func challengedScopes(raw string) []string {

@@ -3,14 +3,11 @@ package agentvault
 import (
 	"bytes"
 	"crypto/sha256"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -149,40 +146,14 @@ func newMCPUpstream(t *testing.T) *mcpUpstream {
 
 func (u *mcpUpstream) host() string { return strings.TrimPrefix(u.server.URL, "https://") }
 
-// newRecordingProxy with the TLS the proxy insists on for an MCP service: the proxy trusts the upstream's
-// certificate and the returned client trusts the proxy's CA, as well as the upstream for an unmatched host.
+// newRecordingProxy with the TLS the proxy insists on for an MCP service. The client also trusts the upstream,
+// for a host no service matches.
 func newMCPRecordingProxy(t *testing.T, up *mcpUpstream, services []*resolvedService) (*http.Client, *sessionLogRecorder) {
 	t.Helper()
 
-	key, cert, err := generateRootCa()
-	if err != nil {
-		t.Fatal(err)
-	}
-	upstreamPool := x509.NewCertPool()
-	upstreamPool.AddCert(up.server.Certificate())
-	transport := newUpstreamTransport()
-	transport.TLSClientConfig = &tls.Config{RootCAs: upstreamPool}
-
-	ps := &proxyServer{transport: transport, ca: newCaManager(key, cert)}
-	ps.setConfig(ProxyConfig{TrafficPolicy: TrafficPolicyAnyHost})
-	ps.cache = newSessionCache(grantingResolver{services: services}, ps.pollInterval)
+	ps, client := newTLSProxy(t, up.server, grantingResolver{services: services})
 	ps.sessionLogs = newSessionLogRecorder("proxy-1", &fakeShipper{})
-
-	front := httptest.NewServer(http.HandlerFunc(ps.dispatch))
-	t.Cleanup(front.Close)
-
-	proxyURL, err := url.Parse(front.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	proxyURL.User = url.UserPassword("infisical", "agv_test-token")
-	clientPool := x509.NewCertPool()
-	clientPool.AddCert(cert)
-	clientPool.AddCert(up.server.Certificate())
-	client := &http.Client{Transport: &http.Transport{
-		Proxy:           http.ProxyURL(proxyURL),
-		TLSClientConfig: &tls.Config{RootCAs: clientPool},
-	}}
+	client.Transport.(*http.Transport).TLSClientConfig.RootCAs.AddCert(up.server.Certificate())
 	return client, ps.sessionLogs
 }
 
@@ -458,7 +429,7 @@ func TestResolveMapsTheServiceType(t *testing.T) {
 	}
 	var got []string
 	for _, svc := range res.Services {
-		got = append(got, fmt.Sprintf("%s=%s/%s", svc.name, svc.kind, svc.serviceType()))
+		got = append(got, fmt.Sprintf("%s=%s/%s", svc.name, svc.kind, toServiceKind(svc.kind)))
 	}
 	want := []string{"linear=mcp/mcp", "github=http/http", "future=http/http", "older=http/http"}
 	if !reflect.DeepEqual(got, want) {

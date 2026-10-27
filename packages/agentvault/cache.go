@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"golang.org/x/sync/singleflight"
 	"net/http"
 	"slices"
@@ -135,6 +136,9 @@ type sessionCache struct {
 	// Infisical is down or slow each request carrying that token gets its 502 at once rather than another
 	// refresh that can take the whole control-plane timeout.
 	failedRefreshes map[string]refusedEntry
+	// A scope report that reached Infisical, or failed to, is remembered too, so an agent repeating a call its
+	// grant does not cover sends one report per window rather than one per request.
+	reportedScopes map[string]refusedEntry
 	// Bumped under mu by every credential swap, so a poll can tell which swaps happened after it began.
 	swapGen uint64
 }
@@ -157,6 +161,7 @@ func newSessionCache(resolver sessionResolver, pollInterval func() time.Duration
 		tokens:          make(map[string]string),
 		refused:         make(map[string]refusedEntry),
 		failedRefreshes: make(map[string]refusedEntry),
+		reportedScopes:  make(map[string]refusedEntry),
 	}
 }
 
@@ -170,6 +175,19 @@ func rememberLocked(entries map[string]refusedEntry, key string, err error) map[
 	}
 	entries[key] = refusedEntry{err: err, until: time.Now().Add(refusedTTL)}
 	return entries
+}
+
+// The entry remembered under key while it is fresh. An expired one is dropped.
+func recentLocked(entries map[string]refusedEntry, key string) (refusedEntry, bool) {
+	entry, ok := entries[key]
+	if !ok {
+		return refusedEntry{}, false
+	}
+	if time.Now().Before(entry.until) {
+		return entry, true
+	}
+	delete(entries, key)
+	return refusedEntry{}, false
 }
 
 var errSessionGone = errors.New("session is no longer valid")
@@ -462,6 +480,24 @@ var (
 	errServiceRemoved           = errors.New("the service was removed from the session while its credential was refreshed")
 )
 
+// Infisical answered a refresh with the token the upstream rejected, or with one the upstream rejected too.
+// The status is Infisical's view of the service's OAuth connection, kept for the agent's message.
+type refreshNotRecoveredError struct{ status string }
+
+func (e *refreshNotRecoveredError) Error() string {
+	return fmt.Sprintf("the refresh did not produce a token the upstream accepts (status %q)", e.status)
+}
+
+// The refusals that end the session itself. A 404 from credential-refresh can mean the service is gone
+// rather than the session, so it stays a credential failure.
+func refreshEndedSession(err error) bool {
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+		return false
+	}
+	return isProxyTokenRejected(err) || isSessionGone(err)
+}
+
 func credentialHash(cred *credential) string {
 	sum := sha256.Sum256(cred.value)
 	return hex.EncodeToString(sum[:])
@@ -497,6 +533,11 @@ func (c *sessionCache) refreshCredential(sessionToken, serviceID, hostPattern st
 		fresh, status, err := refresher.refreshCredential(sessionToken, serviceID, hostPattern, rejectedHash)
 		if err != nil {
 			c.rememberRefreshFailure(flightKey, err)
+			// Dropped and refused the way lookup would, so the agent's next request is turned away at once
+			// rather than served from the entry until the next poll.
+			if refreshEndedSession(err) {
+				c.dropSession(key, err)
+			}
 			return nil, err
 		}
 		if status != "" && status != oauthStatusConnected {
@@ -511,6 +552,14 @@ func (c *sessionCache) refreshCredential(sessionToken, serviceID, hostPattern st
 		if err != nil {
 			return nil, err
 		}
+		// Infisical hands back the token it has when it could not refresh it. Remembered like a failure, so
+		// requests repeating that token get the same answer rather than another refresh each. A newer token
+		// in the cache still wins: swapCredential returns it instead.
+		if credentialHash(&swapped) == rejectedHash {
+			err := &refreshNotRecoveredError{status: status}
+			c.rememberRefreshFailure(flightKey, err)
+			return nil, err
+		}
 		return refreshed{cred: swapped, status: status}, nil
 	})
 	if err != nil {
@@ -523,21 +572,29 @@ func (c *sessionCache) refreshCredential(sessionToken, serviceID, hostPattern st
 func (c *sessionCache) recentRefreshFailure(flightKey string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	failed, ok := c.failedRefreshes[flightKey]
-	if !ok {
-		return nil
-	}
-	if time.Now().Before(failed.until) {
-		return failed.err
-	}
-	delete(c.failedRefreshes, flightKey)
-	return nil
+	failed, _ := recentLocked(c.failedRefreshes, flightKey)
+	return failed.err
 }
 
 func (c *sessionCache) rememberRefreshFailure(flightKey string, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.failedRefreshes = rememberLocked(c.failedRefreshes, flightKey, err)
+}
+
+// rememberRejectedRefresh records that the token a refresh produced was rejected by the upstream as well, so
+// the next 401 for it gets its answer without asking Infisical again within the window.
+func (c *sessionCache) rememberRejectedRefresh(sessionToken, serviceID, hostPattern string, rejected *credential, status string) {
+	flightKey := credentialFlightKey(sessionKey(sessionToken), serviceID, hostPattern, credentialHash(rejected), nil)
+	c.rememberRefreshFailure(flightKey, &refreshNotRecoveredError{status: status})
+}
+
+func (c *sessionCache) dropSession(key string, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.entries, key)
+	delete(c.tokens, key)
+	c.rememberRefusalLocked(key, err)
 }
 
 // reportMissingScopes tells Infisical which scopes the upstream's 403 insufficient_scope challenge asked for,
@@ -548,8 +605,19 @@ func (c *sessionCache) reportMissingScopes(sessionToken, serviceID, hostPattern 
 		return errCredentialNotRefreshable
 	}
 	rejectedHash := credentialHash(rejected)
-	_, err, _ := c.credentialFlights.Do(credentialFlightKey(sessionKey(sessionToken), serviceID, hostPattern, rejectedHash, requiredScopes), func() (any, error) {
-		return nil, refresher.reportMissingScopes(sessionToken, serviceID, hostPattern, rejectedHash, requiredScopes)
+	flightKey := credentialFlightKey(sessionKey(sessionToken), serviceID, hostPattern, rejectedHash, requiredScopes)
+	c.mu.Lock()
+	_, reported := recentLocked(c.reportedScopes, flightKey)
+	c.mu.Unlock()
+	if reported {
+		return nil
+	}
+	_, err, _ := c.credentialFlights.Do(flightKey, func() (any, error) {
+		err := refresher.reportMissingScopes(sessionToken, serviceID, hostPattern, rejectedHash, requiredScopes)
+		c.mu.Lock()
+		c.reportedScopes = rememberLocked(c.reportedScopes, flightKey, err)
+		c.mu.Unlock()
+		return nil, err
 	})
 	return err
 }

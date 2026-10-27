@@ -148,6 +148,10 @@ func CallResolveAgentVaultSession(httpClient *resty.Client, sessionToken string,
 	return res, nil
 }
 
+// The proxy calls these while an agent's request waits, and keeps a failed refresh's error for a few seconds,
+// so neither may buffer an unbounded body. A credential answer is a few kilobytes at most.
+const agentVaultCredentialResponseLimit = 64 << 10
+
 type RefreshAgentVaultServiceCredentialRequest struct {
 	HostPattern       string `json:"hostPattern"`
 	RejectedTokenHash string `json:"rejectedTokenHash"`
@@ -162,6 +166,7 @@ func CallRefreshAgentVaultServiceCredential(httpClient *resty.Client, sessionTok
 	var res RefreshAgentVaultServiceCredentialResponse
 	response, err := httpClient.
 		R().
+		SetResponseBodyLimit(agentVaultCredentialResponseLimit).
 		SetResult(&res).
 		SetHeader("User-Agent", USER_AGENT).
 		SetHeader(AgentVaultSessionHeader, sessionToken).
@@ -186,6 +191,7 @@ type ReportAgentVaultServiceMissingScopesRequest struct {
 func CallReportAgentVaultServiceMissingScopes(httpClient *resty.Client, sessionToken, serviceID string, request ReportAgentVaultServiceMissingScopesRequest) error {
 	response, err := httpClient.
 		R().
+		SetResponseBodyLimit(agentVaultCredentialResponseLimit).
 		SetHeader("User-Agent", USER_AGENT).
 		SetHeader(AgentVaultSessionHeader, sessionToken).
 		SetBody(request).

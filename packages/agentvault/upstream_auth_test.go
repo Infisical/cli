@@ -3,8 +3,6 @@ package agentvault
 import (
 	"bufio"
 	"crypto/sha256"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -147,36 +145,8 @@ func newOAuthFixture(t *testing.T, resolver *oauthResolver, build func(host stri
 	}
 	host := "127.0.0.1:" + upstreamURL.Port()
 
-	upstreamPool := x509.NewCertPool()
-	upstreamPool.AddCert(upstream.Certificate())
-
-	key, cert, err := generateRootCa()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	transport := newUpstreamTransport()
-	transport.TLSClientConfig = &tls.Config{RootCAs: upstreamPool}
-
 	resolver.services = []*resolvedService{build(host)}
-	ps := &proxyServer{transport: transport, ca: newCaManager(key, cert)}
-	ps.setConfig(ProxyConfig{TrafficPolicy: TrafficPolicyAnyHost})
-	ps.cache = newSessionCache(resolver, ps.pollInterval)
-
-	front := httptest.NewServer(http.HandlerFunc(ps.dispatch))
-	t.Cleanup(front.Close)
-
-	clientPool := x509.NewCertPool()
-	clientPool.AddCert(cert)
-	proxyURL, _ := url.Parse(front.URL)
-	proxyURL.User = url.UserPassword(ProxyAuthUsername, "agv_tok")
-
-	client := &http.Client{
-		Transport: &http.Transport{
-			Proxy:           http.ProxyURL(proxyURL),
-			TLSClientConfig: &tls.Config{RootCAs: clientPool},
-		},
-	}
+	_, client := newTLSProxy(t, upstream, resolver)
 	return client, host, up
 }
 
@@ -295,6 +265,16 @@ func TestAn401TwiceGivesA502WithoutTheChallenge(t *testing.T) {
 	if got := len(resolver.refreshCalls()); got != 1 {
 		t.Fatalf("refresh called %d times, want 1", got)
 	}
+
+	// The refreshed token is now the cached one, and its rejection was just seen.
+	resp, body = doWith(t, client, http.MethodGet, fmt.Sprintf("https://%s/mcp", host), "", nil)
+	assertUpstreamAuthFailed(t, resp, body, linearUnavailableBody)
+	if hits := up.recorded(); len(hits) != 3 || hits[2].auth != "Bearer new-token" {
+		t.Fatalf("upstream saw %+v, want the refreshed token sent once more", hits)
+	}
+	if got := len(resolver.refreshCalls()); got != 1 {
+		t.Fatalf("refresh called %d times; a refreshed token just rejected should be remembered", got)
+	}
 }
 
 func TestAnUnchangedTokenIsNotRetried(t *testing.T) {
@@ -312,6 +292,12 @@ func TestAnUnchangedTokenIsNotRetried(t *testing.T) {
 			assertUpstreamAuthFailed(t, resp, body, want)
 			if got := len(up.recorded()); got != 1 {
 				t.Fatalf("upstream saw %d requests; the same token must not be sent again", got)
+			}
+
+			resp, body = doWith(t, client, http.MethodGet, fmt.Sprintf("https://%s/mcp", host), "", nil)
+			assertUpstreamAuthFailed(t, resp, body, want)
+			if got := len(resolver.refreshCalls()); got != 1 {
+				t.Fatalf("refresh called %d times; an unchanged token just seen should be remembered", got)
 			}
 		})
 	}
@@ -370,6 +356,57 @@ func TestARefreshFailureFallsThroughToA502(t *testing.T) {
 	}
 }
 
+func TestARefreshThatEndsTheSessionIsAnsweredAsARevokedSession(t *testing.T) {
+	cases := []struct {
+		name   string
+		err    error
+		status int
+		body   string
+	}{
+		{"session revoked", &api.APIError{StatusCode: http.StatusUnauthorized, Name: infisicalUnauthorizedName}, http.StatusForbidden, "the session is no longer valid"},
+		{"proxy token revoked", &api.APIError{StatusCode: http.StatusUnauthorized, Name: proxyTokenRejectedName}, http.StatusServiceUnavailable, proxyRevokedBody},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resolver := &oauthResolver{err: tc.err}
+			client, host, up := newOAuthFixture(t, resolver, func(h string) *resolvedService { return oauthMCPService(h, "old-token") }, acceptOnly("new-token"))
+
+			for range 2 {
+				resp, body := doWith(t, client, http.MethodGet, fmt.Sprintf("https://%s/mcp", host), "", nil)
+				if resp.StatusCode != tc.status || strings.TrimSpace(body) != tc.body {
+					t.Fatalf("got %d: %s, want %d: %s", resp.StatusCode, body, tc.status, tc.body)
+				}
+			}
+			// The second request is refused from the cache, without reaching the upstream or Infisical.
+			if got := len(up.recorded()); got != 1 {
+				t.Fatalf("upstream saw %d requests, want 1", got)
+			}
+			if got := len(resolver.refreshCalls()); got != 1 {
+				t.Fatalf("refresh called %d times, want 1", got)
+			}
+		})
+	}
+}
+
+func TestRefreshEndedSessionLeavesA404AsACredentialFailure(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{errSessionGone, true},
+		{&api.APIError{StatusCode: http.StatusUnauthorized, Name: infisicalUnauthorizedName}, true},
+		{&api.APIError{StatusCode: http.StatusUnauthorized, Name: proxyTokenRejectedName}, true},
+		{&api.APIError{StatusCode: http.StatusNotFound, Name: infisicalNotFoundName}, false},
+		{&api.APIError{StatusCode: http.StatusUnauthorized}, false},
+		{&refreshNotRecoveredError{status: oauthStatusNeedsReauthorization}, false},
+		{nil, false},
+	} {
+		if got := refreshEndedSession(tc.err); got != tc.want {
+			t.Errorf("refreshEndedSession(%v) = %v, want %v", tc.err, got, tc.want)
+		}
+	}
+}
+
 func TestARememberedRefreshFailureExpires(t *testing.T) {
 	resolver := &oauthResolver{err: errors.New("dial tcp: connection refused")}
 	cache := newSessionCache(resolver, func() time.Duration { return time.Minute })
@@ -424,6 +461,40 @@ func TestAStaticCredential401OnAnMCPServiceGivesA502WithoutTheChallenge(t *testi
 	}
 	if got := len(resolver.refreshCalls()); got != 0 {
 		t.Fatalf("a stored credential was sent for refresh %d times", got)
+	}
+}
+
+func TestAStaticCredentialInsufficientScopeOnAnMCPServiceGivesA502WithoutTheChallenge(t *testing.T) {
+	resolver := &oauthResolver{}
+	client, host, _ := newOAuthFixture(t, resolver, func(h string) *resolvedService {
+		svc := mcpService(h)
+		svc.credential = credential{kind: credentialBearer, headerPrefix: "Bearer", value: []byte("stored-key")}
+		return svc
+	}, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("WWW-Authenticate", `Bearer error="insufficient_scope", scope="issues:write"`)
+		w.WriteHeader(http.StatusForbidden)
+	})
+
+	resp, body := doWith(t, client, http.MethodPost, fmt.Sprintf("https://%s/mcp", host), "application/json", strings.NewReader(mcpCallBody))
+	assertUpstreamAuthFailed(t, resp, body, `{"error":"upstream_auth_failed","message":"The linear service's credential was rejected. Update it in Infisical Agent Vault."}`)
+	if got := len(resolver.refreshCalls()); got != 0 {
+		t.Fatalf("a stored credential's scopes were reported %d times", got)
+	}
+}
+
+func TestAStaticCredentialPlain403OnAnMCPServicePassesThrough(t *testing.T) {
+	client, host, _ := newOAuthFixture(t, &oauthResolver{}, func(h string) *resolvedService {
+		svc := mcpService(h)
+		svc.credential = credential{kind: credentialBearer, headerPrefix: "Bearer", value: []byte("stored-key")}
+		return svc
+	}, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("not your project"))
+	})
+
+	resp, body := doWith(t, client, http.MethodGet, fmt.Sprintf("https://%s/mcp", host), "", nil)
+	if resp.StatusCode != http.StatusForbidden || body != "not your project" {
+		t.Fatalf("got %d: %s", resp.StatusCode, body)
 	}
 }
 
@@ -824,6 +895,41 @@ func TestConcurrentScopeReportsEachReachInfisicalWhenTheirTokenOrScopesDiffer(t 
 			}
 			if !reported[tokenHash("tok-value")+" read"] || !reported[tokenHash(tc.token)+" "+strings.Join(tc.scopes, " ")] || len(reported) != 2 {
 				t.Fatalf("Infisical received scope reports %v, want both token/scope pairs", reported)
+			}
+		})
+	}
+}
+
+func TestARepeatedScopeReportIsSentOncePerWindow(t *testing.T) {
+	for name, err := range map[string]error{"accepted": nil, "failed": errors.New("dial tcp: connection refused")} {
+		t.Run(name, func(t *testing.T) {
+			resolver := &oauthResolver{err: err}
+			resolver.setServices(oauthMCPService("mcp.example", "tok-value"))
+			cache := newTestCache(resolver)
+			sent := oauthToken("tok-value")
+
+			_ = cache.reportMissingScopes("tok", "svc-1", "mcp.example", &sent, []string{"write"})
+			if err := cache.reportMissingScopes("tok", "svc-1", "mcp.example", &sent, []string{"write"}); err != nil {
+				t.Fatalf("a remembered report returned %v", err)
+			}
+			if got := len(resolver.refreshCalls()); got != 1 {
+				t.Fatalf("Infisical received %d reports, want 1 within the window", got)
+			}
+
+			_ = cache.reportMissingScopes("tok", "svc-1", "mcp.example", &sent, []string{"admin"})
+			if got := len(resolver.refreshCalls()); got != 2 {
+				t.Fatalf("Infisical received %d reports, want a different scope set reported too", got)
+			}
+
+			cache.mu.Lock()
+			for key, entry := range cache.reportedScopes {
+				entry.until = time.Now().Add(-time.Second)
+				cache.reportedScopes[key] = entry
+			}
+			cache.mu.Unlock()
+			_ = cache.reportMissingScopes("tok", "svc-1", "mcp.example", &sent, []string{"write"})
+			if got := len(resolver.refreshCalls()); got != 3 {
+				t.Fatalf("Infisical received %d reports, want the report sent again once the window passed", got)
 			}
 		})
 	}

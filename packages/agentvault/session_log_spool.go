@@ -8,10 +8,10 @@ import (
 )
 
 // Never add headers, bodies or the query string: they can carry the injected credential. The one exception
-// is mcp, which holds only JSON-RPC method and tool names from the agent's own body. They are read before
-// any substitution or credential reaches the request, so nothing injected can be among them, and only names
-// matching mcpNamePattern are kept, so a value that happens to hold a secret cannot be logged as one. Tool
-// arguments are never read.
+// is mcp, which holds only JSON-RPC method and tool names from the agent's own body. They are captured before
+// any substitution or credential reaches the request, so nothing injected can be among them. mcpNamePattern
+// bounds their length and characters; it does not tell a name from a secret, so a name the agent made up is
+// logged as written. Tool arguments are parsed past but never kept in the record.
 type sessionLogRecord struct {
 	Ts           string  `json:"ts"`
 	Seq          uint64  `json:"seq"`

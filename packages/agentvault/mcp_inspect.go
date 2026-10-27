@@ -16,9 +16,10 @@ const (
 	serviceKindMCP  = "mcp"
 
 	maxMCPInspectBody = 1 << 20
-	// The ring holds thousands of records per session, so one record must stay small. A longer batch is
-	// still read and validated in full, but only its first calls are kept and the record says so.
-	maxMCPCallsPerRecord = 32
+	// The ring holds thousands of records per session and is capped by count, so one record must stay small:
+	// eight full-length names add about as much as the longest logged path. A longer batch is still read and
+	// validated in full, but only its first calls are kept and the record says so.
+	maxMCPCallsPerRecord = 8
 
 	mcpMethodToolsCall = "tools/call"
 )
@@ -36,18 +37,11 @@ type mcpDetail struct {
 	Truncated bool      `json:"truncated,omitempty"`
 }
 
-func (s *resolvedService) serviceType() string {
-	if s.kind == serviceKindMCP {
-		return serviceKindMCP
-	}
-	return serviceKindHTTP
-}
-
 func unparsedMCP() *mcpDetail {
 	return &mcpDetail{Calls: []mcpCall{}}
 }
 
-// A body already read into memory, so applyBodySubstitutions takes the bytes rather than reading them again.
+// A body already read into memory. It keeps the complete bytes so an OAuth retry can send the same body again.
 type bufferedBody struct {
 	*bytes.Reader
 	data []byte
@@ -196,7 +190,7 @@ func readJSONRPCMessage(dec *json.Decoder) (mcpCall, bool, error) {
 	var hasMethod, hasParams, hasTool, toolNotString bool
 
 	for dec.More() {
-		key, err := objectKey(dec)
+		key, err := readJSONString(dec)
 		if err != nil {
 			return mcpCall{}, false, err
 		}
@@ -206,7 +200,7 @@ func readJSONRPCMessage(dec *json.Decoder) (mcpCall, bool, error) {
 				return mcpCall{}, false, errJSONRPCUnreadable
 			}
 			hasMethod = true
-			if method, err = stringValue(dec); err != nil {
+			if method, err = readJSONString(dec); err != nil {
 				return mcpCall{}, false, err
 			}
 		case strings.EqualFold(key, "params"):
@@ -256,7 +250,7 @@ func readParamsName(dec *json.Decoder) (name string, hasName, nameNotString bool
 	}
 
 	for dec.More() {
-		key, err := objectKey(dec)
+		key, err := readJSONString(dec)
 		if err != nil {
 			return "", false, false, err
 		}
@@ -289,19 +283,7 @@ func readParamsName(dec *json.Decoder) (name string, hasName, nameNotString bool
 	return name, hasName, nameNotString, nil
 }
 
-func objectKey(dec *json.Decoder) (string, error) {
-	tok, err := dec.Token()
-	if err != nil {
-		return "", err
-	}
-	key, ok := tok.(string)
-	if !ok {
-		return "", errJSONRPCUnreadable
-	}
-	return key, nil
-}
-
-func stringValue(dec *json.Decoder) (string, error) {
+func readJSONString(dec *json.Decoder) (string, error) {
 	tok, err := dec.Token()
 	if err != nil {
 		return "", err
