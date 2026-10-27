@@ -42,11 +42,11 @@ func TestWinrmScanCertificatesReturnsStoreResults(t *testing.T) {
 		}, nil
 	}
 
-	rec := serveWinrmScan(t, `{"username":"svc","password":"p","params":{"stores":["My","WebHosting"],"maxCertificates":999999}}`)
+	rec := serveWinrmScan(t, `{"username":"svc","password":"p","params":{"stores":["My","WebHosting"],"maxCertificates":250}}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if len(gotStores) != 2 || gotMax != defaultWinrmStoreScanMaxCerts {
+	if len(gotStores) != 2 || gotMax != 250 {
 		t.Fatalf("unexpected scan args: stores=%v max=%d", gotStores, gotMax)
 	}
 
@@ -71,17 +71,26 @@ func TestWinrmScanCertificatesRejectsUnknownStore(t *testing.T) {
 	}
 }
 
+func TestWinrmScanCertificatesRejectsAnOutOfRangeLimit(t *testing.T) {
+	for _, max := range []string{"0", "5001", "-1"} {
+		rec := serveWinrmScan(t, `{"username":"svc","password":"p","params":{"stores":["My"],"maxCertificates":`+max+`}}`)
+		if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "maxCertificates must be between") {
+			t.Fatalf("expected maxCertificates=%s to be rejected, got %d: %s", max, rec.Code, rec.Body.String())
+		}
+	}
+}
+
 func TestWinrmScanCertificatesReportsBusyGateway(t *testing.T) {
-	for range certScanConcurrency {
-		certScanSlots <- struct{}{}
+	for range winrmStoreScanConcurrency {
+		winrmStoreScanSlots <- struct{}{}
 	}
 	t.Cleanup(func() {
-		for range certScanConcurrency {
-			<-certScanSlots
+		for range winrmStoreScanConcurrency {
+			<-winrmStoreScanSlots
 		}
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/scan-certificates", strings.NewReader(`{"username":"svc","password":"p","params":{"stores":["My"]}}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/scan-certificates", strings.NewReader(`{"username":"svc","password":"p","params":{"stores":["My"],"maxCertificates":10}}`))
 	ctx, cancel := context.WithCancel(context.WithValue(req.Context(), winrmTargetContextKey{}, winrmTarget{Host: "10.0.0.5", Port: 5985}))
 	cancel()
 	rec := httptest.NewRecorder()

@@ -114,6 +114,21 @@ func TestBuildStoreResultsReportsRequestedCAAsCAChain(t *testing.T) {
 	}
 }
 
+func TestBuildStoreResultsTreatsAKeyOwningCAAsALeaf(t *testing.T) {
+	p := newTestPKI(t)
+	resp := BuildStoreResults([]StoreCertificate{
+		{Store: "Root", Thumbprint: "CC", DER: p.root.Raw},
+		{Store: "My", Thumbprint: "BB", HasPrivateKey: true, Requested: true, DER: p.inter.Raw},
+	})
+	r := resp.Certificates[0]
+	if r.Chains[0].Kind != ChainKindLeaf {
+		t.Fatalf("expected a key-owning CA certificate to be a leaf, got %q", r.Chains[0].Kind)
+	}
+	if got := chainDER(t, resp, r); len(got) != 2 || !bytes.Equal(got[1], p.root.Raw) {
+		t.Fatalf("expected the chain to reach the root, got %d certificates", len(got))
+	}
+}
+
 func TestBuildStoreResultsMarksUnparseableCertificates(t *testing.T) {
 	resp := BuildStoreResults([]StoreCertificate{
 		{Store: "My", Thumbprint: "DD", Requested: true, DER: []byte{0x30, 0x03, 0x02, 0x01, 0x01}},
@@ -211,7 +226,7 @@ func TestSignatureCheckerVerifiesSharedIssuersOnce(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, chain := chainForStoreCertificate(leaf, issuers, checker, time.Now()); len(chain) != 3 {
+		if _, chain := chainForStoreCertificate(leaf, false, issuers, checker, time.Now()); len(chain) != 3 {
 			t.Fatalf("expected a 3-certificate chain, got %d", len(chain))
 		}
 	}

@@ -117,7 +117,7 @@ func buildStoreResults(certs []StoreCertificate, budget, maxChecks int, now time
 			response.Certificates = append(response.Certificates, result)
 			continue
 		}
-		kind, chain := chainForStoreCertificate(cert, issuers, checker, now)
+		kind, chain := chainForStoreCertificate(cert, c.HasPrivateKey, issuers, checker, now)
 		indexes, ok := builder.add(chain)
 		if !ok {
 			response.TruncatedReason = TruncatedResponseSize
@@ -146,8 +146,9 @@ func newIssuerIndex(certs []*x509.Certificate) issuerIndex {
 	return idx
 }
 
-func chainForStoreCertificate(cert *x509.Certificate, issuers issuerIndex, checker *signatureChecker, now time.Time) (ChainKind, []*x509.Certificate) {
-	if isCACert(cert) {
+// A CA certificate whose key is on the host, such as an AD CS signing certificate, belongs to the server.
+func chainForStoreCertificate(cert *x509.Certificate, ownsKey bool, issuers issuerIndex, checker *signatureChecker, now time.Time) (ChainKind, []*x509.Certificate) {
+	if isCACert(cert) && !ownsKey {
 		return ChainKindCA, []*x509.Certificate{cert}
 	}
 	chain := []*x509.Certificate{cert}

@@ -12,9 +12,13 @@ import (
 )
 
 const (
-	maxWinrmStoreScanStores       = 5
-	defaultWinrmStoreScanMaxCerts = 5000
+	maxWinrmStoreScanStores   = 5
+	maxWinrmStoreScanCerts    = 5000
+	winrmStoreScanConcurrency = 4
 )
+
+// A store scan holds tens of MiB until its response is sent, so it gets fewer slots than a Linux scan.
+var winrmStoreScanSlots = make(chan struct{}, winrmStoreScanConcurrency)
 
 var errWinrmGatewayBusy = errors.New("gateway busy with other certificate scans")
 
@@ -39,22 +43,21 @@ func handleWinrmScanCertificates(ctx context.Context, env *winrmRequestEnvelope)
 			return nil, fmt.Errorf("unsupported certificate store %q", store)
 		}
 	}
-	maxCerts := p.MaxCertificates
-	if maxCerts <= 0 || maxCerts > defaultWinrmStoreScanMaxCerts {
-		maxCerts = defaultWinrmStoreScanMaxCerts
+	if p.MaxCertificates < 1 || p.MaxCertificates > maxWinrmStoreScanCerts {
+		return nil, fmt.Errorf("maxCertificates must be between 1 and %d", maxWinrmStoreScanCerts)
 	}
 
 	waitCtx, cancelWait := context.WithTimeout(ctx, certScanQueueWait)
 	defer cancelWait()
 	select {
-	case certScanSlots <- struct{}{}:
-		defer func() { <-certScanSlots }()
+	case winrmStoreScanSlots <- struct{}{}:
+		defer func() { <-winrmStoreScanSlots }()
 	case <-waitCtx.Done():
-		log.Warn().Int("concurrency", certScanConcurrency).Msg("winrm: no free scan slot, rejecting certificate store scan")
+		log.Warn().Int("concurrency", winrmStoreScanConcurrency).Msg("winrm: no free scan slot, rejecting certificate store scan")
 		return nil, errWinrmGatewayBusy
 	}
 
-	scan, err := scanWinrmCertificateStores(ctx, credsFromEnv(ctx, env, p.winrmTransportParams), p.Stores, maxCerts)
+	scan, err := scanWinrmCertificateStores(ctx, credsFromEnv(ctx, env, p.winrmTransportParams), p.Stores, p.MaxCertificates)
 	if err != nil {
 		return nil, err
 	}

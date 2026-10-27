@@ -26,7 +26,7 @@ var issuerStores = []string{"CA", "Root"}
 
 const (
 	storeRecordMarker = '\x1e'
-	// WinRM re-encodes stdout on the wire, so this must stay well under maxWinRMReadBytes per connection.
+	// Keeps one scan's output, and the JSON built from it, under the backend's 24 MiB response limit.
 	storeScanOutputBudget  = 14 * 1024 * 1024
 	maxStoreScanOutputSize = 16 * 1024 * 1024
 	maxIssuerRecords       = 2000
