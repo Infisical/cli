@@ -16,7 +16,7 @@ import (
 // clearTelemetryEnv keeps an opt-out set on the machine running the tests from leaking into them.
 func clearTelemetryEnv(t *testing.T) {
 	t.Helper()
-	t.Setenv(util.INFISICAL_TELEMETRY_ENABLED_NAME, "")
+	t.Setenv(util.INFISICAL_DISABLE_TELEMETRY_NAME, "")
 	t.Setenv(util.DO_NOT_TRACK_NAME, "")
 }
 
@@ -91,9 +91,9 @@ func TestTelemetryFlagIsAppliedAfterParsing(t *testing.T) {
 		}
 	})
 
-	t.Run("INFISICAL_TELEMETRY_ENABLED=false disables", func(t *testing.T) {
-		if executeRootForTelemetry(t, map[string]string{util.INFISICAL_TELEMETRY_ENABLED_NAME: "false"}) {
-			t.Fatal("telemetry stayed enabled after INFISICAL_TELEMETRY_ENABLED=false")
+	t.Run("INFISICAL_DISABLE_TELEMETRY=1 disables", func(t *testing.T) {
+		if executeRootForTelemetry(t, map[string]string{util.INFISICAL_DISABLE_TELEMETRY_NAME: "1"}) {
+			t.Fatal("telemetry stayed enabled after INFISICAL_DISABLE_TELEMETRY=1")
 		}
 	})
 
@@ -108,20 +108,20 @@ func TestTelemetryEnabledPrecedence(t *testing.T) {
 	cases := []struct {
 		name        string
 		flag        string // empty leaves --telemetry unset
-		enabledEnv  string
+		disableEnv  string
 		doNotTrack  string
 		wantEnabled bool
 	}{
 		{name: "nothing set", wantEnabled: true},
 		{name: "flag false", flag: "false", wantEnabled: false},
 		{name: "explicit flag true beats DO_NOT_TRACK", flag: "true", doNotTrack: "1", wantEnabled: true},
-		{name: "explicit flag true beats env false", flag: "true", enabledEnv: "false", wantEnabled: true},
-		{name: "explicit flag false beats env true", flag: "false", enabledEnv: "true", wantEnabled: false},
-		{name: "env false", enabledEnv: "false", wantEnabled: false},
-		{name: "env 0", enabledEnv: "0", wantEnabled: false},
-		{name: "env true", enabledEnv: "true", wantEnabled: true},
-		{name: "env not a boolean fails closed", enabledEnv: "nope", wantEnabled: false},
-		{name: "env true does not override DO_NOT_TRACK", enabledEnv: "true", doNotTrack: "1", wantEnabled: false},
+		{name: "explicit flag true beats INFISICAL_DISABLE_TELEMETRY", flag: "true", disableEnv: "1", wantEnabled: true},
+		{name: "INFISICAL_DISABLE_TELEMETRY=1", disableEnv: "1", wantEnabled: false},
+		{name: "INFISICAL_DISABLE_TELEMETRY=true", disableEnv: "true", wantEnabled: false},
+		{name: "INFISICAL_DISABLE_TELEMETRY=false keeps it on", disableEnv: "false", wantEnabled: true},
+		{name: "INFISICAL_DISABLE_TELEMETRY=0 keeps it on", disableEnv: "0", wantEnabled: true},
+		{name: "INFISICAL_DISABLE_TELEMETRY=no still opts out", disableEnv: "no", wantEnabled: false},
+		{name: "INFISICAL_DISABLE_TELEMETRY=false does not override DO_NOT_TRACK", disableEnv: "false", doNotTrack: "1", wantEnabled: false},
 		{name: "DO_NOT_TRACK=1", doNotTrack: "1", wantEnabled: false},
 		{name: "DO_NOT_TRACK=true", doNotTrack: "true", wantEnabled: false},
 		{name: "DO_NOT_TRACK=yes", doNotTrack: "yes", wantEnabled: false},
@@ -133,7 +133,7 @@ func TestTelemetryEnabledPrecedence(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			clearTelemetryEnv(t)
-			t.Setenv(util.INFISICAL_TELEMETRY_ENABLED_NAME, tc.enabledEnv)
+			t.Setenv(util.INFISICAL_DISABLE_TELEMETRY_NAME, tc.disableEnv)
 			t.Setenv(util.DO_NOT_TRACK_NAME, tc.doNotTrack)
 
 			root := &cobra.Command{Use: "infisical"}
