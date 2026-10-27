@@ -1007,6 +1007,15 @@ func TestLoginRenewalArgs(t *testing.T) {
 			t.Fatalf("unexpected args %v", got)
 		}
 	})
+
+	t.Run("a telemetry opt-out is passed on", func(t *testing.T) {
+		TelemetryOptedOut = true
+		t.Cleanup(func() { TelemetryOptedOut = false })
+		got := LoginRenewalArgs(ResolvedProfile{Name: "work"}, models.Profile{Name: "work"}, true)
+		if strings.Join(got, " ") != "login --silent --telemetry=false --profile work" {
+			t.Fatalf("unexpected args %v", got)
+		}
+	})
 }
 
 // The gateway, relay, and kmip commands resolve their own domain. They must

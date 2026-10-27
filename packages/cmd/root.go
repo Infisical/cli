@@ -148,11 +148,11 @@ func topLevelCommandName(cmd *cobra.Command) string {
 func init() {
 	util.GetStderrWriter = RootCmdStderrWriter
 	util.GetStdoutWriter = RootCmdStdoutWriter
-	cobra.OnInitialize(initLog, initLogOutput)
+	cobra.OnInitialize(initLog, initLogOutput, initTelemetry)
 	RootCmd.PersistentFlags().StringP("log-level", "l", "", "log level (trace, debug, info, warn, error, fatal)")
 	RootCmd.PersistentFlags().StringVar(&logFormat, "log-format", "", "log output format: console (default, colored), plain (no color), json (structured). Set NO_COLOR=1 to disable colors in console mode. Can also set via LOG_FORMAT env var.")
 	RootCmd.PersistentFlags().StringVar(&logDestination, "log-destination", "", "log output destination: stderr (default), stdout. Can also set via LOG_DESTINATION env var.")
-	RootCmd.PersistentFlags().Bool("telemetry", true, "Infisical collects non-sensitive telemetry data to enhance features and improve user experience. Participation is voluntary")
+	RootCmd.PersistentFlags().Bool("telemetry", true, "Infisical collects non-sensitive telemetry data to enhance features and improve user experience. Participation is voluntary. Can also opt out by setting INFISICAL_DISABLE_TELEMETRY=1 or DO_NOT_TRACK=1.")
 	RootCmd.PersistentFlags().StringVar(&config.INFISICAL_URL, "domain", fmt.Sprintf("%s/api", util.INFISICAL_DEFAULT_US_URL), "Point the CLI to your Infisical instance (e.g., https://eu.infisical.com for EU Cloud, or https://your-instance.com for self-hosted). Can also set via INFISICAL_DOMAIN environment variable or the 'general.domain' field in .infisical.yaml (or 'domain' in a legacy .infisical.json). Required for non-US Cloud users.")
 	RootCmd.PersistentFlags().Bool("silent", false, "Disable output of tip/info messages. Useful when running in scripts or CI/CD pipelines.")
 	RootCmd.PersistentFlags().String("profile", "", "Use a specific login profile for this command (see [infisical profile list]). Can also set via the INFISICAL_PROFILE environment variable.")
@@ -215,8 +215,38 @@ func init() {
 		}
 	}
 
-	isTelemetryOn, _ := RootCmd.PersistentFlags().GetBool("telemetry")
-	Telemetry = telemetry.NewTelemetry(isTelemetryOn)
+	// Enabled until initTelemetry applies the opt-out: argv is not parsed yet here.
+	Telemetry = telemetry.NewTelemetry(true)
+}
+
+// initTelemetry applies the opt-out. It runs as a cobra initializer, so after flag parsing and for every
+// command, including one that replaces the root's PersistentPreRun.
+func initTelemetry() {
+	enabled := telemetryEnabled(RootCmd)
+	util.TelemetryOptedOut = !enabled
+	Telemetry.SetEnabled(enabled)
+}
+
+// telemetryEnabled resolves the opt-out. An explicitly passed --telemetry wins; otherwise telemetry is off if
+// INFISICAL_DISABLE_TELEMETRY or DO_NOT_TRACK is set.
+func telemetryEnabled(root *cobra.Command) bool {
+	flags := root.PersistentFlags()
+	if flags.Changed("telemetry") {
+		enabled, _ := flags.GetBool("telemetry")
+		return enabled
+	}
+
+	return !optedOut(os.Getenv(util.INFISICAL_DISABLE_TELEMETRY_NAME)) && !optedOut(os.Getenv(util.DO_NOT_TRACK_NAME))
+}
+
+// optedOut reads an opt-out variable. DO_NOT_TRACK has no formal spec; like PostHog's own CLI, any value other
+// than empty, 0 or false opts out, so a value that is neither still never sends.
+func optedOut(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "0", "false":
+		return false
+	}
+	return true
 }
 
 func initLog() {
