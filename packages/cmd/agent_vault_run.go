@@ -228,6 +228,18 @@ func agentVaultSourceName(source agentVaultSource, flagName, envName string) str
 	return flagName
 }
 
+// resolveAgentVaultSessionLabel returns the label to send when this command mints a session. A session token names
+// a session created in the dashboard, whose label is edited there, so --label alongside one is refused.
+func resolveAgentVaultSessionLabel(cmd *cobra.Command, sessionToken string, tokenSource agentVaultSource) (string, error) {
+	if sessionToken != "" && cmd.Flags().Changed("label") {
+		return "", fmt.Errorf(
+			"--label applies to a session this command mints; label the one behind %s in the dashboard. Drop --label, or mint here with --access-bundle",
+			agentVaultSourceName(tokenSource, "--session-token", agentVaultSessionTokenEnv))
+	}
+	label, _ := cmd.Flags().GetString("label")
+	return strings.TrimSpace(label), nil
+}
+
 func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	sessionToken, tokenSource, err := resolveAgentVaultSessionToken(cmd)
 	if err != nil {
@@ -266,11 +278,12 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	}
 
 	ttl, _ := cmd.Flags().GetString("ttl")
-	label, _ := cmd.Flags().GetString("label")
-	label = strings.TrimSpace(label)
+	label, err := resolveAgentVaultSessionLabel(cmd, sessionToken, tokenSource)
+	if err != nil {
+		util.HandleError(err)
+	}
 
-	// None of these flags can reach a session minted in the dashboard: its expiry was fixed when it was created,
-	// and its label is edited in the dashboard.
+	// Neither flag can reach a session minted in the dashboard: its expiry was fixed when it was created.
 	if sessionToken != "" {
 		tokenName := agentVaultSourceName(tokenSource, "--session-token", agentVaultSessionTokenEnv)
 		if cmd.Flags().Changed("ttl") {
@@ -280,10 +293,6 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		if cmd.Flags().Changed("keep-session") {
 			util.HandleError(fmt.Errorf(
 				"--keep-session applies to a session this command mints; the one behind %s is never revoked here. Drop --keep-session, or mint here with --access-bundle", tokenName))
-		}
-		if cmd.Flags().Changed("label") {
-			util.HandleError(fmt.Errorf(
-				"--label applies to a session this command mints; label the one behind %s in the dashboard. Drop --label, or mint here with --access-bundle", tokenName))
 		}
 	}
 
