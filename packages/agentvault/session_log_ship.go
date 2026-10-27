@@ -103,6 +103,30 @@ func newSessionLogShipper(proxyToken func() string) (*sessionLogShipperClient, e
 
 var errInsecureUploadURL = errors.New("agent-vault: refusing to upload session logs to a link that is not https")
 
+// The bucket answered but refused the upload.
+type s3UploadError struct {
+	status int
+	code   string
+}
+
+func (e *s3UploadError) Error() string {
+	if e.code != "" {
+		return fmt.Sprintf("agent-vault: the bucket refused the upload with status %d (%s)", e.status, e.code)
+	}
+	return fmt.Sprintf("agent-vault: the bucket refused the upload with status %d", e.status)
+}
+
+// A refusal can mean the link itself is wrong, say after the connection's keys were rotated or the bucket changed, so
+// the retry asks for a new one. An outage leaves the link good, and reusing it keeps the retry from counting against
+// the org's daily upload cap again.
+func needsFreshUploadLink(err error) bool {
+	if errors.Is(err, errInsecureUploadURL) {
+		return true
+	}
+	var refused *s3UploadError
+	return errors.As(err, &refused) && refused.status >= 400 && refused.status < 500
+}
+
 func scrubURLError(err error) error {
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {
@@ -150,10 +174,7 @@ func (c *sessionLogShipperClient) putObject(ctx context.Context, uploadURL strin
 		return nil
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		if code := s3ErrorCode(res.Body); code != "" {
-			return fmt.Errorf("agent-vault: the bucket refused the upload with status %d (%s)", res.StatusCode, code)
-		}
-		return fmt.Errorf("agent-vault: the bucket refused the upload with status %d", res.StatusCode)
+		return &s3UploadError{status: res.StatusCode, code: s3ErrorCode(res.Body)}
 	}
 	return nil
 }

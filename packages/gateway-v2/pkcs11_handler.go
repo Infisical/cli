@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -150,6 +152,7 @@ func servePkcs11Mux(module Pkcs11Module) *http.ServeMux {
 	mux.HandleFunc("/v1/generate-key-pair", wrapPkcs11(module, handleGenerateKeyPair))
 	mux.HandleFunc("/v1/sign", wrapPkcs11(module, handleSign))
 	mux.HandleFunc("/v1/get-public-key", wrapPkcs11(module, handleGetPublicKey))
+	mux.HandleFunc("/v1/find-keys", wrapPkcs11(module, handleFindKeys))
 	return mux
 }
 
@@ -175,8 +178,14 @@ func safeMessageForCode(code Pkcs11ErrorCode) string {
 		return "Slot not found on this HSM"
 	case Pkcs11ErrKeyNotFound:
 		return "Key not found on this HSM"
+	case Pkcs11ErrKeyAmbiguous:
+		return "More than one key on this HSM matches the key reference"
 	case Pkcs11ErrMechanismInvalid:
 		return "Mechanism not supported by this HSM"
+	case Pkcs11ErrKeyTypeMismatch:
+		return "The key's type does not match the signing mechanism"
+	case Pkcs11ErrSignatureMismatch:
+		return "The signature does not verify with the expected public key"
 	case Pkcs11ErrDriverUnavailable:
 		return "Driver unavailable"
 	case Pkcs11ErrNotSupported:
@@ -219,7 +228,11 @@ func wrapPkcs11(module Pkcs11Module, fn pkcs11Handler) http.HandlerFunc {
 			var p11Err *Pkcs11Error
 			if errors.As(err, &p11Err) {
 				log.Error().Str("code", string(p11Err.Code)).Str("errorMessage", p11Err.Message).Msg("pkcs11: op handler returned typed error")
-				writeErrorResponse(w, statusForCode(p11Err.Code), p11Err.Code, safeMessageForCode(p11Err.Code))
+				message := safeMessageForCode(p11Err.Code)
+				if p11Err.Code == Pkcs11ErrBadRequest {
+					message = p11Err.Message
+				}
+				writeErrorResponse(w, statusForCode(p11Err.Code), p11Err.Code, message)
 				return
 			}
 			log.Error().Err(err).Msg("pkcs11: op handler returned untyped error")
@@ -247,17 +260,21 @@ type generateKeyPairParams struct {
 
 type signParams struct {
 	KeyLabel  string `json:"keyLabel"`
+	KeyID     string `json:"keyId"`
+	PublicKey string `json:"publicKey"`
 	Mechanism string `json:"mechanism"`
 	Data      string `json:"data"`
 	IsDigest  bool   `json:"isDigest"`
 }
 
-type singleKeyLabelParams struct {
+type keyRefParams struct {
 	KeyLabel string `json:"keyLabel"`
+	KeyID    string `json:"keyId"`
 }
 
 const (
 	maxKeyLabelLen   = 256
+	maxKeyIDBytes    = 128
 	maxSignDataBytes = 64 * 1024
 )
 
@@ -277,11 +294,28 @@ func handleGenerateKeyPair(module Pkcs11Module, env *pkcs11RequestEnvelope) (any
 	if len(p.KeyLabel) > maxKeyLabelLen {
 		return nil, &Pkcs11Error{Code: Pkcs11ErrBadRequest, Message: "keyLabel too long"}
 	}
-	spki, err := module.GenerateKeyPair(env.SlotLabel, env.PIN, p.KeyLabel, p.KeyAlgorithm)
+	generated, err := module.GenerateKeyPair(env.SlotLabel, env.PIN, p.KeyLabel, p.KeyAlgorithm)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"publicKey": base64.StdEncoding.EncodeToString(spki)}, nil
+	return map[string]any{
+		"publicKey": base64.StdEncoding.EncodeToString(generated.PublicKey),
+		"keyId":     hex.EncodeToString(generated.KeyID),
+	}, nil
+}
+
+func parseKeyRef(keyLabel, keyID string) (KeyRef, error) {
+	if len(keyLabel) > maxKeyLabelLen {
+		return KeyRef{}, &Pkcs11Error{Code: Pkcs11ErrBadRequest, Message: "keyLabel too long"}
+	}
+	id, err := hex.DecodeString(keyID)
+	if err != nil {
+		return KeyRef{}, &Pkcs11Error{Code: Pkcs11ErrBadRequest, Message: "keyId is not valid hex"}
+	}
+	if len(id) > maxKeyIDBytes {
+		return KeyRef{}, &Pkcs11Error{Code: Pkcs11ErrBadRequest, Message: "keyId too long"}
+	}
+	return KeyRef{Label: keyLabel, ID: id}, nil
 }
 
 func handleSign(module Pkcs11Module, env *pkcs11RequestEnvelope) (any, error) {
@@ -289,8 +323,9 @@ func handleSign(module Pkcs11Module, env *pkcs11RequestEnvelope) (any, error) {
 	if err := json.Unmarshal(env.Params, &p); err != nil {
 		return nil, &Pkcs11Error{Code: Pkcs11ErrBadRequest, Message: "Malformed params for sign"}
 	}
-	if len(p.KeyLabel) > maxKeyLabelLen {
-		return nil, &Pkcs11Error{Code: Pkcs11ErrBadRequest, Message: "keyLabel too long"}
+	key, err := parseKeyRef(p.KeyLabel, p.KeyID)
+	if err != nil {
+		return nil, err
 	}
 	data, err := base64.StdEncoding.DecodeString(p.Data)
 	if err != nil {
@@ -302,31 +337,63 @@ func handleSign(module Pkcs11Module, env *pkcs11RequestEnvelope) (any, error) {
 	if len(data) > maxSignDataBytes {
 		return nil, &Pkcs11Error{Code: Pkcs11ErrBadRequest, Message: "Data too large for signing"}
 	}
-	sig, err := module.Sign(env.SlotLabel, env.PIN, p.KeyLabel, p.Mechanism, data, p.IsDigest)
+	publicKeyDer, err := base64.StdEncoding.DecodeString(p.PublicKey)
+	if err != nil {
+		return nil, &Pkcs11Error{Code: Pkcs11ErrBadRequest, Message: "publicKey is not valid base64"}
+	}
+	var expectedPublicKey crypto.PublicKey
+	if len(publicKeyDer) > 0 {
+		if expectedPublicKey, err = parseExpectedPublicKey(publicKeyDer); err != nil {
+			return nil, err
+		}
+	}
+	signed, err := module.Sign(env.SlotLabel, env.PIN, key, p.Mechanism, data, p.IsDigest, expectedPublicKey)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"signature": base64.StdEncoding.EncodeToString(sig)}, nil
+	return map[string]any{
+		"signature": base64.StdEncoding.EncodeToString(signed.Signature),
+		"keyId":     hex.EncodeToString(signed.KeyID),
+	}, nil
 }
 
 func handleGetPublicKey(module Pkcs11Module, env *pkcs11RequestEnvelope) (any, error) {
-	var p singleKeyLabelParams
+	var p keyRefParams
 	if err := json.Unmarshal(env.Params, &p); err != nil {
 		return nil, &Pkcs11Error{Code: Pkcs11ErrBadRequest, Message: "Malformed params for get-public-key"}
 	}
-	if len(p.KeyLabel) > maxKeyLabelLen {
-		return nil, &Pkcs11Error{Code: Pkcs11ErrBadRequest, Message: "keyLabel too long"}
+	key, err := parseKeyRef(p.KeyLabel, p.KeyID)
+	if err != nil {
+		return nil, err
 	}
-	spki, err := module.GetPublicKey(env.SlotLabel, env.PIN, p.KeyLabel)
+	spki, err := module.GetPublicKey(env.SlotLabel, env.PIN, key)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{"publicKey": base64.StdEncoding.EncodeToString(spki)}, nil
 }
 
+func handleFindKeys(module Pkcs11Module, env *pkcs11RequestEnvelope) (any, error) {
+	var p keyRefParams
+	if err := json.Unmarshal(env.Params, &p); err != nil {
+		return nil, &Pkcs11Error{Code: Pkcs11ErrBadRequest, Message: "Malformed params for find-keys"}
+	}
+	if p.KeyLabel == "" || len(p.KeyLabel) > maxKeyLabelLen {
+		return nil, &Pkcs11Error{Code: Pkcs11ErrBadRequest, Message: "keyLabel must be between 1 and 256 characters"}
+	}
+	keys, err := module.FindPrivateKeys(env.SlotLabel, env.PIN, p.KeyLabel)
+	if err != nil {
+		return nil, err
+	}
+	if keys == nil {
+		keys = []KeyInfo{}
+	}
+	return map[string]any{"keys": keys}, nil
+}
+
 func statusForCode(code Pkcs11ErrorCode) int {
 	switch code {
-	case Pkcs11ErrPinIncorrect, Pkcs11ErrPinLocked, Pkcs11ErrLoginFailed, Pkcs11ErrSlotNotFound, Pkcs11ErrKeyNotFound, Pkcs11ErrMechanismInvalid, Pkcs11ErrBadRequest:
+	case Pkcs11ErrPinIncorrect, Pkcs11ErrPinLocked, Pkcs11ErrLoginFailed, Pkcs11ErrSlotNotFound, Pkcs11ErrKeyNotFound, Pkcs11ErrKeyAmbiguous, Pkcs11ErrKeyTypeMismatch, Pkcs11ErrSignatureMismatch, Pkcs11ErrMechanismInvalid, Pkcs11ErrBadRequest:
 		return http.StatusBadRequest
 	case Pkcs11ErrDriverUnavailable, Pkcs11ErrInternal:
 		return http.StatusBadGateway

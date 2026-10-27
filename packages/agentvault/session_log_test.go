@@ -26,6 +26,7 @@ type shipperCall struct {
 	chunkID   string
 	url       string
 	bytes     int
+	records   int
 	body      []byte
 	final     bool
 }
@@ -56,7 +57,7 @@ func (f *fakeShipper) createChunk(_ context.Context, final bool, sessionID strin
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.calls = append(f.calls, shipperCall{kind: "post", sessionID: sessionID, chunkID: req.ChunkID, bytes: req.CiphertextBytes, final: final})
+	f.calls = append(f.calls, shipperCall{kind: "post", sessionID: sessionID, chunkID: req.ChunkID, bytes: req.CiphertextBytes, records: req.RecordCount, final: final})
 	post := len(f.calls) - 1
 
 	result := f.postDefault
@@ -103,6 +104,9 @@ func (f *fakeShipper) uploadedRecordCounts(t *testing.T) []int {
 		var records []sessionLogRecord
 		if err := json.Unmarshal(plaintext, &records); err != nil {
 			t.Fatalf("the upload to %s is not a record list: %v", call.url, err)
+		}
+		if post.records != len(records) {
+			t.Fatalf("the chunk uploaded to %s reported %d records but carries %d", call.url, post.records, len(records))
 		}
 		counts = append(counts, len(records))
 	}
@@ -387,8 +391,30 @@ func TestAChunkIsPostedBeforeItIsUploaded(t *testing.T) {
 	}
 }
 
-func TestAFailedUploadRePostsTheSameChunkID(t *testing.T) {
-	shipper := &fakeShipper{putResults: []error{errors.New("connection reset")}}
+func TestAnUploadThatFailsInAnOutageRetriesWithTheSameLink(t *testing.T) {
+	for _, putErr := range []error{errors.New("connection reset"), &s3UploadError{status: 503, code: "SlowDown"}} {
+		shipper := &fakeShipper{putResults: []error{putErr}}
+		log, _, tick := newTestLog(shipper)
+
+		log.record(testGrant("s1"), aRecord("api.github.com"))
+		tick()
+		tick()
+
+		if got := len(shipper.posts()); got != 1 {
+			t.Fatalf("%v: asked for %d upload links, want the first one reused", putErr, got)
+		}
+		puts := shipper.puts()
+		if len(puts) != 2 {
+			t.Fatalf("%v: expected a second upload attempt, saw %d", putErr, len(puts))
+		}
+		if puts[0].url != puts[1].url {
+			t.Fatalf("%v: the retry went to %q, not the link it already had %q", putErr, puts[1].url, puts[0].url)
+		}
+	}
+}
+
+func TestARefusedUploadAsksForANewLinkForTheSameChunk(t *testing.T) {
+	shipper := &fakeShipper{putResults: []error{&s3UploadError{status: 403, code: "AccessDenied"}}}
 	log, _, tick := newTestLog(shipper)
 
 	log.record(testGrant("s1"), aRecord("api.github.com"))
@@ -397,10 +423,10 @@ func TestAFailedUploadRePostsTheSameChunkID(t *testing.T) {
 
 	posts := shipper.posts()
 	if len(posts) != 2 {
-		t.Fatalf("expected the chunk to be re-posted, saw %d posts", len(posts))
+		t.Fatalf("expected a new upload link after the bucket refused, saw %d link requests", len(posts))
 	}
 	if posts[0].chunkID != posts[1].chunkID {
-		t.Fatalf("re-post used a different chunk id: %q then %q", posts[0].chunkID, posts[1].chunkID)
+		t.Fatalf("the new link is for a different chunk id: %q then %q", posts[0].chunkID, posts[1].chunkID)
 	}
 	if len(shipper.puts()) != 2 {
 		t.Fatalf("expected a second upload attempt, saw %d", len(shipper.puts()))
@@ -536,7 +562,7 @@ func TestARefusalRacingANewKeyDropsNothing(t *testing.T) {
 	grant := testGrant("s1")
 
 	log.record(grant, aRecord("api.github.com"))
-	log.switchOff(sessionLogGrantsIssued.Load() - 1)
+	log.switchOff(sessionLogGrantsIssued.Load()-1, apiErr(400, sessionLogDisabledName))
 
 	if log.hold.off || log.spools["s1"].ring.len() != 1 {
 		t.Fatal("a refusal sent before a newer key was issued still dropped what was held")
@@ -1614,5 +1640,16 @@ func TestOneStuckRequestAtShutdownDoesNotHoldBackTheOtherSessions(t *testing.T) 
 				t.Fatalf("%d sessions were left unshipped at shutdown, want only the %d with the stuck request", held, stuck)
 			}
 		})
+	}
+}
+
+// The real clock, not newTestLog's: its fake times never carry a monotonic reading, so the check would always pass.
+// == rather than Equal: Equal ignores the monotonic reading, which pauses while the machine sleeps.
+func TestIdleCloseIgnoresTheSleepingClock(t *testing.T) {
+	log := newSessionLogRecorder("proxy-1", &fakeShipper{})
+	log.record(testGrant("s1"), aRecord("api.github.com"))
+
+	if at := log.spools["s1"].lastRecordAt; at != at.Round(0) {
+		t.Fatal("lastRecordAt carries a monotonic reading, so time asleep would not count toward idle close")
 	}
 }

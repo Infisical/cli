@@ -95,3 +95,38 @@ func TestAResolveAsksForTheKeyUntilItHoldsOne(t *testing.T) {
 		t.Fatalf("hasSessionLogKey went out as %v; it must be false until the proxy holds the key, then true", asked)
 	}
 }
+
+func TestAResolveCarriesWhichServicesLackPersonalValues(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// An older server leaves the field out, which has to read as set up.
+		_, _ = w.Write([]byte(`{"sessionId":"s1","services":[
+			{"id":"a","name":"github","accessBundleName":"b","hostPattern":"api.github.com","credential":{"type":"passthrough"},"personalValuesMissing":true},
+			{"id":"b","name":"slack","accessBundleName":"b","hostPattern":"slack.com","credential":{"type":"passthrough"}}
+		],"sessionLogs":{"enabled":false}}`))
+	}))
+	defer srv.Close()
+	old := config.INFISICAL_URL
+	config.INFISICAL_URL = srv.URL + "/api"
+	defer func() { config.INFISICAL_URL = old }()
+
+	resolver, err := newInfisicalResolver(func() string { return "ptok" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := resolver.resolve("tok", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	missing := map[string]bool{}
+	for _, svc := range result.Services {
+		missing[svc.name] = svc.personalValuesMissing
+	}
+	if !missing["github"] {
+		t.Fatal("personalValuesMissing: true on the wire did not reach the resolved service")
+	}
+	if missing["slack"] {
+		t.Fatal("a service without the field resolved as missing its personal values")
+	}
+}

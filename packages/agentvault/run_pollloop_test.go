@@ -36,15 +36,16 @@ func newPollLoopFixture(t *testing.T, heartbeatStatus int) (*proxyServer, *store
 	return ps, newStore(t.TempDir())
 }
 
-func TestPollLoopExitsAfterTwoRejectedHeartbeats(t *testing.T) {
+func TestPollLoopFromSavedStateExitsAfterTwoRejectedHeartbeats(t *testing.T) {
 	ps, st := newPollLoopFixture(t, http.StatusUnauthorized)
+	ps.legacy = true
 	stop := make(chan struct{})
 	fatal := make(chan error, 1)
 	done := runPollLoop(ps, st, stop, fatal)
 
 	select {
 	case err := <-fatal:
-		if err != errProxyTokenRejected {
+		if err != errSavedStateTokenRejected {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	case <-time.After(5 * time.Second):
@@ -54,7 +55,7 @@ func TestPollLoopExitsAfterTwoRejectedHeartbeats(t *testing.T) {
 }
 
 // The fixture's Cleanup puts the URL global back; the loop has to have stopped reading it first.
-func runPollLoop(ps *proxyServer, st *store, stop <-chan struct{}, fatal chan<- error) <-chan struct{} {
+func runPollLoop(ps *proxyServer, st stateSaver, stop <-chan struct{}, fatal chan<- error) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)

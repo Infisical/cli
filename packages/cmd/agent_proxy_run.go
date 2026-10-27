@@ -44,7 +44,7 @@ func buildAgentProxyRunCmd() *cobra.Command {
 	}
 
 	agentProxyRunCmd.Flags().StringP("env", "e", "", "environment slug to fetch proxied services and secrets from (falls back to INFISICAL_ENVIRONMENT, then .infisical.yaml or a legacy .infisical.json)")
-	agentProxyRunCmd.Flags().String("path", "/", "secret path (folder) to fetch from (falls back to INFISICAL_SECRET_PATH, then secrets-management.default-secret-path in .infisical.yaml or defaultSecretPath in a legacy .infisical.json)")
+	agentProxyRunCmd.Flags().String("path", "/", "secret path (folder) to fetch from (falls back to INFISICAL_SECRET_PATH, then secrets-management.secret-path in .infisical.yaml or defaultSecretPath in a legacy .infisical.json)")
 	agentProxyRunCmd.Flags().String("projectId", "", "project id (falls back to INFISICAL_PROJECT_ID, then .infisical.yaml or a legacy .infisical.json)")
 	agentProxyRunCmd.Flags().String("token", "", "run using this token instead of your logged-in session")
 	agentProxyRunCmd.Flags().Bool("sandbox", true, "run the agent inside the OS sandbox")
@@ -78,7 +78,7 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 	// Same resolution order as `connect`: flag, then env var, then .infisical.yaml.
 	environment := util.ResolveEnvironmentName(cmd)
 	if environment == "" {
-		util.HandleError(fmt.Errorf("the environment is required; pass --env, set INFISICAL_ENVIRONMENT, or set secrets-management.default-environment in .infisical.yaml (or defaultEnvironment in a legacy .infisical.json)"))
+		util.HandleError(fmt.Errorf("the environment is required; pass --env, set INFISICAL_ENVIRONMENT, or set secrets-management.environment in .infisical.yaml (or defaultEnvironment in a legacy .infisical.json)"))
 	}
 
 	secretPath := util.ResolveSecretPath(cmd)

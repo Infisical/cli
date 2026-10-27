@@ -373,3 +373,29 @@ func TestARejectedProxyTokenIsNotReResolvedEveryRequest(t *testing.T) {
 		t.Fatalf("20 requests against a revoked proxy made %d resolves, want 1", got)
 	}
 }
+
+// == rather than Equal: Equal ignores the monotonic reading, which pauses while the machine sleeps.
+func TestCacheTimesIgnoreTheSleepingClock(t *testing.T) {
+	resolver := &stubResolver{result: &resolveResult{SessionID: "s1", Services: []*resolvedService{serviceWithSecret("v")}}}
+	cache := newTestCache(resolver)
+	key := sessionKey("agv_token")
+
+	if _, err := cache.get("agv_token"); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if e := cache.entries[key]; e.fetchedAt != e.fetchedAt.Round(0) || e.lastSeen != e.lastSeen.Round(0) {
+		t.Fatal("a fresh entry carries a monotonic reading, so time asleep would not count toward its grace or idle window")
+	}
+
+	if _, err := cache.get("agv_token"); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if e := cache.entries[key]; e.lastSeen != e.lastSeen.Round(0) {
+		t.Fatal("a cache hit stamps lastSeen with a monotonic reading")
+	}
+
+	cache.refresh()
+	if e := cache.entries[key]; e.fetchedAt != e.fetchedAt.Round(0) {
+		t.Fatal("a refresh stamps fetchedAt with a monotonic reading")
+	}
+}

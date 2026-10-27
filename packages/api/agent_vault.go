@@ -17,33 +17,36 @@ type AgentVaultProxyConfig struct {
 	PollInterval  int    `json:"pollInterval"`
 }
 
-type LoginAgentVaultProxyRequest struct {
-	Method            string `json:"method"`
-	Token             string `json:"token"`
-	RootCaCertificate string `json:"rootCaCertificate"`
+type AgentVaultProxyRootCa struct {
+	Certificate string `json:"certificate"`
+	PrivateKey  string `json:"privateKey"`
 }
 
-type LoginAgentVaultProxyResponse struct {
-	ProxyID     string                `json:"proxyId"`
-	Name        string                `json:"name"`
-	AccessToken string                `json:"accessToken"`
-	Config      AgentVaultProxyConfig `json:"config"`
+type AgentVaultProxyBootstrapRequest struct {
+	ServedCaCertificate string `json:"servedCaCertificate,omitempty"`
 }
 
-func CallLoginAgentVaultProxy(httpClient *resty.Client, request LoginAgentVaultProxyRequest) (LoginAgentVaultProxyResponse, error) {
-	var res LoginAgentVaultProxyResponse
+type AgentVaultProxyBootstrapResponse struct {
+	ProxyID string                 `json:"proxyId"`
+	Name    string                 `json:"name"`
+	Config  AgentVaultProxyConfig  `json:"config"`
+	RootCa  *AgentVaultProxyRootCa `json:"rootCa"`
+}
+
+func CallAgentVaultProxyBootstrap(httpClient *resty.Client, request AgentVaultProxyBootstrapRequest) (AgentVaultProxyBootstrapResponse, error) {
+	var res AgentVaultProxyBootstrapResponse
 	response, err := httpClient.
 		R().
 		SetResult(&res).
 		SetHeader("User-Agent", USER_AGENT).
 		SetBody(request).
-		Post(fmt.Sprintf("%v/v1/agent-vault/proxy/login", config.INFISICAL_URL))
+		Post(fmt.Sprintf("%v/v1/agent-vault/proxy/bootstrap", config.INFISICAL_URL))
 
 	if err != nil {
-		return LoginAgentVaultProxyResponse{}, NewGenericRequestError("CallLoginAgentVaultProxy", err)
+		return AgentVaultProxyBootstrapResponse{}, NewGenericRequestError("CallAgentVaultProxyBootstrap", err)
 	}
 	if response.IsError() {
-		return LoginAgentVaultProxyResponse{}, NewAPIErrorWithResponse("CallLoginAgentVaultProxy", response, nil)
+		return AgentVaultProxyBootstrapResponse{}, NewAPIErrorWithResponse("CallAgentVaultProxyBootstrap", response, nil)
 	}
 	return res, nil
 }
@@ -101,6 +104,9 @@ type AgentVaultService struct {
 	Credential          AgentVaultCredential     `json:"credential"`
 	CustomHeaders       []AgentVaultCustomHeader `json:"customHeaders"`
 	Substitutions       []AgentVaultSubstitution `json:"substitutions"`
+	// The service takes part of its credential from each member and the session's owner has not set their personal values.
+	// Older servers never send it, which decodes to false.
+	PersonalValuesMissing bool `json:"personalValuesMissing"`
 }
 
 type AgentVaultSessionLogGrant struct {
@@ -143,6 +149,7 @@ type CreateAgentVaultSessionLogChunkRequest struct {
 	EndedAt          string `json:"endedAt"`
 	CiphertextBytes  int    `json:"ciphertextBytes"`
 	CiphertextSha256 string `json:"ciphertextSha256"`
+	RecordCount      int    `json:"recordCount"`
 }
 
 type CreateAgentVaultSessionLogChunkResponse struct {

@@ -22,6 +22,7 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -40,9 +41,11 @@ import (
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v2"
 
+	"github.com/Infisical/infisical-merge/packages/agent"
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/models"
+	"github.com/Infisical/infisical-merge/packages/systemd"
 	"github.com/Infisical/infisical-merge/packages/templates"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/Infisical/infisical-merge/packages/util/cache"
@@ -1588,7 +1591,6 @@ func (tm *AgentManager) RevokeCredentials() error {
 		return fmt.Errorf("unable to get custom headers: %v", err)
 	}
 
-	var revokedLeasesCount atomic.Int32
 	revokedLeasesChan := make(chan bool, len(dynamicSecretLeases))
 
 	for _, lease := range dynamicSecretLeases {
@@ -1633,24 +1635,17 @@ func (tm *AgentManager) RevokeCredentials() error {
 		}(lease)
 	}
 
-	var shouldBreak atomic.Bool
-	for {
+	// wait for one result per lease; with no leases there is nothing to wait for
+	timeout := time.After(5 * time.Minute)
+	for range dynamicSecretLeases {
 		select {
 		case <-revokedLeasesChan:
-			revokedLeasesCount.Add(1)
-			if revokedLeasesCount.Load() == int32(len(dynamicSecretLeases)) {
-				shouldBreak.Store(true)
-			}
-		case <-time.After(5 * time.Minute):
+		case <-timeout:
 			log.Warn().Msg("credential revocation timed out after 5 minutes, forcing exit")
 			return fmt.Errorf("credential revocation timed out after 5 minutes")
 		}
-
-		if shouldBreak.Load() {
-			log.Info().Msg("all dynamic secret leases have been revoked")
-			break
-		}
 	}
+	log.Info().Msg("all dynamic secret leases have been revoked")
 
 	var deletedTokens []string
 
@@ -3713,236 +3708,264 @@ var agentCmd = &cobra.Command{
 	Short:                 "Used to launch a client daemon that streamlines authentication and secret retrieval processes in various environments",
 	DisableFlagsInUseLine: true,
 	Run: func(cmd *cobra.Command, args []string) {
-
-		log.Info().Msg("starting Infisical agent...")
-
 		configPath, err := cmd.Flags().GetString("config")
 		if err != nil {
 			util.HandleError(err, "Unable to parse flag config")
 		}
 
-		var agentConfigInBytes []byte
-
-		agentConfigInBase64 := os.Getenv("INFISICAL_AGENT_CONFIG_BASE64")
-
-		if agentConfigInBase64 == "" {
-			data, err := ioutil.ReadFile(configPath)
-			if err != nil {
-				if !FileExists(configPath) {
-					log.Error().Msgf("Unable to locate %s. The provided agent config file path is either missing or incorrect", configPath)
-					return
-				}
-			} // pgrep -f "dev-agent"
-			agentConfigInBytes = data
+		if isService, exitCode := runAgentAsWindowsService(configPath); isService {
+			os.Exit(exitCode)
 		}
 
-		if agentConfigInBase64 != "" {
-			decodedAgentConfig, err := base64.StdEncoding.DecodeString(agentConfigInBase64)
-			if err != nil {
-				log.Error().Msgf("Unable to decode base64 config file because %v", err)
+		// exit right away, as the agent always has, instead of waiting for a pending update check
+		os.Exit(runAgent(configPath, nil, nil))
+	},
+}
+
+// runAgent runs the agent until it gets a shutdown signal or stop is closed, and returns the exit code.
+// Config errors are logged and return 0, as the agent always has. ready, when set, is called once the
+// config is loaded and the agent's workers have started.
+func runAgent(configPath string, stop <-chan struct{}, ready func()) int {
+	log.Info().Msg("starting Infisical agent...")
+
+	var agentConfigInBytes []byte
+
+	agentConfigInBase64 := os.Getenv("INFISICAL_AGENT_CONFIG_BASE64")
+
+	if agentConfigInBase64 == "" {
+		data, err := ioutil.ReadFile(configPath)
+		if err != nil {
+			if !FileExists(configPath) {
+				log.Error().Msgf("Unable to locate %s. The provided agent config file path is either missing or incorrect", configPath)
+				return 0
+			}
+		} // pgrep -f "dev-agent"
+		agentConfigInBytes = data
+	}
+
+	if agentConfigInBase64 != "" {
+		decodedAgentConfig, err := base64.StdEncoding.DecodeString(agentConfigInBase64)
+		if err != nil {
+			log.Error().Msgf("Unable to decode base64 config file because %v", err)
+			return 0
+		}
+
+		agentConfigInBytes = decodedAgentConfig
+	}
+
+	if !FileExists(configPath) && agentConfigInBase64 == "" {
+		log.Error().Msgf("No agent config file provided at %v. Please provide a agent config file", configPath)
+		return 0
+	}
+
+	agentConfig, err := ParseAgentConfig(agentConfigInBytes)
+	if err != nil {
+		log.Error().Msgf("Unable to parse %s because %v. Please ensure that it follows the Infisical Agent config structure", configPath, err)
+		return 0
+	}
+
+	err = validateCertificateSourceConfig(agentConfig.Version, &agentConfig.Certificates)
+	if err != nil {
+		log.Error().Msgf("Certificate configuration validation failed: %v", err)
+		return 0
+	}
+
+	err = processCertificateCSRPaths(&agentConfig.Certificates)
+	if err != nil {
+		log.Error().Msgf("Failed to load CSR files: %v", err)
+		return 0
+	}
+
+	err = validateCertificateLifecycleConfig(&agentConfig.Certificates)
+	if err != nil {
+		log.Error().Msgf("Certificate lifecycle configuration validation failed: %v", err)
+		return 0
+	}
+
+	authMethodValid, authStrategy := util.IsAuthMethodValid(agentConfig.Auth.Type, false)
+
+	if !authMethodValid {
+		util.PrintErrorMessageAndExit(fmt.Sprintf("The auth method '%s' is not supported.", agentConfig.Auth.Type))
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	tokenRefreshNotifier := make(chan bool)
+	monitoringChan := make(chan bool, len(agentConfig.Templates))
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+
+	filePaths := agentConfig.Sinks
+
+	configBytes, err := yaml.Marshal(agentConfig.Auth.Config)
+	if err != nil {
+		log.Error().Msgf("unable to marshal auth config because %v", err)
+		cancel()
+		return 0
+	}
+
+	var certificates []AgentCertificateConfig
+	if agentConfig.Version != "" {
+		certificates = agentConfig.Certificates
+	}
+
+	tm := NewAgentManager(NewAgentMangerOptions{
+		FileDeposits:                   filePaths,
+		Templates:                      agentConfig.Templates,
+		Certificates:                   certificates,
+		AuthConfigBytes:                configBytes,
+		NewAccessTokenNotificationChan: tokenRefreshNotifier,
+		ExitAfterAuth:                  agentConfig.Infisical.ExitAfterAuth,
+		AuthStrategy:                   authStrategy,
+		RevokeCredentialsOnShutdown:    agentConfig.Infisical.RevokeCredentialsOnShutdown,
+		RetryConfig:                    agentConfig.Infisical.RetryConfig,
+	})
+
+	tm.cacheManager, err = NewCacheManager(ctx, &agentConfig.Cache)
+	if err != nil {
+		log.Error().Msgf("unable to setup cache manager: %v", err)
+		cancel()
+		return 0
+	}
+	tm.dynamicSecretLeases = NewDynamicSecretLeaseManager(tm.cacheManager, tm.SdkRetryConfig())
+
+	// start a http server that returns a json object of the whole cache
+	if util.IsDevelopmentMode() && tm.cacheManager != nil && tm.cacheManager.IsEnabled {
+
+		go func() {
+			http.HandleFunc("/cache", func(w http.ResponseWriter, r *http.Request) {
+
+				all, err := tm.cacheManager.cacheStorage.GetAll()
+				if err != nil {
+					log.Error().Msgf("unable to get all cache: %v", err)
+					json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error()})
+					return
+				}
+
+				json.NewEncoder(w).Encode(all)
+
+			})
+			log.Info().Msg("starting cache http server on port 9000")
+			http.ListenAndServe(":9000", nil)
+		}()
+	}
+
+	go tm.ManageTokenLifecycle()
+
+	var monitoredTemplatesFinished atomic.Int32
+
+	// when all templates have finished rendering once, we delete the unused leases from the cache.
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-monitoringChan:
+				monitoredTemplatesFinished.Add(1)
+				if monitoredTemplatesFinished.Load() == int32(len(tm.templates)) {
+					if err := tm.dynamicSecretLeases.DeleteUnusedLeasesFromCache(); err != nil {
+						log.Error().Msgf("[template monitor] failed to delete unused leases from cache: %v", err)
+					}
+
+					if tm.exitAfterAuth {
+						log.Info().Msg("agent is exiting after all templates have finished rendering once...")
+						os.Exit(0)
+					}
+				}
+			}
+		}
+	}()
+
+	for _, template := range tm.templates {
+		log.Info().Msgf("template engine started for template %v...", template.ID)
+		go tm.MonitorSecretChanges(ctx, template.Template, template.ID, sigChan, monitoringChan)
+	}
+
+	if len(tm.certificates) > 0 {
+		go func() {
+			if !tm.waitForToken(ctx) {
 				return
 			}
 
-			agentConfigInBytes = decodedAgentConfig
-		}
+			httpClient, err := tm.createAuthenticatedClient()
+			if err != nil {
+				log.Error().Msgf("failed to create authenticated client for name resolution: %v", err)
+				return
+			}
 
-		if !FileExists(configPath) && agentConfigInBase64 == "" {
-			log.Error().Msgf("No agent config file provided at %v. Please provide a agent config file", configPath)
-			return
-		}
+			if err := resolveCertificateNameReferences(agentConfig.Version, &agentConfig.Certificates, httpClient); err != nil {
+				log.Error().Msgf("failed to resolve certificate name references: %v", err)
+				return
+			}
 
-		agentConfig, err := ParseAgentConfig(agentConfigInBytes)
-		if err != nil {
-			log.Error().Msgf("Unable to parse %s because %v. Please ensure that it follows the Infisical Agent config structure", configPath, err)
-			return
-		}
-
-		err = validateCertificateSourceConfig(agentConfig.Version, &agentConfig.Certificates)
-		if err != nil {
-			log.Error().Msgf("Certificate configuration validation failed: %v", err)
-			return
-		}
-
-		err = processCertificateCSRPaths(&agentConfig.Certificates)
-		if err != nil {
-			log.Error().Msgf("Failed to load CSR files: %v", err)
-			return
-		}
-
-		err = validateCertificateLifecycleConfig(&agentConfig.Certificates)
-		if err != nil {
-			log.Error().Msgf("Certificate lifecycle configuration validation failed: %v", err)
-			return
-		}
-
-		authMethodValid, authStrategy := util.IsAuthMethodValid(agentConfig.Auth.Type, false)
-
-		if !authMethodValid {
-			util.PrintErrorMessageAndExit(fmt.Sprintf("The auth method '%s' is not supported.", agentConfig.Auth.Type))
-		}
-
-		ctx, cancel := context.WithCancel(context.Background())
-
-		tokenRefreshNotifier := make(chan bool)
-		monitoringChan := make(chan bool, len(agentConfig.Templates))
-		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
-
-		filePaths := agentConfig.Sinks
-
-		configBytes, err := yaml.Marshal(agentConfig.Auth.Config)
-		if err != nil {
-			log.Error().Msgf("unable to marshal auth config because %v", err)
-			cancel()
-			return
-		}
-
-		var certificates []AgentCertificateConfig
-		if agentConfig.Version != "" {
-			certificates = agentConfig.Certificates
-		}
-
-		tm := NewAgentManager(NewAgentMangerOptions{
-			FileDeposits:                   filePaths,
-			Templates:                      agentConfig.Templates,
-			Certificates:                   certificates,
-			AuthConfigBytes:                configBytes,
-			NewAccessTokenNotificationChan: tokenRefreshNotifier,
-			ExitAfterAuth:                  agentConfig.Infisical.ExitAfterAuth,
-			AuthStrategy:                   authStrategy,
-			RevokeCredentialsOnShutdown:    agentConfig.Infisical.RevokeCredentialsOnShutdown,
-			RetryConfig:                    agentConfig.Infisical.RetryConfig,
-		})
-
-		tm.cacheManager, err = NewCacheManager(ctx, &agentConfig.Cache)
-		if err != nil {
-			log.Error().Msgf("unable to setup cache manager: %v", err)
-			cancel()
-			return
-		}
-		tm.dynamicSecretLeases = NewDynamicSecretLeaseManager(tm.cacheManager, tm.SdkRetryConfig())
-
-		// start a http server that returns a json object of the whole cache
-		if util.IsDevelopmentMode() && tm.cacheManager != nil && tm.cacheManager.IsEnabled {
-
-			go func() {
-				http.HandleFunc("/cache", func(w http.ResponseWriter, r *http.Request) {
-
-					all, err := tm.cacheManager.cacheStorage.GetAll()
-					if err != nil {
-						log.Error().Msgf("unable to get all cache: %v", err)
-						json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error()})
-						return
-					}
-
-					json.NewEncoder(w).Encode(all)
-
-				})
-				log.Info().Msg("starting cache http server on port 9000")
-				http.ListenAndServe(":9000", nil)
-			}()
-		}
-
-		go tm.ManageTokenLifecycle()
-
-		var monitoredTemplatesFinished atomic.Int32
-
-		// when all templates have finished rendering once, we delete the unused leases from the cache.
-		go func() {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-monitoringChan:
-					monitoredTemplatesFinished.Add(1)
-					if monitoredTemplatesFinished.Load() == int32(len(tm.templates)) {
-						if err := tm.dynamicSecretLeases.DeleteUnusedLeasesFromCache(); err != nil {
-							log.Error().Msgf("[template monitor] failed to delete unused leases from cache: %v", err)
-						}
-
-						if tm.exitAfterAuth {
-							log.Info().Msg("agent is exiting after all templates have finished rendering once...")
-							os.Exit(0)
-						}
+			for i := range tm.certificates {
+				for j := range agentConfig.Certificates {
+					if tm.certificates[i].ID == j+1 {
+						tm.certificates[i].Certificate = agentConfig.Certificates[j]
+						break
 					}
 				}
 			}
+
+			log.Info().Msg("certificate management engine starting...")
+			tm.MonitorCertificates(ctx)
 		}()
+	}
 
-		for _, template := range tm.templates {
-			log.Info().Msgf("template engine started for template %v...", template.ID)
-			go tm.MonitorSecretChanges(ctx, template.Template, template.ID, sigChan, monitoringChan)
-		}
+	// a service manager stops the agent through stop instead of sending it a signal
+	if stop != nil {
+		go func() {
+			<-stop
+			sigChan <- syscall.SIGTERM
+		}()
+	}
 
-		if len(tm.certificates) > 0 {
-			go func() {
-				if !tm.waitForToken(ctx) {
-					return
-				}
+	// tell systemd (Type=notify) or the Windows service handler that the agent is up
+	systemd.SdNotify(false, systemd.SdNotifyReady)
+	if ready != nil {
+		ready()
+	}
 
-				httpClient, err := tm.createAuthenticatedClient()
-				if err != nil {
-					log.Error().Msgf("failed to create authenticated client for name resolution: %v", err)
-					return
-				}
+	for {
+		select {
+		case <-tokenRefreshNotifier:
+			go tm.WriteTokenToFiles()
+		case <-sigChan:
+			tm.isShuttingDown = true
+			tm.cancelContext()
+			log.Info().Msg("agent is gracefully shutting down...")
+			cancel()
 
-				if err := resolveCertificateNameReferences(agentConfig.Version, &agentConfig.Certificates, httpClient); err != nil {
-					log.Error().Msgf("failed to resolve certificate name references: %v", err)
-					return
-				}
+			exitCode := 0
 
-				for i := range tm.certificates {
-					for j := range agentConfig.Certificates {
-						if tm.certificates[i].ID == j+1 {
-							tm.certificates[i].Certificate = agentConfig.Certificates[j]
-							break
-						}
-					}
-				}
+			if !tm.exitAfterAuth && tm.revokeCredentialsOnShutdown {
+				// 5 minute timeout to prevent any hanging edge cases
+				revocationTimeout := 5 * time.Minute
 
-				log.Info().Msg("certificate management engine starting...")
-				tm.MonitorCertificates(ctx)
-			}()
-		}
+				// systemd stops a service after 90s by default: ask it (Type=notify) to wait for the revocation instead
+				systemd.SdNotify(false, fmt.Sprintf("EXTEND_TIMEOUT_USEC=%d", (revocationTimeout+30*time.Second).Microseconds()))
 
-		for {
-			select {
-			case <-tokenRefreshNotifier:
-				go tm.WriteTokenToFiles()
-			case <-sigChan:
-				tm.isShuttingDown = true
-				tm.cancelContext()
-				log.Info().Msg("agent is gracefully shutting down...")
-				cancel()
+				done := make(chan error, 1)
 
-				exitCode := 0
+				go func() {
+					done <- tm.RevokeCredentials()
+				}()
 
-				if !tm.exitAfterAuth && tm.revokeCredentialsOnShutdown {
-
-					done := make(chan error, 1)
-
-					go func() {
-						done <- tm.RevokeCredentials()
-					}()
-
-					select {
-					case err := <-done:
-						if err != nil {
-							log.Error().Msgf("unable to revoke credentials [err=%v]", err)
-							exitCode = 1
-						}
-					// 5 minute timeout to prevent any hanging edge cases
-					case <-time.After(5 * time.Minute):
-						log.Warn().Msg("credential revocation timed out after 5 minutes, forcing exit")
+				select {
+				case err := <-done:
+					if err != nil {
+						log.Error().Msgf("unable to revoke credentials [err=%v]", err)
 						exitCode = 1
 					}
+				case <-time.After(revocationTimeout):
+					log.Warn().Msg("credential revocation timed out after 5 minutes, forcing exit")
+					exitCode = 1
 				}
-
-				os.Exit(exitCode)
 			}
-		}
 
-	},
+			return exitCode
+		}
+	}
 }
 
 func validateCertificateOnlyMode(config *Config) error {
@@ -4172,12 +4195,188 @@ var certManagerAgentCmd = &cobra.Command{
 	},
 }
 
+const defaultAgentServiceName = "infisical-agent"
+
+var agentServiceNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
+
+// the service name becomes a file name (<name>.log on Windows), and Windows reserves these device names, with or without an extension
+var reservedServiceNamePattern = regexp.MustCompile(`(?i)^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)`)
+
+func agentServiceNameFromArgs(args []string) string {
+	if len(args) > 0 {
+		return args[0]
+	}
+	return defaultAgentServiceName
+}
+
+func validateAgentServiceName(name string) error {
+	if !agentServiceNamePattern.MatchString(name) {
+		return fmt.Errorf("invalid service name %q: use up to 128 letters, digits, '.', '_' or '-', starting with a letter or digit", name)
+	}
+	if reservedServiceNamePattern.MatchString(name) {
+		return fmt.Errorf("invalid service name %q: Windows reserves it as a device name", name)
+	}
+	return nil
+}
+
+// readAgentServiceConfig reads the config a service is installed with and reports its errors at install time rather
+// than on the service's first start. Install copies exactly these bytes, so the service runs the config it checked.
+func readAgentServiceConfig(configPath string) ([]byte, *Config, error) {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("unable to read the agent config: %w", err)
+	}
+
+	agentConfig, err := ParseAgentConfig(data)
+	if err != nil {
+		return nil, nil, fmt.Errorf("unable to parse the agent config at %s: %w", configPath, err)
+	}
+
+	if valid, _ := util.IsAuthMethodValid(agentConfig.Auth.Type, false); !valid {
+		return nil, nil, fmt.Errorf("the auth method '%s' in %s is not supported", agentConfig.Auth.Type, configPath)
+	}
+
+	if agentConfig.Infisical.ExitAfterAuth {
+		return nil, nil, fmt.Errorf("%s sets 'exit-after-auth: true', so the agent would exit after its first render and the service would keep being restarted. Remove it to run the agent as a service", configPath)
+	}
+
+	return data, agentConfig, nil
+}
+
+// agentServiceSudo prefixes the examples of the service commands, which need root on Linux.
+func agentServiceSudo() string {
+	if runtime.GOOS == "windows" {
+		return ""
+	}
+	return "sudo "
+}
+
+// newAgentServiceActionCmd builds the uninstall, start and stop commands of 'agent service'.
+func newAgentServiceActionCmd(action string, short string, run func(name string) error) *cobra.Command {
+	return &cobra.Command{
+		Use:                   action + " [name]",
+		Short:                 short,
+		Example:               fmt.Sprintf("  %[1]sinfisical agent service %[2]s\n  %[1]sinfisical agent service %[2]s my-agent", agentServiceSudo(), action),
+		DisableFlagsInUseLine: true,
+		Args:                  cobra.MaximumNArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			if err := checkAgentServiceSupport(); err != nil {
+				util.HandleError(err)
+			}
+
+			name := agentServiceNameFromArgs(args)
+			if err := validateAgentServiceName(name); err != nil {
+				util.HandleError(err)
+			}
+
+			if err := run(name); err != nil {
+				util.HandleError(err, fmt.Sprintf("Unable to %s the agent service", action))
+			}
+		},
+	}
+}
+
+var agentStartCmd = &cobra.Command{
+	Use:                   "start",
+	Short:                 "Run the agent with the config from --config or the INFISICAL_AGENT_CONFIG_PATH environment variable",
+	Long:                  "Run the agent, as 'infisical agent' does. This is what the agent's systemd service runs: the config comes from --config or INFISICAL_AGENT_CONFIG_PATH, and relative paths in it resolve from INFISICAL_AGENT_WORKING_DIR, or else the config's directory.",
+	Example:               "  INFISICAL_AGENT_CONFIG_PATH=/etc/infisical/agents/my-agent.yaml infisical agent start",
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		configPath, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "config", []string{agent.ConfigPathEnvName}, "agent-config.yaml")
+		if err != nil {
+			util.HandleError(err, "Unable to parse flag config")
+		}
+
+		configPath, err = filepath.Abs(configPath)
+		if err != nil {
+			util.HandleError(err, "Unable to resolve the config path")
+		}
+
+		// a service manager does not start the agent from the config's directory, and a service runs a copy of its
+		// config, so install stores the directory relative paths resolve from: the original config's
+		workingDir := os.Getenv(agent.WorkingDirEnvName)
+		if workingDir == "" {
+			workingDir = filepath.Dir(configPath)
+		}
+		if err := os.Chdir(workingDir); err != nil {
+			util.HandleError(err, "Unable to change to the config directory")
+		}
+
+		// a service runs the config it was installed with, which INFISICAL_AGENT_CONFIG_BASE64 would replace
+		os.Unsetenv("INFISICAL_AGENT_CONFIG_BASE64")
+
+		os.Exit(runAgent(configPath, nil, nil))
+	},
+}
+
+var agentServiceCmd = &cobra.Command{
+	Use:   "service",
+	Short: "Manage the agent as a service that starts on boot (systemd on Linux, a Windows service on Windows)",
+	Long: `Install, start, stop and uninstall the agent as a service that starts on boot and restarts when it fails: a systemd service on Linux (run these commands with sudo), a Windows service on Windows (run them from an elevated prompt).
+
+The service is named infisical-agent unless you pass a name, so several agents with different configs can run on one machine. It runs its own copy of the config that only administrators can change, and relative paths in the config resolve from the original config's directory.
+
+On Linux the service logs to the systemd journal (journalctl -u <name>). It makes /home inaccessible and has its own /tmp and /var/tmp, so keep the config, templates and their output elsewhere, e.g. in /etc/infisical/agents.
+On Windows it logs to %ProgramData%\Infisical\Agent\<name>.log, with errors also written to the Windows Event Log.`,
+	Example: `  sudo infisical agent service install my-agent --config /etc/infisical/agents/my-agent.yaml
+  infisical agent service install my-agent --config C:\infisical\agent-config.yaml
+  infisical agent service start my-agent`,
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.NoArgs,
+}
+
+var agentServiceInstallCmd = &cobra.Command{
+	Use:   "install [name]",
+	Short: "Install the agent as a service that starts on boot (requires sudo on Linux, Administrator on Windows)",
+	Long: `Install the agent as a service that starts on boot and restarts when it fails. The config is checked before the service is created. The service is not started; run 'infisical agent service start' afterwards.
+
+The service runs as root (Linux) or LocalSystem (Windows), so it runs its own copy of the config that only administrators can change: /etc/infisical/agents/<name>.service-config.yaml on Linux, and on Windows %ProgramFiles%\Infisical\Agent\<name>\service-config.yaml, next to its own copy of infisical.exe. Edit that copy and restart the service, or edit the original and install again (on Windows, also how to upgrade the service). Relative paths in the config still resolve from the original's directory.`,
+	Example: `  sudo infisical agent service install my-agent --config /etc/infisical/agents/my-agent.yaml
+  infisical agent service install my-agent --config C:\infisical\agent-config.yaml`,
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.MaximumNArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		if err := checkAgentServiceSupport(); err != nil {
+			util.HandleError(err)
+		}
+
+		name := agentServiceNameFromArgs(args)
+		if err := validateAgentServiceName(name); err != nil {
+			util.HandleError(err)
+		}
+
+		configPath, err := cmd.Flags().GetString("config")
+		if err != nil {
+			util.HandleError(err, "Unable to parse flag config")
+		}
+
+		if err := installAgentService(name, configPath); err != nil {
+			util.HandleError(err, "Unable to install the agent service")
+		}
+	},
+}
+
 func init() {
 	agentCmd.SetHelpFunc(func(command *cobra.Command, strings []string) {
 		command.Flags().MarkHidden("domain")
-		command.Parent().HelpFunc()(command, strings)
+		// RootCmd, not command.Parent(): subcommands such as 'agent service install' inherit this
+		// help func, and their parent resolves back to it
+		RootCmd.HelpFunc()(command, strings)
 	})
 	agentCmd.Flags().String("config", "agent-config.yaml", "The path to agent config yaml file")
+
+	agentStartCmd.Flags().String("config", "", "The path to agent config yaml file. Defaults to INFISICAL_AGENT_CONFIG_PATH, then agent-config.yaml")
+
+	agentServiceInstallCmd.Flags().String("config", "agent-config.yaml", "The path to the agent config yaml file the service runs with")
+	agentServiceCmd.AddCommand(agentServiceInstallCmd)
+	agentServiceCmd.AddCommand(newAgentServiceActionCmd("uninstall", "Stop and remove the agent's service (requires sudo on Linux, Administrator on Windows)", uninstallAgentService))
+	agentServiceCmd.AddCommand(newAgentServiceActionCmd("start", "Start the agent's service (requires sudo on Linux, Administrator on Windows)", startAgentService))
+	agentServiceCmd.AddCommand(newAgentServiceActionCmd("stop", "Stop the agent's service (requires sudo on Linux, Administrator on Windows)", stopAgentService))
+
+	agentCmd.AddCommand(agentStartCmd)
+	agentCmd.AddCommand(agentServiceCmd)
 
 	certManagerAgentCmd.Flags().String("config", "certificate-agent-config.yaml", "The path to certificate agent config yaml file")
 	certManagerAgentCmd.Flags().BoolP("verbose", "v", false, "Enable verbose logging for certificate management agent")

@@ -147,7 +147,9 @@ func (r *sessionLogRecorder) record(g *sessionLogGrant, rec sessionLogRecord) {
 	// Without the monotonic reading, Before and After compare wall time, which is what Ts shows.
 	rec.at = now.Round(0)
 	rec.Ts = rec.at.UTC().Format(time.RFC3339Nano)
-	spool.lastRecordAt = now
+	// rec.at, not now: idle close must count time asleep, while lastFlushAt stays monotonic so a
+	// backward clock step cannot stall the flush interval.
+	spool.lastRecordAt = rec.at
 
 	if !r.admitLocked(g) {
 		// Switching off says so when it happens; the proxy-wide cap is only reported here.
@@ -545,7 +547,8 @@ func (r *sessionLogRecorder) sendShipment(ctx context.Context, next shipment, pa
 		}
 		res.posted = true
 		res.postedURL = created.UploadURL
-		res.postedExpires = r.now().Add(time.Duration(created.ExpiresInSeconds) * time.Second)
+		// Round(0): the link expires by the wall clock, which keeps running while the machine sleeps.
+		res.postedExpires = r.now().Add(time.Duration(created.ExpiresInSeconds) * time.Second).Round(0)
 		uploadURL = created.UploadURL
 	}
 
@@ -593,7 +596,9 @@ func (r *sessionLogRecorder) applyShipments(ctx context.Context, results []shipm
 			r.handleCreateFailure(res.spool, res.chunk, res.createErr, res.grantsIssuedAtSend)
 		default:
 			r.mu.Lock()
-			res.chunk.uploadURL = ""
+			if needsFreshUploadLink(res.putErr) {
+				res.chunk.uploadURL = ""
+			}
 			r.hold.s3Down = true
 			r.mu.Unlock()
 			if ctx.Err() == nil {
@@ -618,7 +623,7 @@ func (r *sessionLogRecorder) handleCreateFailure(spool *sessionLogSpool, chunk *
 			Msg("agent-vault: Infisical no longer accepts session logs for this session, dropping what was held")
 
 	case chunkLoggingOff:
-		r.switchOff(grantsIssuedAtSend)
+		r.switchOff(grantsIssuedAtSend, err)
 
 	case chunkClockSkew:
 		r.dropRefused(spool, chunk)
@@ -646,7 +651,7 @@ func (r *sessionLogRecorder) handleCreateFailure(spool *sessionLogSpool, chunk *
 
 // Drops everything held, unless a grant was issued after the refused request went out, which makes the
 // refusal stale (see sessionLogGrantsIssued).
-func (r *sessionLogRecorder) switchOff(grantsIssuedAtSend uint64) {
+func (r *sessionLogRecorder) switchOff(grantsIssuedAtSend uint64, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if grantIssuedSince(grantsIssuedAtSend) {
@@ -659,7 +664,7 @@ func (r *sessionLogRecorder) switchOff(grantsIssuedAtSend uint64) {
 	}
 
 	if !r.hold.off {
-		log.Warn().Int("records", lost).
+		log.Warn().Err(err).Int("records", lost).
 			Msg("agent-vault: session logs are disabled, dropping what was held until they're turned back on")
 	}
 	r.hold.off = true
