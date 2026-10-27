@@ -44,7 +44,7 @@ func buildAgentProxyRunCmd() *cobra.Command {
 	}
 
 	agentProxyRunCmd.Flags().StringP("env", "e", "", "environment slug to fetch proxied services and secrets from (falls back to INFISICAL_ENVIRONMENT, then .infisical.yaml or a legacy .infisical.json)")
-	agentProxyRunCmd.Flags().String("path", "/", "secret path (folder) to fetch from (falls back to INFISICAL_SECRET_PATH, then secrets-management.default-secret-path in .infisical.yaml or defaultSecretPath in a legacy .infisical.json)")
+	agentProxyRunCmd.Flags().String("path", "/", "secret path (folder) to fetch from (falls back to INFISICAL_SECRET_PATH, then secrets-management.secret-path in .infisical.yaml or defaultSecretPath in a legacy .infisical.json)")
 	agentProxyRunCmd.Flags().String("projectId", "", "project id (falls back to INFISICAL_PROJECT_ID, then .infisical.yaml or a legacy .infisical.json)")
 	agentProxyRunCmd.Flags().String("token", "", "run using this token instead of your logged-in session")
 	agentProxyRunCmd.Flags().Bool("sandbox", true, "run the agent inside the OS sandbox")
@@ -78,7 +78,7 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 	// Same resolution order as `connect`: flag, then env var, then .infisical.yaml.
 	environment := util.ResolveEnvironmentName(cmd)
 	if environment == "" {
-		util.HandleError(fmt.Errorf("the environment is required; pass --env, set INFISICAL_ENVIRONMENT, or set secrets-management.default-environment in .infisical.yaml (or defaultEnvironment in a legacy .infisical.json)"))
+		util.HandleError(fmt.Errorf("the environment is required; pass --env, set INFISICAL_ENVIRONMENT, or set secrets-management.environment in .infisical.yaml (or defaultEnvironment in a legacy .infisical.json)"))
 	}
 
 	secretPath := util.ResolveSecretPath(cmd)
@@ -197,11 +197,12 @@ func runAgentProxyRun(cmd *cobra.Command, args []string) {
 		util.PrintWarning(fmt.Sprintf("Unable to isolate the network on this host (%s), the agent will share your network connection. Requests are still routed through the proxy, but a program that ignores the proxy settings can reach the network directly. Credential protections are unchanged.", pre.Reason))
 	}
 
-	// After preflight so a downgraded fence is visible; before the proxy starts so a run that dies still counts.
+	// After preflight so a downgraded fence is visible; before the proxy starts so a run that dies still counts,
+	// unless it dies before the background send completes.
 	passEnv, _ := cmd.Flags().GetStringArray("pass-env")
 	setEnv, _ := cmd.Flags().GetStringArray("set-env")
 	Telemetry.SetActor(telemetry.IdentityClaimsFromToken(src.token()))
-	Telemetry.CaptureEvent("cli-command:agent-proxy run", posthog.NewProperties().
+	Telemetry.CaptureEventAsync("cli-command:agent-proxy run", posthog.NewProperties().
 		Set("version", util.CLI_VERSION).
 		Set("agent", telemetryAgentName(args)).
 		Set("platform", runtime.GOOS).

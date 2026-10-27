@@ -83,7 +83,7 @@ not un-intercepted.`,
 			DataDir: in.dataDir,
 			OwnCa:   in.ownCa,
 			OnReady: func() {
-				Telemetry.CaptureEvent("cli-command:agent-vault proxy", posthog.NewProperties().
+				Telemetry.CaptureEventAsync("cli-command:agent-vault proxy", posthog.NewProperties().
 					Set("version", util.CLI_VERSION).
 					Set("platform", runtime.GOOS).
 					Set("customPort", in.port != agentvault.DefaultPort).
