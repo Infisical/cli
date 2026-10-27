@@ -266,8 +266,11 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	}
 
 	ttl, _ := cmd.Flags().GetString("ttl")
+	label, _ := cmd.Flags().GetString("label")
+	label = strings.TrimSpace(label)
 
-	// Neither flag can reach a session minted in the dashboard: its expiry was fixed when it was created.
+	// None of these flags can reach a session minted in the dashboard: its expiry was fixed when it was created,
+	// and its label is edited in the dashboard.
 	if sessionToken != "" {
 		tokenName := agentVaultSourceName(tokenSource, "--session-token", agentVaultSessionTokenEnv)
 		if cmd.Flags().Changed("ttl") {
@@ -277,6 +280,10 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		if cmd.Flags().Changed("keep-session") {
 			util.HandleError(fmt.Errorf(
 				"--keep-session applies to a session this command mints; the one behind %s is never revoked here. Drop --keep-session, or mint here with --access-bundle", tokenName))
+		}
+		if cmd.Flags().Changed("label") {
+			util.HandleError(fmt.Errorf(
+				"--label applies to a session this command mints; label the one behind %s in the dashboard. Drop --label, or mint here with --access-bundle", tokenName))
 		}
 	}
 
@@ -378,7 +385,7 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		}
 		httpClient.SetAuthToken(identity)
 
-		created, mintErr := api.CallCreateAgentVaultSession(httpClient, api.CreateAgentVaultSessionRequest{AccessBundles: accessBundles, TTL: ttl})
+		created, mintErr := api.CallCreateAgentVaultSession(httpClient, api.CreateAgentVaultSessionRequest{AccessBundles: accessBundles, TTL: ttl, Label: label})
 		if mintErr != nil {
 			util.HandleError(mintErr, "Unable to mint an Agent Vault session")
 		}
@@ -662,6 +669,7 @@ func init() {
 	agentVaultRunCmd.Flags().String("session-token", "", "run with a session token minted in the dashboard instead of minting one (falls back to "+agentVaultSessionTokenEnv+")")
 	agentVaultRunCmd.Flags().String("ttl", "never", "lifetime of the session this command creates: one number and one unit, such as 30m, 8h or 7d (not 2h30m), or never")
 	agentVaultRunCmd.Flags().Bool("keep-session", false, "leave a minted session active when the agent exits")
+	agentVaultRunCmd.Flags().String("label", "", "describe what the session this command creates is for (up to 128 characters)")
 	agentVaultRunCmd.Flags().String("proxy", "", "address of the Agent Vault proxy as host:port (falls back to "+agentVaultProxyAddressEnv+")")
 	agentVaultRunCmd.Flags().String("ca-fingerprint", "", "abort unless the proxy's certificate authority matches this SHA256 fingerprint from Infisical")
 	agentVaultRunCmd.Flags().String("no-proxy", "", "additional comma-separated hosts to bypass the proxy (always merged with localhost,127.0.0.1)")
