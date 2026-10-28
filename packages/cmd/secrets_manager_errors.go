@@ -63,15 +63,28 @@ func (s errorScope) projectFlag() string {
 	return " --projectId " + util.SuggestedValue(s.ProjectID, "project-id")
 }
 
+func (s errorScope) envFlag() string {
+	if s.Environment == "" {
+		return ""
+	}
+	return " --env " + util.SuggestedValue(s.Environment, "env")
+}
+
 func (s errorScope) secretScopeFlags() string {
-	flags := ""
-	if s.Environment != "" {
-		flags += " --env " + util.SuggestedValue(s.Environment, "env")
-	}
+	path := ""
 	if s.SecretPath != "" && s.SecretPath != "/" {
-		flags += " --path " + util.SuggestedValue(s.SecretPath, "path")
+		path = " --path " + util.SuggestedValue(s.SecretPath, "path")
 	}
-	return flags + s.projectFlag()
+	return s.envFlag() + path + s.projectFlag()
+}
+
+// firstSecretName is the name a suggestion uses; constructors are always given at least one, but an
+// empty list must not panic.
+func firstSecretName(names []string) string {
+	if len(names) == 0 {
+		return "<name>"
+	}
+	return util.SuggestedValue(names[0], "name")
 }
 
 func listOf(names []string) string {
@@ -123,22 +136,28 @@ func errEnvironmentNotFound(slug string, scope errorScope, cause error) *util.CL
 
 func errSecretExists(names []string, scope errorScope) *util.CLIError {
 	message := fmt.Sprintf("Secret %s already exists.", listOf(names))
-	if len(names) > 1 {
+	switch {
+	case len(names) == 0:
+		message = "The secret already exists."
+	case len(names) > 1:
 		message = fmt.Sprintf("Secrets %s already exist.", listOf(names))
 	}
 	return &util.CLIError{Code: errCodeSecretExists, Message: message + " Nothing was written.",
 		Next: []util.NextStep{{Purpose: "To change the value",
-			Command: secretsManagerPrefix + " secrets update " + util.SuggestedValue(names[0], "name") + "=<value>" + scope.secretScopeFlags()}}}
+			Command: secretsManagerPrefix + " secrets update " + firstSecretName(names) + "=<value>" + scope.secretScopeFlags()}}}
 }
 
 func errSecretNotFound(names []string, scope errorScope) *util.CLIError {
 	message := fmt.Sprintf("Secret %s doesn't exist.", listOf(names))
-	if len(names) > 1 {
+	switch {
+	case len(names) == 0:
+		message = "The secret doesn't exist."
+	case len(names) > 1:
 		message = fmt.Sprintf("Secrets %s don't exist.", listOf(names))
 	}
 	return &util.CLIError{Code: errCodeSecretNotFound, Message: message + " Nothing was written.",
 		Next: []util.NextStep{{Purpose: "To create it",
-			Command: secretsManagerPrefix + " secrets create " + util.SuggestedValue(names[0], "name") + "=<value>" + scope.secretScopeFlags()}}}
+			Command: secretsManagerPrefix + " secrets create " + firstSecretName(names) + "=<value>" + scope.secretScopeFlags()}}}
 }
 
 func errFolderNotFound(name string, scope errorScope) *util.CLIError {
@@ -149,7 +168,7 @@ func errFolderNotFound(name string, scope errorScope) *util.CLIError {
 	return &util.CLIError{Code: errCodeFolderNotFound,
 		Message: fmt.Sprintf("Folder %q doesn't exist in %q.", name, path),
 		Next: []util.NextStep{{Purpose: "To see the folders there",
-			Command: secretsManagerPrefix + " folders get --path " + util.SuggestedValue(path, "path") + scope.secretScopeFlags()}}}
+			Command: secretsManagerPrefix + " folders get --path " + util.SuggestedValue(path, "path") + scope.envFlag() + scope.projectFlag()}}}
 }
 
 func errNothingToUpdate(flags []string) *util.CLIError {

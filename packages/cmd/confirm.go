@@ -23,8 +23,17 @@ var (
 	}
 )
 
-// Flags whose values never go into a suggested command, whatever they contain.
+// Flags left out of a suggested rerun entirely: the user supplies them again (or through the
+// environment), and repeating even a placeholder would invite pasting a credential.
 var credentialFlags = map[string]bool{"token": true, "client-secret": true, "client-id": true, "password": true, "passphrase": true}
+
+// Flags whose values a suggested rerun repeats, because they only ever hold identifiers. Any other
+// flag's value becomes a placeholder, so a secret in a flag nobody anticipated can't reach the
+// suggestion even when it looks like a slug.
+var rerunIdentifierFlags = map[string]bool{
+	"projectId": true, "env": true, "path": true, "type": true, "tag": true, "tags": true,
+	"name": true, "slug": true, "position": true, "output": true,
+}
 
 // destructiveAction is what a command is about to delete.
 type destructiveAction struct {
@@ -58,8 +67,9 @@ func confirmDestructive(cmd *cobra.Command, args []string, action destructiveAct
 }
 
 // rerunWithYes rebuilds the command the user ran, with --yes added. It uses the full command path, so
-// a command run as `sm` is suggested as `secrets-manager`. Values that aren't safe identifiers become
-// placeholders, and credential flags are left out.
+// a command run as `sm` is suggested as `secrets-manager`. Positional arguments and identifier flags
+// keep their values when they are safe identifiers; every other value becomes a placeholder, and
+// credential flags are left out.
 func rerunWithYes(cmd *cobra.Command, args []string) string {
 	parts := []string{cmd.CommandPath()}
 	for _, arg := range args {
@@ -89,6 +99,9 @@ func rerunWithYes(cmd *cobra.Command, args []string) string {
 				values = slice.GetSlice()
 			}
 			for _, value := range values {
+				if !rerunIdentifierFlags[f.Name] {
+					value = "<" + f.Name + ">"
+				}
 				parts = append(parts, "--"+f.Name+" "+util.SuggestedValue(value, f.Name))
 			}
 		}

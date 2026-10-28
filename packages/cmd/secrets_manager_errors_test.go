@@ -157,6 +157,7 @@ func TestSuggestedCommandsCarryTheScope(t *testing.T) {
 		errSecretNotFound([]string{"API_KEY"}, errorScope{}).Next[0].Command:     "infisical secrets-manager secrets create API_KEY=<value>",
 		errEnvironmentNotFound("x", errorScope{}, nil).Next[0].Command:           "infisical secrets-manager environments get",
 		errFolderNotFound("api", errorScope{Environment: "dev"}).Next[0].Command: "infisical secrets-manager folders get --path / --env dev",
+		errFolderNotFound("api", testScope).Next[0].Command:                      "infisical secrets-manager folders get --path /app --env stagng --projectId " + testProjectID,
 	}
 	for got, want := range cases {
 		if got != want {
@@ -175,6 +176,15 @@ func TestUnsafeScopeValuesBecomePlaceholders(t *testing.T) {
 	}
 	if got := errFolderNotFound("qa\nrm -rf /", hostile).Next[0].Command; strings.ContainsAny(got, "\n;$`| ") && !strings.Contains(got, "<path>") {
 		t.Errorf("unsafe characters reached a suggestion: %q", got)
+	}
+}
+
+// Constructors are always called with names, but an empty list must still give a usable error.
+func TestSecretErrorsWithoutNames(t *testing.T) {
+	for _, err := range []*util.CLIError{errSecretExists(nil, testScope), errSecretNotFound([]string{}, errorScope{})} {
+		if strings.Contains(err.Message, `""`) || !strings.HasSuffix(err.Message, ".") || !strings.Contains(err.Next[0].Command, "<name>=<value>") {
+			t.Errorf("%s: %q / %q", err.Code, err.Message, err.Next[0].Command)
+		}
 	}
 }
 

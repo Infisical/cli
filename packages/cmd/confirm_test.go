@@ -29,6 +29,7 @@ func runDelete(t *testing.T, args ...string) error {
 	del.Flags().String("token", "", "")
 	del.Flags().String("client-secret", "", "")
 	del.Flags().StringArray("tag", nil, "")
+	del.Flags().String("note", "", "")
 	del.Flags().Bool("force", false, "")
 	del.Flags().Bool("recursive", true, "")
 	addConfirmFlags(del)
@@ -150,6 +151,22 @@ func TestConfirmWithoutATerminalSuggestsTheRerun(t *testing.T) {
 	}
 	if !strings.Contains(cliErr.Message, "Nothing was deleted") {
 		t.Errorf("message should say nothing was deleted: %q", cliErr.Message)
+	}
+}
+
+// A flag the CLI doesn't know to hold an identifier may hold a secret that looks like one (64 hex
+// characters is a slug). Its value must never be repeated.
+func TestConfirmRerunOnlyRepeatsIdentifierFlags(t *testing.T) {
+	fakeTerminal(t, false, "", nil)
+	secretLooking := strings.Repeat("a1b2c3d4", 8)
+	err := runDelete(t, "secrets-manager", "environments", "delete", "qa", "--note", secretLooking, "--projectId", testProjectID)
+	var cliErr *util.CLIError
+	if !errors.As(err, &cliErr) {
+		t.Fatalf("want a CLIError, got %v", err)
+	}
+	want := "infisical secrets-manager environments delete qa --note <note> --projectId " + testProjectID + " --yes"
+	if got := cliErr.Next[0].Command; got != want || strings.Contains(got, secretLooking) {
+		t.Errorf("got %s, want %s", got, want)
 	}
 }
 

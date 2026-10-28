@@ -86,7 +86,7 @@ With `-o json`, the same error is JSON on stderr:
 - `--force` skips a safeguard, such as a soft-delete grace period. It never skips the question.
 - Never fall back to an implicit target (such as the project linked in `.infisical.yaml`) for a destructive command.
 
-Add the flags with `addConfirmFlags(cmd)`, then call `confirmDestructive(cmd, args, destructiveAction{...})` before deleting (`packages/cmd/confirm.go`). The suggested rerun repeats the command under its full name, with the same arguments and flags. Credential flags are left out, and unsafe values become placeholders.
+Add the flags with `addConfirmFlags(cmd)`, then call `confirmDestructive(cmd, args, destructiveAction{...})` before deleting (`packages/cmd/confirm.go`). The suggested rerun repeats the command under its full name, with the same arguments and flags. Only flags that hold identifiers (`--projectId`, `--env`, `--path`, ...) keep their values, and only when the value is a safe identifier. Any other flag's value becomes a `<placeholder>`, and credential flags are left out. To repeat a new identifier flag, add it to `rerunIdentifierFlags` in `confirm.go`.
 
 ## Backwards compatibility
 
