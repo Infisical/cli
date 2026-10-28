@@ -55,6 +55,29 @@ With `-o json`, the same error is JSON on stderr:
 - If no command can fix the error, the first sentence says what to do instead.
 - The exit code stays `1`.
 
+### How to return one
+
+- Return a `*util.CLIError` (`packages/util/cli_error.go`) from one of the constructors in `packages/cmd/secrets_manager_errors.go`, and print it to stderr with `util.WriteCLIError`, passing `errorOutputFormat(cmd)` so `-o json` and `-o yaml` get structured output. Then exit `1`.
+- Pass API errors through `classifyAPIError(err, notFound)`. It uses only what is stable: the status code, the error names the backend guarantees (`TokenError`, `PermissionDenied`), and, for a 404, the `notFound` error the caller passes when the request had one subject (an environment by slug, a project by ID). It never reads the message text, which the backend can reword at any time. Any other error comes back unchanged and prints as it always did, including the backend's own message.
+- A backend error that can only be told apart by its message (a slug that's taken, delete protection, a plan limit) has no code until the backend gives it a stable error name. Never match on message text to add one.
+- Build every value in a suggested command with `util.SuggestedValue` (or `util.SuggestedDomain` for `--domain`). Anything that isn't a UUID, slug, secret name, or folder path becomes a `<placeholder>`.
+- To add a code, add a constant, a constructor, and a row to this table. The tests fail if a code isn't listed here, or if this table lists one that doesn't exist.
+
+| Code | When |
+| --- | --- |
+| `auth_required` | No session, or the token is invalid or expired (401, or 403 `TokenError`) |
+| `permission_denied` | The role doesn't allow the action (403) |
+| `project_not_linked` | No `--projectId`, no `INFISICAL_PROJECT_ID`, and no `.infisical.yaml` |
+| `project_not_found` | The project doesn't exist or isn't visible (404) |
+| `project_type_not_supported` | A project of another product was passed to a `secrets-manager` command |
+| `environment_not_found` | The environment slug doesn't exist in the project (404) |
+| `secret_exists` | `secrets create` on a key that exists. Nothing is written |
+| `secret_not_found` | `secrets update` on a key that doesn't exist. Nothing is written |
+| `folder_not_found` | `folders get <name>` for a folder that doesn't exist |
+| `nothing_to_update` | `update` called without any change flags |
+| `confirmation_required` | A destructive command ran without a terminal and without `--yes` |
+| `confirmation_declined` | The slug typed at the prompt didn't match, or the prompt was cancelled |
+
 ## Destructive commands
 
 - Ask before deleting, by having the user type the slug or name of what's being deleted.
@@ -62,6 +85,8 @@ With `-o json`, the same error is JSON on stderr:
 - Without a terminal and without `--yes`, delete nothing. Fail with code `confirmation_required`, and suggest the same command with `--yes`.
 - `--force` skips a safeguard, such as a soft-delete grace period. It never skips the question.
 - Never fall back to an implicit target (such as the project linked in `.infisical.yaml`) for a destructive command.
+
+Add the flags with `addConfirmFlags(cmd)`, then call `confirmDestructive(cmd, args, destructiveAction{...})` before deleting (`packages/cmd/confirm.go`). The suggested rerun repeats the command under its full name, with the same arguments and flags. Credential flags are left out, and unsafe values become placeholders.
 
 ## Backwards compatibility
 

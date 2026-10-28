@@ -5,7 +5,6 @@ This file provides guidance to coding agents working in this repository.
 ## Essential commands
 
 - `go build -o infisical .`: build the CLI.
-- `go test ./packages/...`: unit tests. CI runs a subset (see `.github/workflows/run-cli-tests.yml`), so run the packages you touched locally.
 - `go test ./packages/cmd -run 'TestCommandSurfaceIsBackwardsCompatible|TestCommandConventions'`: the command guards described in [CLI.md](CLI.md).
 - `go test ./test`: integration tests against a real Infisical instance. They need the `CLI_TESTS_*` environment variables and a binary built as `infisical-merge`.
 - `e2e/`: a separate Go module with end-to-end suites (agent, PAM, proxy, relay). See `.github/workflows/run-cli-e2e-tests.yml` for how each one runs.
