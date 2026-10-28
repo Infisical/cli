@@ -228,7 +228,7 @@ func wrapWinrm(fn winrmHandlerFn) http.HandlerFunc {
 		result, err := fn(ctx, &env)
 		if err != nil {
 			if errors.Is(err, errWinrmGatewayBusy) {
-				writeWinrmErrorWithKind(w, http.StatusServiceUnavailable, "The gateway is busy with other certificate scans. Try again shortly.", "busy")
+				writeWinrmError(w, http.StatusServiceUnavailable, "The gateway is busy with other certificate scans. Try again shortly.")
 				return
 			}
 			log.Warn().Err(err).Str("path", r.URL.Path).Msg("winrm: operation failed")

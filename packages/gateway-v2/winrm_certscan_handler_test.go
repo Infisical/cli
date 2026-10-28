@@ -96,7 +96,7 @@ func TestWinrmScanCertificatesReportsBusyGateway(t *testing.T) {
 	rec := httptest.NewRecorder()
 	serveWinrmMux().ServeHTTP(rec, req.WithContext(ctx))
 
-	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), `"kind":"busy"`) {
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "busy with other certificate scans") {
 		t.Fatalf("expected 503 busy, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
