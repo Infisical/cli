@@ -105,10 +105,13 @@ func skillHeaderYAMLError(headerLines []string, err error) error {
 	const firstHeaderLine = 2
 	for i, line := range headerLines {
 		key, value, ok := strings.Cut(strings.TrimRight(line, "\r"), ": ")
-		if !ok || key == "" || strings.ContainsAny(key[:1], " \t#") {
+		if !ok || key == "" || strings.ContainsAny(key[:1], " \t#-") {
 			continue
 		}
 		value = strings.TrimSpace(value)
+		if comment := strings.Index(value, " #"); comment >= 0 {
+			value = value[:comment]
+		}
 		if value != "" && !strings.ContainsAny(value[:1], "\"'|>[{") && strings.Contains(value, ": ") {
 			return fmt.Errorf("Line %d of SKILL.md: the '%s' value contains ': '. Put the value in double quotes.", i+firstHeaderLine, key)
 		}

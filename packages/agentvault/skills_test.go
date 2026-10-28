@@ -100,4 +100,12 @@ func TestSkillHeaderNameSaysWhichLineIsNotYAML(t *testing.T) {
 			t.Errorf("%q: %v", in, err)
 		}
 	}
+	for _, in := range []string{
+		"---\nname: a\ndescription: fine # see: below\nhint: [unclosed\n---\n",
+		"---\n- a: b: c\n---\n",
+	} {
+		if _, err := SkillHeaderName([]byte(in)); err == nil || strings.Contains(err.Error(), "value contains ': '") {
+			t.Errorf("%q: got %v, want a YAML error that doesn't blame a ': ' value", in, err)
+		}
+	}
 }
