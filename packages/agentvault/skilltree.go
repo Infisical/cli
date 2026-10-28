@@ -31,7 +31,7 @@ type InstallResult struct {
 	Dir       string
 	Installed int
 	Failed    []string
-	// Linked names the agents that can see the installed skills through their own skills folder.
+	// Linked names the agents whose own skills folder received a link or copy of the installed skills.
 	Linked     []LinkedAgent
 	LinkFailed []string
 }
@@ -44,9 +44,6 @@ type LinkedAgent struct {
 type linkTarget struct {
 	agent string
 	dir   string
-	// isInstallDir marks a skills folder that already resolves to the install directory, so the agent sees
-	// the skills without a link.
-	isInstallDir bool
 }
 
 // InstallSkills writes each skill as a real folder under the install directory, replacing whatever has that
@@ -100,10 +97,6 @@ func InstallSkills(ctx context.Context, skills []api.AgentVaultSessionSkill, opt
 		}
 		result.Installed++
 		for _, target := range targets {
-			if target.isInstallDir {
-				linked[target.agent] = true
-				continue
-			}
 			if err := linkSkill(symlink, skill.Name, filepath.Join(dir, skill.Name), target.dir, skill.Files); err != nil {
 				result.LinkFailed = append(result.LinkFailed, fmt.Sprintf("%s for %s (%v)", skill.Name, target.agent, err))
 				continue
@@ -124,6 +117,9 @@ func (r *InstallResult) prepareLinks(canonical string, forceClaude bool) []linkT
 	home, _ := os.UserHomeDir()
 	agentDir := func(env, fallback string) string {
 		if v := os.Getenv(env); v != "" {
+			if abs, err := filepath.Abs(v); err == nil {
+				return abs
+			}
 			return v
 		}
 		if home == "" {
@@ -153,10 +149,10 @@ func (r *InstallResult) prepareLinks(canonical string, forceClaude bool) []linkT
 			r.LinkFailed = append(r.LinkFailed, fmt.Sprintf("all skills for %s (failed to create %s: %v)", agent.name, skillsDir, err))
 			continue
 		}
-		// By identity, not path: a relative agent folder or a link through another name still lands on the
-		// install directory, and linking a skill there would replace it with a link to itself.
+		// By identity, not path: a link through another name still lands on the install directory, and linking a
+		// skill there would replace it with a link to itself. The agent already sees the skills, so it is not
+		// named as linked.
 		if info, err := os.Stat(skillsDir); err == nil && canonicalErr == nil && os.SameFile(info, canonicalInfo) {
-			targets = append(targets, linkTarget{agent: agent.name, dir: skillsDir, isInstallDir: true})
 			continue
 		}
 		targets = append(targets, linkTarget{agent: agent.name, dir: skillsDir})

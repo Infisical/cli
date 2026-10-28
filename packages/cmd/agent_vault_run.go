@@ -454,13 +454,15 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 			skillsClient := &agentVaultSkillsClient{httpClient: skillsHTTPClient, sessionToken: sessionToken, retryUnauthorized: minted != nil}
 			installAgentVaultRunSkills(ctx, skillsClient, agentvault.InstallOptions{Dir: skillsDir, ForceClaude: agentVaultRunStartsClaude(args)})
 		},
-		func() { revokeAgentVaultRunSession(cmd, minted, keepSession, "The run was interrupted", true) }); interrupted {
+		func(ctx context.Context) {
+			revokeAgentVaultRunSession(ctx, cmd, minted, keepSession, "The run was interrupted", true)
+		}); interrupted {
 		os.Exit(exitCode)
 	}
 
 	exitCode := runAgentVaultChild(args, env)
 
-	revokeAgentVaultRunSession(cmd, minted, keepSession, "The agent exited", false)
+	revokeAgentVaultRunSession(context.Background(), cmd, minted, keepSession, "The agent exited", false)
 	os.Exit(exitCode)
 }
 
@@ -475,7 +477,22 @@ func resolveAgentVaultRunSkills(cmd *cobra.Command) (dir string, skip bool, err 
 	if skip && cmd.Flags().Changed("skills-dir") {
 		return "", false, fmt.Errorf("--skills-dir was given with --no-skills, which installs no skills; drop one of the two")
 	}
+	if dir, err = expandAgentVaultHomeDir(dir); err != nil {
+		return "", false, err
+	}
 	return dir, skip, nil
+}
+
+// A quoted or flag=value path reaches us with its "~" unexpanded by the shell.
+func expandAgentVaultHomeDir(dir string) (string, error) {
+	if dir != "~" && !strings.HasPrefix(dir, "~/") && !strings.HasPrefix(dir, "~"+string(filepath.Separator)) {
+		return dir, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("unable to expand ~ in --skills-dir: %w", err)
+	}
+	return filepath.Join(home, dir[1:]), nil
 }
 
 func agentVaultRunStartsClaude(args []string) bool {
@@ -487,20 +504,23 @@ func agentVaultRunStartsClaude(args []string) bool {
 }
 
 // runAgentVaultRunSkillsStep runs install unless skip is set. The signals are the ones the agent step forwards
-// to the agent; when one interrupts the step, it returns the exit code a shell reports for that signal.
-func runAgentVaultRunSkillsStep(skip bool, install func(context.Context), onInterrupt func()) (exitCode int, interrupted bool) {
+// to the agent; when one interrupts the step, onInterrupt runs with a context that a second signal cancels, and
+// the step returns the exit code a shell reports for the last signal received.
+func runAgentVaultRunSkillsStep(skip bool, install func(context.Context), onInterrupt func(context.Context)) (exitCode int, interrupted bool) {
 	if skip {
 		return 0, false
 	}
-	signalCtx, stopSignals := notifyAgentVaultTerminationSignals()
-	interrupted = prepareAgentVaultRunSkills(signalCtx, install, stopSignals, onInterrupt)
+	interruptCtx, abortCtx, stopSignals := notifyAgentVaultTerminationSignals()
+	interrupted = prepareAgentVaultRunSkills(interruptCtx, install, func() { onInterrupt(abortCtx) })
 	stopSignals()
 	if !interrupted {
 		return 0, false
 	}
-	var received agentVaultReceivedSignal
-	if errors.As(context.Cause(signalCtx), &received) {
-		return agentVaultSignalExitCode(received.signal), true
+	for _, ctx := range []context.Context{abortCtx, interruptCtx} {
+		var received agentVaultReceivedSignal
+		if errors.As(context.Cause(ctx), &received) {
+			return agentVaultSignalExitCode(received.signal), true
+		}
 	}
 	return agentVaultSignalExitCode(os.Interrupt), true
 }
@@ -509,20 +529,28 @@ type agentVaultReceivedSignal struct{ signal os.Signal }
 
 func (r agentVaultReceivedSignal) Error() string { return "received " + r.signal.String() }
 
-func notifyAgentVaultTerminationSignals() (context.Context, func()) {
-	ctx, cancel := context.WithCancelCause(context.Background())
-	sigCh := make(chan os.Signal, 1)
+// notifyAgentVaultTerminationSignals cancels interruptCtx on the first termination signal and abortCtx on the
+// second. Signals stay caught until stop so that a second Ctrl-C during the revoke cuts it short with its warning
+// instead of killing the process silently; a third gets the default handling.
+func notifyAgentVaultTerminationSignals() (interruptCtx, abortCtx context.Context, stop func()) {
+	interruptCtx, cancelInterrupt := context.WithCancelCause(context.Background())
+	abortCtx, cancelAbort := context.WithCancelCause(context.Background())
+	sigCh := make(chan os.Signal, 2)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
 	done := make(chan struct{})
 	go func() {
-		select {
-		case sig := <-sigCh:
-			cancel(agentVaultReceivedSignal{signal: sig})
-		case <-done:
+		for _, cancel := range []context.CancelCauseFunc{cancelInterrupt, cancelAbort} {
+			select {
+			case sig := <-sigCh:
+				cancel(agentVaultReceivedSignal{signal: sig})
+			case <-done:
+				return
+			}
 		}
+		signal.Stop(sigCh)
 	}()
 	var once sync.Once
-	return ctx, func() {
+	return interruptCtx, abortCtx, func() {
 		once.Do(func() {
 			signal.Stop(sigCh)
 			close(done)
@@ -537,7 +565,7 @@ func agentVaultSignalExitCode(sig os.Signal) int {
 	return 128 + int(syscall.SIGINT)
 }
 
-func revokeAgentVaultRunSession(cmd *cobra.Command, minted *api.AgentVaultSession, keepSession bool, event string, interrupted bool) {
+func revokeAgentVaultRunSession(parent context.Context, cmd *cobra.Command, minted *api.AgentVaultSession, keepSession bool, event string, interrupted bool) {
 	if minted == nil || keepSession {
 		return
 	}
@@ -547,7 +575,7 @@ func revokeAgentVaultRunSession(cmd *cobra.Command, minted *api.AgentVaultSessio
 	}
 	// Never resolve the identity the usual way here: a long run would exit on the expiry check, or open the
 	// login wizard on a terminal nobody is watching.
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	httpClient, clientErr := util.GetRestyClientWithCustomHeaders()
 	token, tokenErr := revocationToken(ctx, cmd, loginPolicy)

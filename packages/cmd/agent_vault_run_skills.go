@@ -11,10 +11,10 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/agentvault"
 	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/fatih/color"
 	"github.com/go-resty/resty/v2"
-	"github.com/rs/zerolog/log"
 )
 
 // A variable so tests can shorten it.
@@ -23,9 +23,8 @@ var agentVaultSkillsTimeout = 30 * time.Second
 // The waits before each retry of a list that answered 401 on a minted run.
 var agentVaultSkillsUnauthorizedRetryDelays = []time.Duration{500 * time.Millisecond, time.Second}
 
-// Fastify's own answer for a route it does not have, which is how an Infisical older than skills answers. Some
-// versions add documentationUrl and some send Fastify's default body, whose message is "Route GET:<path> not
-// found". A NotFoundError thrown by a handler is named "NotFound" and carries neither.
+// Fastify's own answer for a route it does not have, with documentationUrl or with its default message "Route
+// GET:<path> not found". A NotFoundError thrown by a handler is named "NotFound" and carries neither.
 const infisicalRouteMissingName = "Not Found"
 
 func isInfisicalRouteMissing(err error) bool {
@@ -87,8 +86,8 @@ func agentVaultSessionInvalidWarning(err error) string {
 func agentVaultSkillsFailureReason(err error) string {
 	var apiErr *api.APIError
 	if errors.As(err, &apiErr) {
-		if apiErr.ErrorMessage != "" {
-			return fmt.Sprintf("Infisical answered %d: %s", apiErr.StatusCode, apiErr.ErrorMessage)
+		if message := strings.TrimSuffix(strings.TrimSpace(apiErr.ErrorMessage), "."); message != "" {
+			return fmt.Sprintf("Infisical answered %d: %s", apiErr.StatusCode, message)
 		}
 		return fmt.Sprintf("Infisical answered %d", apiErr.StatusCode)
 	}
@@ -106,7 +105,7 @@ func installAgentVaultRunSkills(ctx context.Context, client agentVaultSkillsList
 		util.PrintWarning(fmt.Sprintf("Starting without skills: Infisical did not send them within %s.", agentVaultSkillsTimeout))
 		return
 	case isInfisicalRouteMissing(err):
-		log.Debug().Msg("agent-vault: this Infisical does not deliver skills, starting without them")
+		util.PrintWarning(fmt.Sprintf("Starting without skills: %s doesn't provide them. Check --domain.", strings.TrimSuffix(config.INFISICAL_URL, "/api")))
 		return
 	case isAgentVaultSessionInvalid(err):
 		util.PrintWarning(agentVaultSessionInvalidWarning(err))
@@ -157,14 +156,12 @@ func agentVaultSkillsInstalledLine(result agentvault.InstallResult) string {
 // prepareAgentVaultRunSkills runs the skills step under its deadline, with ctx cancelled by Ctrl-C or another
 // termination signal.
 // When the operator interrupts it, onInterrupt revokes the session, the same as when the agent exits;
-// interrupted then tells the caller to exit without starting the agent. stopSignals runs first so that a
-// second Ctrl-C during the revoke ends the process instead of being swallowed.
-func prepareAgentVaultRunSkills(ctx context.Context, install func(context.Context), stopSignals func(), onInterrupt func()) (interrupted bool) {
+// interrupted then tells the caller to exit without starting the agent.
+func prepareAgentVaultRunSkills(ctx context.Context, install func(context.Context), onInterrupt func()) (interrupted bool) {
 	stepCtx, cancel := context.WithTimeout(ctx, agentVaultSkillsTimeout)
 	defer cancel()
 	install(stepCtx)
 	if ctx.Err() != nil {
-		stopSignals()
 		onInterrupt()
 		return true
 	}

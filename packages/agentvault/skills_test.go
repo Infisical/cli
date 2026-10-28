@@ -75,3 +75,29 @@ func TestSkillHeaderName(t *testing.T) {
 		t.Fatalf("a number name gave %v", err)
 	}
 }
+
+func TestSkillHeaderNameSaysWhichLineIsNotYAML(t *testing.T) {
+	bom := "\ufeff"
+	for in, want := range map[string]string{
+		"---\nname: audit\ndescription: Audit a change set for coherence: map every goal to code. Read-only.\n---\n": "Line 3 of SKILL.md: the 'description' value contains ': '. Put the value in double quotes.",
+		"---\r\nname: infi\r\ndescription: Drive a local stack: print a JWT.\r\n---\r\n":                             "Line 3 of SKILL.md: the 'description' value contains ': '. Put the value in double quotes.",
+		bom + "---\nname: s\nmetadata:\n  a: b\nsummary: one: two\n---\n":                                            "Line 5 of SKILL.md: the 'summary' value contains ': '. Put the value in double quotes.",
+		"---\nname: a\nb: c\n  d: e\n---\n":                                                                          "Line 4 of SKILL.md: the header is not valid YAML (mapping values are not allowed in this context).",
+		"---\r\nname: a\r\n\tbad: x\r\n---\r\n":                                                                      "Line 3 of SKILL.md: the header is not valid YAML (found a tab character that violates indentation).",
+		"---\nname: x\nname: y\n---\n":                                                                               "Line 3 of SKILL.md: the header is not valid YAML (mapping key \"name\" already defined at line 2).",
+	} {
+		if _, err := SkillHeaderName([]byte(in)); err == nil || err.Error() != want {
+			t.Errorf("%q: got %v, want %q", in, err, want)
+		}
+	}
+	for _, in := range []string{
+		"---\nname: a\ndescription: \"quoted: fine\"\n---\n",
+		"---\nname: a\ndescription: 'quoted: fine'\n---\n",
+		"---\nname: a\ndescription: >\n  folded: fine\n---\n",
+		"---\nname: a\ndescription: no colon space:here\n---\n",
+	} {
+		if _, err := SkillHeaderName([]byte(in)); err != nil {
+			t.Errorf("%q: %v", in, err)
+		}
+	}
+}

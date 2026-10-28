@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"reflect"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -128,7 +127,7 @@ func exists(path string) bool {
 func TestTheAgentStartsPlainlyWithoutSkills(t *testing.T) {
 	home := isolateSkillsHome(t)
 	cases := map[string]func() *agentVaultSkillsClient{
-		"Infisical too old": func() *agentVaultSkillsClient { return fakeSessionSkills(t, http.StatusNotFound, routeMissingBody) },
+		"no skills route": func() *agentVaultSkillsClient { return fakeSessionSkills(t, http.StatusNotFound, routeMissingBody) },
 		"session gone": func() *agentVaultSkillsClient {
 			return fakeSessionSkills(t, http.StatusUnauthorized, sessionInvalidBody)
 		},
@@ -183,6 +182,10 @@ func TestSkillsFailureReasonNamesInfisicalsAnswer(t *testing.T) {
 	if got, want := agentVaultSkillsFailureReason(err), "Infisical answered 500: boom"; got != want {
 		t.Fatalf("reason %q, want %q", got, want)
 	}
+	_, err = fakeSessionSkills(t, http.StatusForbidden, map[string]any{"message": "You are not allowed to read skills."}).list(context.Background())
+	if got, want := agentVaultSkillsFailureReason(err), "Infisical answered 403: You are not allowed to read skills"; got != want {
+		t.Fatalf("reason %q, want %q", got, want)
+	}
 }
 
 func TestTheInstalledLineNamesTheLinkedFolders(t *testing.T) {
@@ -219,7 +222,6 @@ func TestInterruptingTheSkillsStepRevokes(t *testing.T) {
 			installAgentVaultRunSkills(stepCtx, client, agentvault.InstallOptions{})
 			interrupt()
 		},
-		func() {},
 		func() { revoked++ })
 	if !interrupted || revoked != 1 {
 		t.Fatalf("interrupted %v, revoked %d times", interrupted, revoked)
@@ -246,7 +248,6 @@ func TestInterruptingAWaitForInfisicalRevokes(t *testing.T) {
 		func(stepCtx context.Context) {
 			installAgentVaultRunSkills(stepCtx, client, agentvault.InstallOptions{})
 		},
-		func() {},
 		func() { revoked = true })
 	if !interrupted || !revoked {
 		t.Fatalf("interrupted %v, revoked %v", interrupted, revoked)
@@ -263,22 +264,9 @@ func TestAnUninterruptedSkillsStepDoesNotRevoke(t *testing.T) {
 		func(stepCtx context.Context) {
 			installAgentVaultRunSkills(stepCtx, client, agentvault.InstallOptions{})
 		},
-		func() { t.Fatal("signals stopped without an interrupt") },
 		func() { t.Fatal("revoked without an interrupt") })
 	if interrupted || !exists(filepath.Join(home, ".agents", "skills", "code-review", "SKILL.md")) {
 		t.Fatalf("interrupted %v", interrupted)
-	}
-}
-
-func TestAnInterruptStopsSignalsBeforeRevoking(t *testing.T) {
-	ctx, interrupt := context.WithCancel(context.Background())
-	var order []string
-	interrupted := prepareAgentVaultRunSkills(ctx,
-		func(context.Context) { interrupt() },
-		func() { order = append(order, "stop signals") },
-		func() { order = append(order, "revoke") })
-	if !interrupted || !reflect.DeepEqual(order, []string{"stop signals", "revoke"}) {
-		t.Fatalf("interrupted %v, order %v", interrupted, order)
 	}
 }
 
@@ -291,19 +279,22 @@ func captureWarnings(t *testing.T) *bytes.Buffer {
 	return &buf
 }
 
-func TestAPlainFastifyNotFoundIsAMissingRoute(t *testing.T) {
+func TestAMissingRouteNamesTheDomain(t *testing.T) {
 	isolateSkillsHome(t)
-	warnings := captureWarnings(t)
-	body := map[string]any{"statusCode": 404, "error": "Not Found", "message": "Route GET:/api/v1/agent-vault/session/skills not found"}
-	client := fakeSessionSkills(t, http.StatusNotFound, body)
-
-	_, err := client.list(context.Background())
-	if !isInfisicalRouteMissing(err) {
-		t.Fatalf("not read as a missing route: %v", err)
-	}
-	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{})
-	if warnings.Len() != 0 {
-		t.Fatalf("warned %q", warnings.String())
+	plainBody := map[string]any{"statusCode": 404, "error": "Not Found", "message": "Route GET:/api/v1/agent-vault/session/skills not found"}
+	for name, body := range map[string]map[string]any{"with documentationUrl": routeMissingBody, "Fastify's default": plainBody} {
+		t.Run(name, func(t *testing.T) {
+			warnings := captureWarnings(t)
+			client := fakeSessionSkills(t, http.StatusNotFound, body)
+			if _, err := client.list(context.Background()); !isInfisicalRouteMissing(err) {
+				t.Fatalf("not read as a missing route: %v", err)
+			}
+			installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{})
+			want := "Starting without skills: " + strings.TrimSuffix(config.INFISICAL_URL, "/api") + " doesn't provide them. Check --domain."
+			if !strings.Contains(warnings.String(), want) || strings.Contains(warnings.String(), "/api ") {
+				t.Fatalf("warned %q, want %q", warnings.String(), want)
+			}
+		})
 	}
 }
 
@@ -423,6 +414,22 @@ func TestResolveAgentVaultRunSkills(t *testing.T) {
 		t.Fatalf("skip %v, err %v", skip, err)
 	}
 
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for in, want := range map[string]string{
+		"~":           home,
+		"~/skills":    filepath.Join(home, "skills"),
+		"~other/x":    "~other/x",
+		"./~/skills":  "./~/skills",
+		"/abs/skills": "/abs/skills",
+	} {
+		if dir, _, err = resolveAgentVaultRunSkills(skillsFlagsCmd(t, "--skills-dir", in)); err != nil || dir != want {
+			t.Fatalf("%q: dir %q, err %v, want %q", in, dir, err, want)
+		}
+	}
+
 	_, _, err = resolveAgentVaultRunSkills(skillsFlagsCmd(t, "--skills-dir", " "))
 	want := "--skills-dir was given but is empty; pass a folder, or drop the flag to install into ~/.agents/skills"
 	if err == nil || err.Error() != want {
@@ -444,7 +451,7 @@ func TestNoSkillsMakesNoRequest(t *testing.T) {
 
 	_, interrupted := runAgentVaultRunSkillsStep(true,
 		func(ctx context.Context) { installAgentVaultRunSkills(ctx, client, agentvault.InstallOptions{}) },
-		func() { t.Fatal("revoked") })
+		func(context.Context) { t.Fatal("revoked") })
 	if interrupted || requests.Load() != 0 {
 		t.Fatalf("interrupted %v, %d requests", interrupted, requests.Load())
 	}
@@ -463,7 +470,7 @@ func TestASkillsStepThatTimesOutStillStartsTheAgent(t *testing.T) {
 
 	_, interrupted := runAgentVaultRunSkillsStep(false,
 		func(ctx context.Context) { installAgentVaultRunSkills(ctx, client, agentvault.InstallOptions{}) },
-		func() { t.Fatal("revoked after a timeout") })
+		func(context.Context) { t.Fatal("revoked after a timeout") })
 	if interrupted {
 		t.Fatal("a timeout was taken for an interrupt")
 	}
@@ -477,5 +484,49 @@ func TestAgentVaultSignalExitCode(t *testing.T) {
 		if got := agentVaultSignalExitCode(sig); got != want {
 			t.Errorf("%v: %d, want %d", sig, got, want)
 		}
+	}
+}
+
+func TestASecondSignalCutsTheRevokeShortWithItsWarning(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("signals cannot be sent to this process here")
+	}
+	warnings := captureWarnings(t)
+	self, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = self.Signal(syscall.SIGTERM)
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+	useInfisicalURL(t, srv.URL+"/api")
+	t.Setenv(util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME, "")
+	t.Setenv(util.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME, "")
+	t.Setenv(util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME, "")
+	t.Setenv(util.INFISICAL_TOKEN_NAME, "identity-token")
+	cmd := &cobra.Command{}
+	cmd.Flags().String("client-id", "", "")
+	cmd.Flags().String("client-secret", "", "")
+	minted := &api.AgentVaultSession{ID: testRunSkillID}
+
+	start := time.Now()
+	exitCode, interrupted := runAgentVaultRunSkillsStep(false,
+		func(ctx context.Context) {
+			_ = self.Signal(syscall.SIGINT)
+			<-ctx.Done()
+		},
+		func(ctx context.Context) {
+			revokeAgentVaultRunSession(ctx, cmd, minted, false, "The run was interrupted", true)
+		})
+	if !interrupted || exitCode != 143 {
+		t.Fatalf("interrupted %v, exit code %d", interrupted, exitCode)
+	}
+	if waited := time.Since(start); waited > 5*time.Second {
+		t.Fatalf("the second signal did not cut the revoke short: %s", waited)
+	}
+	if want := "The run was interrupted but its session could not be revoked ("; !strings.Contains(warnings.String(), want) || !strings.Contains(warnings.String(), "Revoke it in Infisical.") {
+		t.Fatalf("warned %q", warnings.String())
 	}
 }

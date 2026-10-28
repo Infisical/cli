@@ -269,7 +269,7 @@ func TestInstallSkillsDoesNotLinkASkillsFolderThatIsTheInstallFolder(t *testing.
 	if got := readFile(t, filepath.Join(canonical, "code-review", "SKILL.md")); got != "x" {
 		t.Fatalf("SKILL.md %q", got)
 	}
-	if len(result.LinkFailed) != 0 || !reflect.DeepEqual(linkedAgents(result), []string{ClaudeCodeAgent}) {
+	if len(result.LinkFailed) != 0 || len(result.Linked) != 0 {
 		t.Fatalf("result %+v", result)
 	}
 }
@@ -293,8 +293,22 @@ func TestInstallSkillsDoesNotLinkARelativeAgentFolderIntoTheInstallFolder(t *tes
 	if got := readFile(t, filepath.Join(canonical, "code-review", "SKILL.md")); got != "x" {
 		t.Fatalf("SKILL.md %q", got)
 	}
-	if len(result.LinkFailed) != 0 || !reflect.DeepEqual(linkedAgents(result), []string{ClaudeCodeAgent}) {
+	if len(result.LinkFailed) != 0 || len(result.Linked) != 0 {
 		t.Fatalf("result %+v", result)
+	}
+}
+
+func TestInstallSkillsNamesARelativeAgentFolderInFull(t *testing.T) {
+	home := isolateHome(t)
+	mkdir(t, filepath.Join(home, "claude"))
+	t.Chdir(home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "claude")
+
+	result := install(t, InstallOptions{}, sessionSkill("code-review", skillFile("SKILL.md", "0644", "x")))
+	skillsDir := filepath.Join(home, "claude", "skills")
+	assertLinked(t, filepath.Join(skillsDir, "code-review"), filepath.Join(home, ".agents", "skills", "code-review"))
+	if want := []LinkedAgent{{Agent: ClaudeCodeAgent, Dir: skillsDir}}; !reflect.DeepEqual(result.Linked, want) {
+		t.Fatalf("linked %+v", result.Linked)
 	}
 }
 
