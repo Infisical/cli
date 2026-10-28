@@ -24,20 +24,20 @@ import (
 // Projects of other products (PKI, KMS, SSH, ...) are left to their own namespaces.
 const secretManagerProjectType = "secret-manager"
 
-// buildProjectsCmd builds the `infisical sm projects` command tree.
+// buildProjectsCmd builds the `infisical secrets-manager projects` command tree.
 func buildProjectsCmd() *cobra.Command {
 	projectsCmd := &cobra.Command{
 		Use:     "projects",
 		Aliases: []string{"project"},
 		Short:   "List, inspect, and create Secrets Management projects",
 		Example: `# List the projects in your organization
-infisical sm projects list
+infisical secrets-manager projects list
 
 # Show a project and its environments
-infisical sm projects get --projectId=<project-id>
+infisical secrets-manager projects get --projectId=<project-id>
 
 # Create a project, then link this directory to it
-infisical sm projects create --name my-app
+infisical secrets-manager projects create --name my-app
 infisical init --project-id <project-id>`,
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.NoArgs,
@@ -49,13 +49,14 @@ infisical init --project-id <project-id>`,
 	listCmd := &cobra.Command{
 		Use:   "list",
 		Short: "List the Secrets Management projects in your organization",
-		Example: `infisical sm projects list
+		Example: `infisical secrets-manager projects list
 
 # With a machine identity access token
-infisical sm projects list --token <access-token>`,
+infisical secrets-manager projects list --token <access-token>`,
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.NoArgs,
 		Run:                   runProjectsList,
+		Annotations:           serviceTokenUnsupported,
 	}
 	listCmd.Flags().String("token", "", "List projects using a machine identity access token")
 	addProjectsOutputFlag(listCmd, "The output to format the projects in")
@@ -64,10 +65,10 @@ infisical sm projects list --token <access-token>`,
 	getCmd := &cobra.Command{
 		Use:   "get",
 		Short: "Show a project and its environments",
-		Example: `infisical sm projects get --projectId=<project-id>
+		Example: `infisical secrets-manager projects get --projectId=<project-id>
 
 # The project this directory is linked to with infisical init
-infisical sm projects get`,
+infisical secrets-manager projects get`,
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.NoArgs,
 		Run:                   runProjectsGet,
@@ -80,13 +81,14 @@ infisical sm projects get`,
 	createCmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a Secrets Management project with the default environments",
-		Example: `infisical sm projects create --name my-app
+		Example: `infisical secrets-manager projects create --name my-app
 
 # With a description and a custom slug
-infisical sm projects create --name my-app --description "Backend service" --slug my-app-backend`,
+infisical secrets-manager projects create --name my-app --description "Backend service" --slug my-app-backend`,
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.NoArgs,
 		Run:                   runProjectsCreate,
+		Annotations:           serviceTokenUnsupported,
 	}
 	createCmd.Flags().String("name", "", "Name of the project, required (up to 64 characters)")
 	createCmd.Flags().String("description", "", "Description of the project (up to 1024 characters)")
@@ -98,15 +100,20 @@ infisical sm projects create --name my-app --description "Backend service" --slu
 	return projectsCmd
 }
 
-var serviceTokenUnsupportedCommands = map[string]bool{
-	"infisical sm projects list":   true,
-	"infisical sm projects create": true,
+const serviceTokenAnnotation = "infisical.serviceToken"
+
+// serviceTokenUnsupported marks a command whose API routes reject service tokens. It is an
+// annotation rather than a list of command paths so it holds under every alias of the command.
+var serviceTokenUnsupported = map[string]string{serviceTokenAnnotation: "unsupported"}
+
+func rejectsServiceTokens(cmd *cobra.Command) bool {
+	return cmd.Annotations[serviceTokenAnnotation] == "unsupported"
 }
 
 // Reports whether cmd will skip token and use the login session instead,
 // so the root command doesn't warn that the token overrides the session.
 func ignoresEnvServiceToken(cmd *cobra.Command, token *models.TokenDetails) bool {
-	return token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER && !cmd.Flags().Changed("token") && serviceTokenUnsupportedCommands[cmd.CommandPath()]
+	return token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER && !cmd.Flags().Changed("token") && rejectsServiceTokens(cmd)
 }
 
 // projectsHTTPClient authenticates with the machine identity token from --token or the
@@ -126,7 +133,7 @@ func projectsHTTPClient(cmd *cobra.Command) *resty.Client {
 		log.Debug().Msgf("Ignoring the service token from %s, which can't list or create projects", token.Source)
 		token = nil
 	}
-	if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER && serviceTokenUnsupportedCommands[cmd.CommandPath()] {
+	if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER && rejectsServiceTokens(cmd) {
 		util.PrintErrorMessageAndExit("Service tokens can't list or create projects. Pass a machine identity access token with --token, or log in with [infisical login].")
 	}
 
@@ -186,7 +193,7 @@ func runProjectsList(cmd *cobra.Command, args []string) {
 	if outputFormat != "" {
 		printFormattedOutput(outputFormat, projects)
 	} else if len(projects) == 0 {
-		printProjectsTip(cmd, "No projects found in this organization. Create one with [infisical sm projects create --name <name>].")
+		printProjectsTip(cmd, "No projects found in this organization. Create one with [infisical secrets-manager projects create --name <name>].")
 	} else {
 		visualize.PrintAllProjectsDetails(projects)
 	}
@@ -202,7 +209,7 @@ func runProjectsGet(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 	if projectID == "" {
-		notLinked := "Please either run infisical init to connect to a project, or pass in project id with --projectId flag (see [infisical sm projects list])"
+		notLinked := "Please either run infisical init to connect to a project, or pass in project id with --projectId flag (see [infisical secrets-manager projects list])"
 		configFile, err := util.FindWorkspaceConfigFile()
 		if err != nil {
 			util.PrintErrorMessageAndExit(notLinked)

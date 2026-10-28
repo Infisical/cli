@@ -1,0 +1,1108 @@
+{
+  "infisical": {
+    "domain": "|string|https://app.infisical.com/api",
+    "log-destination": "|string|",
+    "log-format": "|string|",
+    "log-level": "l|string|",
+    "org": "|string|",
+    "profile": "|string|",
+    "silent": "|bool|false",
+    "telemetry": "|bool|true"
+  },
+  "infisical agent": {
+    "config": "|string|agent-config.yaml"
+  },
+  "infisical agent service": {},
+  "infisical agent service install": {
+    "config": "|string|agent-config.yaml"
+  },
+  "infisical agent service start": {},
+  "infisical agent service stop": {},
+  "infisical agent service uninstall": {},
+  "infisical agent start": {
+    "config": "|string|"
+  },
+  "infisical agent-vault": {},
+  "infisical agent-vault proxy": {
+    "ca-cert": "|string|",
+    "ca-key": "|string|",
+    "data-dir": "|string|",
+    "enrollment-token": "|string|",
+    "log-file": "|string|",
+    "log-format": "|string|console",
+    "port": "|int|17323",
+    "proxy-token": "|string|"
+  },
+  "infisical agent-vault run": {
+    "access-bundle": "|stringArray|[]",
+    "ca-file": "|string|",
+    "ca-fingerprint": "|string|",
+    "client-id": "|string|",
+    "client-secret": "|string|",
+    "keep-session": "|bool|false",
+    "label": "|string|",
+    "no-ca-trust": "|bool|false",
+    "no-proxy": "|string|",
+    "proxy": "|string|",
+    "session-token": "|string|",
+    "ttl": "|string|never"
+  },
+  "infisical bootstrap": {
+    "domain": "|string|",
+    "email": "|string|",
+    "ignore-if-bootstrapped": "|bool|false",
+    "k8-secret-name": "|string|",
+    "k8-secret-namespace": "|string|",
+    "k8-secret-template": "|string|{\"data\":{\"token\":\"{{.Identity.Credentials.Token}}\"}}",
+    "organization": "|string|",
+    "output": "|string|",
+    "password": "|string|"
+  },
+  "infisical cert-manager": {},
+  "infisical cert-manager agent": {
+    "config": "|string|certificate-agent-config.yaml",
+    "verbose": "v|bool|false"
+  },
+  "infisical dynamic-secrets": {
+    "env": "|string|dev",
+    "output": "o|string|",
+    "path": "|string|/",
+    "project-slug": "|string|",
+    "projectId": "|string|",
+    "token": "|string|"
+  },
+  "infisical dynamic-secrets lease": {
+    "env": "|string|dev"
+  },
+  "infisical dynamic-secrets lease create": {
+    "env": "|string|dev",
+    "kubernetes-namespace": "|string|",
+    "output": "o|string|",
+    "path": "p|string|/",
+    "plain": "|bool|false",
+    "principals": "|string|",
+    "project-slug": "|string|",
+    "projectId": "|string|",
+    "token": "|string|",
+    "ttl": "|string|"
+  },
+  "infisical dynamic-secrets lease delete": {
+    "env": "|string|dev",
+    "output": "o|string|",
+    "path": "p|string|/",
+    "project-slug": "|string|",
+    "projectId": "|string|",
+    "token": "|string|"
+  },
+  "infisical dynamic-secrets lease list": {
+    "env": "|string|dev",
+    "output": "o|string|",
+    "path": "p|string|/",
+    "project-slug": "|string|",
+    "projectId": "|string|",
+    "token": "|string|"
+  },
+  "infisical dynamic-secrets lease renew": {
+    "env": "|string|dev",
+    "output": "o|string|",
+    "path": "p|string|/",
+    "project-slug": "|string|",
+    "projectId": "|string|",
+    "token": "|string|",
+    "ttl": "|string|"
+  },
+  "infisical export": {
+    "env": "e|string|dev",
+    "expand": "|bool|true",
+    "format": "f|string|dotenv",
+    "include-imports": "|bool|true",
+    "output-file": "o|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "secret-overriding": "|bool|true",
+    "tags": "t|string|",
+    "template": "|string|",
+    "token": "|string|"
+  },
+  "infisical gateway": {},
+  "infisical gateway start": {
+    "auth-method": "|string|",
+    "bind": "|string|",
+    "client-id": "|string|",
+    "client-secret": "|string|",
+    "domain": "|string|",
+    "enroll-method": "|string|",
+    "gateway-id": "|string|",
+    "gcp-auth-type": "|string|",
+    "jwt": "|string|",
+    "listen-address": "|string|",
+    "machine-identity-id": "|string|",
+    "name": "|string|",
+    "organization-slug": "|string|",
+    "pam-session-recording-path": "|string|",
+    "pkcs11-module": "|string|",
+    "relay": "|string|",
+    "service-account-key-file-path": "|string|",
+    "service-account-token-path": "|string|",
+    "target-relay-name": "|string|",
+    "token": "|string|"
+  },
+  "infisical gateway systemd": {},
+  "infisical gateway systemd install": {
+    "bind": "|string|",
+    "domain": "|string|",
+    "enroll-method": "|string|",
+    "gateway-id": "|string|",
+    "gcp-auth-type": "|string|",
+    "listen-address": "|string|",
+    "log-file": "|string|",
+    "name": "|string|",
+    "pkcs11-module": "|string|",
+    "relay": "|string|",
+    "service-account-key-file-path": "|string|",
+    "target-relay-name": "|string|",
+    "token": "|string|"
+  },
+  "infisical gateway systemd uninstall": {},
+  "infisical init": {
+    "project-id": "|string|"
+  },
+  "infisical kmip": {},
+  "infisical kmip start": {
+    "certificate-ttl": "|string|",
+    "domain": "|string|",
+    "enroll-method": "|string|",
+    "hostnames-or-ips": "|string|",
+    "identity-auth-method": "|string|universal-auth",
+    "identity-client-id": "|string|",
+    "identity-client-secret": "|string|",
+    "kmip-server-id": "|string|",
+    "listen-address": "|string|",
+    "server-name": "|string|",
+    "token": "|string|"
+  },
+  "infisical kmip systemd": {},
+  "infisical kmip systemd install": {
+    "certificate-ttl": "|string|",
+    "domain": "|string|",
+    "enroll-method": "|string|",
+    "hostnames-or-ips": "|string|",
+    "identity-client-id": "|string|",
+    "identity-client-secret": "|string|",
+    "kmip-server-id": "|string|",
+    "listen-address": "|string|",
+    "server-name": "|string|",
+    "token": "|string|"
+  },
+  "infisical kmip systemd uninstall": {},
+  "infisical login": {
+    "clear-domains": "|bool|false",
+    "client-id": "|string|",
+    "client-secret": "|string|",
+    "email": "|string|",
+    "interactive": "i|bool|false",
+    "jwt": "|string|",
+    "machine-identity-id": "|string|",
+    "method": "|string|user",
+    "oidc-jwt": "|string|",
+    "organization-id": "|string|",
+    "organization-slug": "|string|",
+    "password": "|string|",
+    "plain": "|bool|false",
+    "save-as": "|string|",
+    "service-account-key-file-path": "|string|",
+    "service-account-token-path": "|string|"
+  },
+  "infisical login status": {
+    "json": "|bool|false",
+    "token": "|string|"
+  },
+  "infisical logout": {
+    "all": "|bool|false",
+    "local-only": "|bool|false"
+  },
+  "infisical man": {},
+  "infisical org": {},
+  "infisical org list": {},
+  "infisical org switch": {
+    "org-id": "|string|"
+  },
+  "infisical pam": {},
+  "infisical pam access": {
+    "duration": "|string|1h",
+    "port": "|int|0",
+    "proxy": "|bool|false",
+    "reason": "|string|",
+    "target": "|string|"
+  },
+  "infisical pam agentic": {},
+  "infisical pam agentic access": {
+    "account": "|stringArray|[]",
+    "agent": "|string|",
+    "auth-method": "|string|",
+    "client-id": "|string|",
+    "client-secret": "|string|",
+    "duration": "|string|1h",
+    "jwt": "|string|",
+    "ldap-password": "|string|",
+    "ldap-username": "|string|",
+    "log-file": "|string|",
+    "machine-identity-id": "|string|",
+    "no-approval-request": "|bool|false",
+    "no-sandbox": "|bool|false",
+    "organization-slug": "|string|",
+    "reason": "|string|",
+    "service-account-key-file-path": "|string|",
+    "service-account-token-path": "|string|",
+    "token": "|string|"
+  },
+  "infisical profile": {},
+  "infisical profile bind": {},
+  "infisical profile create": {
+    "pin": "|bool|false",
+    "use": "|bool|false"
+  },
+  "infisical profile current": {
+    "plain": "|bool|false"
+  },
+  "infisical profile delete": {
+    "local-only": "|bool|false"
+  },
+  "infisical profile list": {},
+  "infisical profile pin": {},
+  "infisical profile rename": {},
+  "infisical profile set-org": {
+    "org-id": "|string|"
+  },
+  "infisical profile unbind": {},
+  "infisical profile unpin": {},
+  "infisical profile use": {},
+  "infisical proxy": {},
+  "infisical proxy debug": {
+    "listen-address": "|string|localhost:8081"
+  },
+  "infisical proxy start": {
+    "access-token-check-interval": "|string|5m",
+    "client-id": "|string|",
+    "client-secret": "|string|",
+    "domain": "|string|",
+    "enable-event-subscriptions": "|bool|false",
+    "eviction-strategy": "|string|optimistic",
+    "listen-address": "|string|localhost:8081",
+    "polling-fallback-interval": "|string|10m",
+    "static-secrets-refresh-interval": "|string|1h",
+    "tls-cert-file": "|string|",
+    "tls-enabled": "|bool|true",
+    "tls-key-file": "|string|"
+  },
+  "infisical relay": {},
+  "infisical relay start": {
+    "auth-method": "|string|",
+    "client-id": "|string|",
+    "client-secret": "|string|",
+    "domain": "|string|",
+    "enroll-method": "|string|",
+    "host": "|string|",
+    "jwt": "|string|",
+    "machine-identity-id": "|string|",
+    "name": "|string|",
+    "relay-id": "|string|",
+    "service-account-key-file-path": "|string|",
+    "service-account-token-path": "|string|",
+    "token": "|string|",
+    "type": "|string|"
+  },
+  "infisical relay systemd": {},
+  "infisical relay systemd install": {
+    "domain": "|string|",
+    "enroll-method": "|string|",
+    "host": "|string|",
+    "log-file": "|string|",
+    "name": "|string|",
+    "relay-auth-secret": "|string|",
+    "relay-id": "|string|",
+    "token": "|string|",
+    "type": "|string|org"
+  },
+  "infisical relay systemd uninstall": {},
+  "infisical reset": {
+    "local-only": "|bool|false"
+  },
+  "infisical run": {
+    "command": "c|string|",
+    "env": "e|string|dev",
+    "expand": "|bool|true",
+    "include-imports": "|bool|true",
+    "path": "|stringArray|[/]",
+    "project-config-dir": "|string|",
+    "projectId": "|string|",
+    "recursive": "|bool|false",
+    "secret-overriding": "|bool|true",
+    "tags": "t|string|",
+    "token": "|string|",
+    "watch": "|bool|false",
+    "watch-interval": "|int|10"
+  },
+  "infisical scan": {
+    "baseline-path": "b|string|",
+    "confidence": "|string|medium",
+    "config": "c|string|",
+    "exit-code": "|int|1",
+    "follow-symlinks": "|bool|false",
+    "log-opts": "|string|",
+    "max-target-megabytes": "|int|0",
+    "no-color": "|bool|false",
+    "no-git": "|bool|false",
+    "pipe": "|bool|false",
+    "platform": "|string|",
+    "redact": "|bool|false",
+    "report-format": "f|string|json",
+    "report-path": "r|string|",
+    "source": "s|string|.",
+    "verbose": "v|bool|false"
+  },
+  "infisical scan git-changes": {
+    "baseline-path": "b|string|",
+    "confidence": "|string|medium",
+    "config": "c|string|",
+    "exit-code": "|int|1",
+    "log-opts": "|string|",
+    "max-target-megabytes": "|int|0",
+    "no-color": "|bool|false",
+    "redact": "|bool|false",
+    "report-format": "f|string|json",
+    "report-path": "r|string|",
+    "source": "s|string|.",
+    "staged": "|bool|false",
+    "verbose": "v|bool|false"
+  },
+  "infisical scan install": {
+    "baseline-path": "b|string|",
+    "config": "c|string|",
+    "exit-code": "|int|1",
+    "max-target-megabytes": "|int|0",
+    "no-color": "|bool|false",
+    "pre-commit-hook": "|bool|false",
+    "redact": "|bool|false",
+    "report-format": "f|string|json",
+    "report-path": "r|string|",
+    "source": "s|string|.",
+    "verbose": "v|bool|false"
+  },
+  "infisical secrets": {
+    "env": "|string|dev",
+    "expand": "|bool|true",
+    "include-imports": "|bool|true",
+    "output": "o|string|",
+    "path": "|string|/",
+    "plain": "|bool|false",
+    "projectId": "|string|",
+    "recursive": "|bool|false",
+    "secret-overriding": "|bool|true",
+    "tags": "t|string|",
+    "token": "|string|"
+  },
+  "infisical secrets agent-proxy": {
+    "env": "|string|dev",
+    "tags": "t|string|"
+  },
+  "infisical secrets agent-proxy connect": {
+    "allow-readable-brokered-secrets": "|bool|false",
+    "client-id": "|string|",
+    "client-secret": "|string|",
+    "env": "e|string|",
+    "no-proxy": "|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "proxy": "|string|",
+    "tags": "t|string|",
+    "token": "|string|"
+  },
+  "infisical secrets agent-proxy run": {
+    "allow-host": "|stringArray|[]",
+    "allow-read": "|stringArray|[]",
+    "allow-write": "|stringArray|[]",
+    "env": "e|string|",
+    "log-file": "|string|",
+    "no-sandbox": "|bool|false",
+    "pass-env": "|stringArray|[]",
+    "path": "|string|/",
+    "poll-interval": "|int|60",
+    "projectId": "|string|",
+    "proxy": "|string|",
+    "sandbox": "|bool|true",
+    "set-env": "|stringArray|[]",
+    "tags": "t|string|",
+    "token": "|string|",
+    "unmatched-host": "|string|allow"
+  },
+  "infisical secrets agent-proxy start": {
+    "client-id": "|string|",
+    "client-secret": "|string|",
+    "env": "|string|dev",
+    "log-file": "|string|",
+    "log-format": "|string|console",
+    "poll-interval": "|int|60",
+    "port": "|int|17322",
+    "tags": "t|string|",
+    "unmatched-host": "|string|allow"
+  },
+  "infisical secrets delete": {
+    "env": "|string|dev",
+    "output": "o|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "tags": "t|string|",
+    "token": "|string|",
+    "type": "|string|personal"
+  },
+  "infisical secrets folders": {
+    "env": "|string|dev",
+    "tags": "t|string|"
+  },
+  "infisical secrets folders create": {
+    "env": "|string|dev",
+    "name": "n|string|",
+    "output": "o|string|",
+    "path": "p|string|/",
+    "projectId": "|string|",
+    "tags": "t|string|",
+    "token": "|string|"
+  },
+  "infisical secrets folders delete": {
+    "env": "|string|dev",
+    "name": "n|string|",
+    "output": "o|string|",
+    "path": "p|string|/",
+    "projectId": "|string|",
+    "tags": "t|string|",
+    "token": "|string|"
+  },
+  "infisical secrets folders get": {
+    "env": "|string|dev",
+    "output": "o|string|",
+    "path": "p|string|/",
+    "projectId": "|string|",
+    "tags": "t|string|",
+    "token": "|string|"
+  },
+  "infisical secrets generate-example-env": {
+    "env": "|string|dev",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "tags": "t|string|",
+    "token": "|string|"
+  },
+  "infisical secrets get": {
+    "env": "|string|dev",
+    "expand": "|bool|true",
+    "include-imports": "|bool|true",
+    "output": "o|string|",
+    "path": "|string|/",
+    "plain": "|bool|false",
+    "projectId": "|string|",
+    "raw-value": "|bool|false",
+    "recursive": "|bool|false",
+    "secret-overriding": "|bool|true",
+    "tags": "t|string|",
+    "token": "|string|"
+  },
+  "infisical secrets set": {
+    "env": "|string|dev",
+    "file": "|string|",
+    "output": "o|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "show-values": "|bool|false",
+    "tag": "|stringArray|[]",
+    "tags": "t|string|",
+    "token": "|string|",
+    "type": "|string|shared"
+  },
+  "infisical secrets-manager": {},
+  "infisical secrets-manager agent-proxy": {},
+  "infisical secrets-manager agent-proxy connect": {
+    "allow-readable-brokered-secrets": "|bool|false",
+    "client-id": "|string|",
+    "client-secret": "|string|",
+    "env": "e|string|",
+    "no-proxy": "|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "proxy": "|string|",
+    "token": "|string|"
+  },
+  "infisical secrets-manager agent-proxy run": {
+    "allow-host": "|stringArray|[]",
+    "allow-read": "|stringArray|[]",
+    "allow-write": "|stringArray|[]",
+    "env": "e|string|",
+    "log-file": "|string|",
+    "no-sandbox": "|bool|false",
+    "pass-env": "|stringArray|[]",
+    "path": "|string|/",
+    "poll-interval": "|int|60",
+    "projectId": "|string|",
+    "proxy": "|string|",
+    "sandbox": "|bool|true",
+    "set-env": "|stringArray|[]",
+    "token": "|string|",
+    "unmatched-host": "|string|allow"
+  },
+  "infisical secrets-manager agent-proxy start": {
+    "client-id": "|string|",
+    "client-secret": "|string|",
+    "log-file": "|string|",
+    "log-format": "|string|console",
+    "poll-interval": "|int|60",
+    "port": "|int|17322",
+    "unmatched-host": "|string|allow"
+  },
+  "infisical secrets-manager dynamic-secrets": {
+    "env": "|string|dev",
+    "output": "o|string|",
+    "path": "|string|/",
+    "project-slug": "|string|",
+    "projectId": "|string|",
+    "token": "|string|"
+  },
+  "infisical secrets-manager dynamic-secrets lease": {
+    "env": "|string|dev"
+  },
+  "infisical secrets-manager dynamic-secrets lease create": {
+    "env": "|string|dev",
+    "kubernetes-namespace": "|string|",
+    "output": "o|string|",
+    "path": "p|string|/",
+    "plain": "|bool|false",
+    "principals": "|string|",
+    "project-slug": "|string|",
+    "projectId": "|string|",
+    "token": "|string|",
+    "ttl": "|string|"
+  },
+  "infisical secrets-manager dynamic-secrets lease delete": {
+    "env": "|string|dev",
+    "output": "o|string|",
+    "path": "p|string|/",
+    "project-slug": "|string|",
+    "projectId": "|string|",
+    "token": "|string|"
+  },
+  "infisical secrets-manager dynamic-secrets lease list": {
+    "env": "|string|dev",
+    "output": "o|string|",
+    "path": "p|string|/",
+    "project-slug": "|string|",
+    "projectId": "|string|",
+    "token": "|string|"
+  },
+  "infisical secrets-manager dynamic-secrets lease renew": {
+    "env": "|string|dev",
+    "output": "o|string|",
+    "path": "p|string|/",
+    "project-slug": "|string|",
+    "projectId": "|string|",
+    "token": "|string|",
+    "ttl": "|string|"
+  },
+  "infisical secrets-manager export": {
+    "env": "e|string|dev",
+    "expand": "|bool|true",
+    "format": "f|string|dotenv",
+    "include-imports": "|bool|true",
+    "output-file": "o|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "secret-overriding": "|bool|true",
+    "tags": "t|string|",
+    "template": "|string|",
+    "token": "|string|"
+  },
+  "infisical secrets-manager projects": {},
+  "infisical secrets-manager projects create": {
+    "description": "|string|",
+    "name": "|string|",
+    "output": "o|string|",
+    "slug": "|string|",
+    "token": "|string|"
+  },
+  "infisical secrets-manager projects get": {
+    "output": "o|string|",
+    "projectId": "|string|",
+    "token": "|string|"
+  },
+  "infisical secrets-manager projects list": {
+    "output": "o|string|",
+    "token": "|string|"
+  },
+  "infisical secrets-manager run": {
+    "command": "c|string|",
+    "env": "e|string|dev",
+    "expand": "|bool|true",
+    "include-imports": "|bool|true",
+    "path": "|stringArray|[/]",
+    "project-config-dir": "|string|",
+    "projectId": "|string|",
+    "recursive": "|bool|false",
+    "secret-overriding": "|bool|true",
+    "tags": "t|string|",
+    "token": "|string|",
+    "watch": "|bool|false",
+    "watch-interval": "|int|10"
+  },
+  "infisical secrets-manager secrets": {
+    "env": "|string|dev",
+    "expand": "|bool|true",
+    "include-imports": "|bool|true",
+    "output": "o|string|",
+    "path": "|string|/",
+    "plain": "|bool|false",
+    "projectId": "|string|",
+    "recursive": "|bool|false",
+    "secret-overriding": "|bool|true",
+    "tags": "t|string|",
+    "token": "|string|"
+  },
+  "infisical secrets-manager secrets agent-proxy": {
+    "env": "|string|dev",
+    "tags": "t|string|"
+  },
+  "infisical secrets-manager secrets agent-proxy connect": {
+    "allow-readable-brokered-secrets": "|bool|false",
+    "client-id": "|string|",
+    "client-secret": "|string|",
+    "env": "e|string|",
+    "no-proxy": "|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "proxy": "|string|",
+    "tags": "t|string|",
+    "token": "|string|"
+  },
+  "infisical secrets-manager secrets agent-proxy run": {
+    "allow-host": "|stringArray|[]",
+    "allow-read": "|stringArray|[]",
+    "allow-write": "|stringArray|[]",
+    "env": "e|string|",
+    "log-file": "|string|",
+    "no-sandbox": "|bool|false",
+    "pass-env": "|stringArray|[]",
+    "path": "|string|/",
+    "poll-interval": "|int|60",
+    "projectId": "|string|",
+    "proxy": "|string|",
+    "sandbox": "|bool|true",
+    "set-env": "|stringArray|[]",
+    "tags": "t|string|",
+    "token": "|string|",
+    "unmatched-host": "|string|allow"
+  },
+  "infisical secrets-manager secrets agent-proxy start": {
+    "client-id": "|string|",
+    "client-secret": "|string|",
+    "env": "|string|dev",
+    "log-file": "|string|",
+    "log-format": "|string|console",
+    "poll-interval": "|int|60",
+    "port": "|int|17322",
+    "tags": "t|string|",
+    "unmatched-host": "|string|allow"
+  },
+  "infisical secrets-manager secrets delete": {
+    "env": "|string|dev",
+    "output": "o|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "tags": "t|string|",
+    "token": "|string|",
+    "type": "|string|personal"
+  },
+  "infisical secrets-manager secrets folders": {
+    "env": "|string|dev",
+    "tags": "t|string|"
+  },
+  "infisical secrets-manager secrets folders create": {
+    "env": "|string|dev",
+    "name": "n|string|",
+    "output": "o|string|",
+    "path": "p|string|/",
+    "projectId": "|string|",
+    "tags": "t|string|",
+    "token": "|string|"
+  },
+  "infisical secrets-manager secrets folders delete": {
+    "env": "|string|dev",
+    "name": "n|string|",
+    "output": "o|string|",
+    "path": "p|string|/",
+    "projectId": "|string|",
+    "tags": "t|string|",
+    "token": "|string|"
+  },
+  "infisical secrets-manager secrets folders get": {
+    "env": "|string|dev",
+    "output": "o|string|",
+    "path": "p|string|/",
+    "projectId": "|string|",
+    "tags": "t|string|",
+    "token": "|string|"
+  },
+  "infisical secrets-manager secrets generate-example-env": {
+    "env": "|string|dev",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "tags": "t|string|",
+    "token": "|string|"
+  },
+  "infisical secrets-manager secrets get": {
+    "env": "|string|dev",
+    "expand": "|bool|true",
+    "include-imports": "|bool|true",
+    "output": "o|string|",
+    "path": "|string|/",
+    "plain": "|bool|false",
+    "projectId": "|string|",
+    "raw-value": "|bool|false",
+    "recursive": "|bool|false",
+    "secret-overriding": "|bool|true",
+    "tags": "t|string|",
+    "token": "|string|"
+  },
+  "infisical secrets-manager secrets set": {
+    "env": "|string|dev",
+    "file": "|string|",
+    "output": "o|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "show-values": "|bool|false",
+    "tag": "|stringArray|[]",
+    "tags": "t|string|",
+    "token": "|string|",
+    "type": "|string|shared"
+  },
+  "infisical service-token": {},
+  "infisical service-token create": {
+    "access-level": "a|stringSlice|[]",
+    "expiry-seconds": "e|int|86400",
+    "name": "n|string|Service token generated via CLI",
+    "projectId": "|string|",
+    "scope": "s|stringSlice|[]",
+    "token-only": "|bool|false"
+  },
+  "infisical sm": {},
+  "infisical sm agent-proxy": {},
+  "infisical sm agent-proxy connect": {
+    "allow-readable-brokered-secrets": "|bool|false",
+    "client-id": "|string|",
+    "client-secret": "|string|",
+    "env": "e|string|",
+    "no-proxy": "|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "proxy": "|string|",
+    "token": "|string|"
+  },
+  "infisical sm agent-proxy run": {
+    "allow-host": "|stringArray|[]",
+    "allow-read": "|stringArray|[]",
+    "allow-write": "|stringArray|[]",
+    "env": "e|string|",
+    "log-file": "|string|",
+    "no-sandbox": "|bool|false",
+    "pass-env": "|stringArray|[]",
+    "path": "|string|/",
+    "poll-interval": "|int|60",
+    "projectId": "|string|",
+    "proxy": "|string|",
+    "sandbox": "|bool|true",
+    "set-env": "|stringArray|[]",
+    "token": "|string|",
+    "unmatched-host": "|string|allow"
+  },
+  "infisical sm agent-proxy start": {
+    "client-id": "|string|",
+    "client-secret": "|string|",
+    "log-file": "|string|",
+    "log-format": "|string|console",
+    "poll-interval": "|int|60",
+    "port": "|int|17322",
+    "unmatched-host": "|string|allow"
+  },
+  "infisical sm dynamic-secrets": {
+    "env": "|string|dev",
+    "output": "o|string|",
+    "path": "|string|/",
+    "project-slug": "|string|",
+    "projectId": "|string|",
+    "token": "|string|"
+  },
+  "infisical sm dynamic-secrets lease": {
+    "env": "|string|dev"
+  },
+  "infisical sm dynamic-secrets lease create": {
+    "env": "|string|dev",
+    "kubernetes-namespace": "|string|",
+    "output": "o|string|",
+    "path": "p|string|/",
+    "plain": "|bool|false",
+    "principals": "|string|",
+    "project-slug": "|string|",
+    "projectId": "|string|",
+    "token": "|string|",
+    "ttl": "|string|"
+  },
+  "infisical sm dynamic-secrets lease delete": {
+    "env": "|string|dev",
+    "output": "o|string|",
+    "path": "p|string|/",
+    "project-slug": "|string|",
+    "projectId": "|string|",
+    "token": "|string|"
+  },
+  "infisical sm dynamic-secrets lease list": {
+    "env": "|string|dev",
+    "output": "o|string|",
+    "path": "p|string|/",
+    "project-slug": "|string|",
+    "projectId": "|string|",
+    "token": "|string|"
+  },
+  "infisical sm dynamic-secrets lease renew": {
+    "env": "|string|dev",
+    "output": "o|string|",
+    "path": "p|string|/",
+    "project-slug": "|string|",
+    "projectId": "|string|",
+    "token": "|string|",
+    "ttl": "|string|"
+  },
+  "infisical sm export": {
+    "env": "e|string|dev",
+    "expand": "|bool|true",
+    "format": "f|string|dotenv",
+    "include-imports": "|bool|true",
+    "output-file": "o|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "secret-overriding": "|bool|true",
+    "tags": "t|string|",
+    "template": "|string|",
+    "token": "|string|"
+  },
+  "infisical sm projects": {},
+  "infisical sm projects create": {
+    "description": "|string|",
+    "name": "|string|",
+    "output": "o|string|",
+    "slug": "|string|",
+    "token": "|string|"
+  },
+  "infisical sm projects get": {
+    "output": "o|string|",
+    "projectId": "|string|",
+    "token": "|string|"
+  },
+  "infisical sm projects list": {
+    "output": "o|string|",
+    "token": "|string|"
+  },
+  "infisical sm run": {
+    "command": "c|string|",
+    "env": "e|string|dev",
+    "expand": "|bool|true",
+    "include-imports": "|bool|true",
+    "path": "|stringArray|[/]",
+    "project-config-dir": "|string|",
+    "projectId": "|string|",
+    "recursive": "|bool|false",
+    "secret-overriding": "|bool|true",
+    "tags": "t|string|",
+    "token": "|string|",
+    "watch": "|bool|false",
+    "watch-interval": "|int|10"
+  },
+  "infisical sm secrets": {
+    "env": "|string|dev",
+    "expand": "|bool|true",
+    "include-imports": "|bool|true",
+    "output": "o|string|",
+    "path": "|string|/",
+    "plain": "|bool|false",
+    "projectId": "|string|",
+    "recursive": "|bool|false",
+    "secret-overriding": "|bool|true",
+    "tags": "t|string|",
+    "token": "|string|"
+  },
+  "infisical sm secrets agent-proxy": {
+    "env": "|string|dev",
+    "tags": "t|string|"
+  },
+  "infisical sm secrets agent-proxy connect": {
+    "allow-readable-brokered-secrets": "|bool|false",
+    "client-id": "|string|",
+    "client-secret": "|string|",
+    "env": "e|string|",
+    "no-proxy": "|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "proxy": "|string|",
+    "tags": "t|string|",
+    "token": "|string|"
+  },
+  "infisical sm secrets agent-proxy run": {
+    "allow-host": "|stringArray|[]",
+    "allow-read": "|stringArray|[]",
+    "allow-write": "|stringArray|[]",
+    "env": "e|string|",
+    "log-file": "|string|",
+    "no-sandbox": "|bool|false",
+    "pass-env": "|stringArray|[]",
+    "path": "|string|/",
+    "poll-interval": "|int|60",
+    "projectId": "|string|",
+    "proxy": "|string|",
+    "sandbox": "|bool|true",
+    "set-env": "|stringArray|[]",
+    "tags": "t|string|",
+    "token": "|string|",
+    "unmatched-host": "|string|allow"
+  },
+  "infisical sm secrets agent-proxy start": {
+    "client-id": "|string|",
+    "client-secret": "|string|",
+    "env": "|string|dev",
+    "log-file": "|string|",
+    "log-format": "|string|console",
+    "poll-interval": "|int|60",
+    "port": "|int|17322",
+    "tags": "t|string|",
+    "unmatched-host": "|string|allow"
+  },
+  "infisical sm secrets delete": {
+    "env": "|string|dev",
+    "output": "o|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "tags": "t|string|",
+    "token": "|string|",
+    "type": "|string|personal"
+  },
+  "infisical sm secrets folders": {
+    "env": "|string|dev",
+    "tags": "t|string|"
+  },
+  "infisical sm secrets folders create": {
+    "env": "|string|dev",
+    "name": "n|string|",
+    "output": "o|string|",
+    "path": "p|string|/",
+    "projectId": "|string|",
+    "tags": "t|string|",
+    "token": "|string|"
+  },
+  "infisical sm secrets folders delete": {
+    "env": "|string|dev",
+    "name": "n|string|",
+    "output": "o|string|",
+    "path": "p|string|/",
+    "projectId": "|string|",
+    "tags": "t|string|",
+    "token": "|string|"
+  },
+  "infisical sm secrets folders get": {
+    "env": "|string|dev",
+    "output": "o|string|",
+    "path": "p|string|/",
+    "projectId": "|string|",
+    "tags": "t|string|",
+    "token": "|string|"
+  },
+  "infisical sm secrets generate-example-env": {
+    "env": "|string|dev",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "tags": "t|string|",
+    "token": "|string|"
+  },
+  "infisical sm secrets get": {
+    "env": "|string|dev",
+    "expand": "|bool|true",
+    "include-imports": "|bool|true",
+    "output": "o|string|",
+    "path": "|string|/",
+    "plain": "|bool|false",
+    "projectId": "|string|",
+    "raw-value": "|bool|false",
+    "recursive": "|bool|false",
+    "secret-overriding": "|bool|true",
+    "tags": "t|string|",
+    "token": "|string|"
+  },
+  "infisical sm secrets set": {
+    "env": "|string|dev",
+    "file": "|string|",
+    "output": "o|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "show-values": "|bool|false",
+    "tag": "|stringArray|[]",
+    "tags": "t|string|",
+    "token": "|string|",
+    "type": "|string|shared"
+  },
+  "infisical ssh": {},
+  "infisical ssh add-host": {
+    "alias": "|string|",
+    "configure-sshd": "|bool|false",
+    "force": "|bool|false",
+    "hostname": "|string|",
+    "projectId": "|string|",
+    "token": "|string|",
+    "user-ca-out-file-path": "|string|/etc/ssh/infisical_user_ca.pub",
+    "write-host-cert-to-file": "|bool|false",
+    "write-user-ca-to-file": "|bool|false"
+  },
+  "infisical ssh connect": {
+    "hostname": "|string|",
+    "login-user": "|string|",
+    "out-file-path": "|string|",
+    "token": "|string|",
+    "write-host-ca-to-file": "|bool|true"
+  },
+  "infisical ssh issue-credentials": {
+    "addToAgent": "|bool|false",
+    "certType": "|string|user",
+    "certificateTemplateId": "|string|",
+    "keyAlgorithm": "|string|RSA_2048",
+    "keyId": "|string|",
+    "outFilePath": "|string|",
+    "principals": "|string|",
+    "token": "|string|",
+    "ttl": "|string|"
+  },
+  "infisical ssh sign-key": {
+    "certType": "|string|user",
+    "certificateTemplateId": "|string|",
+    "keyId": "|string|",
+    "outFilePath": "|string|",
+    "principals": "|string|",
+    "publicKey": "|string|",
+    "publicKeyFilePath": "|string|",
+    "token": "|string|",
+    "ttl": "|string|"
+  },
+  "infisical token": {},
+  "infisical token renew": {},
+  "infisical user": {},
+  "infisical user get": {},
+  "infisical user get token": {
+    "plain": "|bool|false"
+  },
+  "infisical user switch": {},
+  "infisical user update": {},
+  "infisical user update domain": {},
+  "infisical vault": {},
+  "infisical vault set": {}
+}
