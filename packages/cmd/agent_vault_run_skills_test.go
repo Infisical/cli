@@ -1,22 +1,29 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/agentvault"
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
+	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
+	"github.com/spf13/cobra"
 )
 
 const testRunSkillID = "8f0e7c1a-3b9e-4c55-9d3e-2a1b7c6d5e4f"
@@ -85,7 +92,7 @@ func TestSkillsAreInstalledInTheHomeFolderAndLinkedForClaude(t *testing.T) {
 	}
 	client := fakeSessionSkills(t, http.StatusOK, nil, testSessionSkill("code-review", "---\nname: code-review\n---\n"))
 
-	installAgentVaultRunSkills(context.Background(), "", client, os.Symlink)
+	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{})
 	canonical := filepath.Join(home, ".agents", "skills", "code-review")
 	if _, err := os.Stat(filepath.Join(canonical, "SKILL.md")); err != nil {
 		t.Fatalf("the skill was not written before start: %v", err)
@@ -104,7 +111,7 @@ func TestSkillsDirInstallsThereWithoutLinks(t *testing.T) {
 	client := fakeSessionSkills(t, http.StatusOK, nil, testSessionSkill("code-review", "x"))
 	linked := false
 
-	installAgentVaultRunSkills(context.Background(), dir, client, func(string, string) error { linked = true; return nil })
+	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{Dir: dir, Symlink: func(string, string) error { linked = true; return nil }})
 	if _, err := os.Stat(filepath.Join(dir, "code-review", "SKILL.md")); err != nil {
 		t.Fatalf("the skill was not written: %v", err)
 	}
@@ -135,7 +142,7 @@ func TestTheAgentStartsPlainlyWithoutSkills(t *testing.T) {
 		},
 	}
 	for name, client := range cases {
-		installAgentVaultRunSkills(context.Background(), "", client(), os.Symlink)
+		installAgentVaultRunSkills(context.Background(), client(), agentvault.InstallOptions{})
 		if exists(filepath.Join(home, ".agents")) {
 			t.Fatalf("%s: a skills folder was created", name)
 		}
@@ -178,17 +185,19 @@ func TestSkillsFailureReasonNamesInfisicalsAnswer(t *testing.T) {
 	}
 }
 
-func TestTheInstalledLineNamesOnlyTheLinkedAgents(t *testing.T) {
+func TestTheInstalledLineNamesTheLinkedFolders(t *testing.T) {
+	claude := agentvault.LinkedAgent{Agent: agentvault.ClaudeCodeAgent, Dir: "/h/.claude/skills"}
+	hermes := agentvault.LinkedAgent{Agent: agentvault.HermesAgent, Dir: "/h/.hermes/skills"}
 	cases := []struct {
 		result agentvault.InstallResult
 		want   string
 	}{
 		{agentvault.InstallResult{Dir: "/h/.agents/skills", Installed: 1}, "Installed 1 skill in /h/.agents/skills."},
-		{agentvault.InstallResult{Dir: "/s", Installed: 3, Linked: []string{agentvault.ClaudeCodeAgent}}, "Installed 3 skills in /s (linked for Claude Code)."},
-		{agentvault.InstallResult{Dir: "/s", Installed: 2, Linked: []string{agentvault.HermesAgent}}, "Installed 2 skills in /s (linked for Hermes)."},
+		{agentvault.InstallResult{Dir: "/s", Installed: 3, Linked: []agentvault.LinkedAgent{claude}}, "Installed 3 skills in /s (linked in /h/.claude/skills)."},
+		{agentvault.InstallResult{Dir: "/s", Installed: 2, Linked: []agentvault.LinkedAgent{hermes}}, "Installed 2 skills in /s (linked in /h/.hermes/skills)."},
 		{
-			agentvault.InstallResult{Dir: "/s", Installed: 2, Linked: []string{agentvault.ClaudeCodeAgent, agentvault.HermesAgent}},
-			"Installed 2 skills in /s (linked for Claude Code and Hermes).",
+			agentvault.InstallResult{Dir: "/s", Installed: 2, Linked: []agentvault.LinkedAgent{claude, hermes}},
+			"Installed 2 skills in /s (linked in /h/.claude/skills and /h/.hermes/skills).",
 		},
 	}
 	for _, tc := range cases {
@@ -207,7 +216,7 @@ func TestInterruptingTheSkillsStepRevokes(t *testing.T) {
 	revoked := 0
 	interrupted := prepareAgentVaultRunSkills(ctx,
 		func(stepCtx context.Context) {
-			installAgentVaultRunSkills(stepCtx, "", client, os.Symlink)
+			installAgentVaultRunSkills(stepCtx, client, agentvault.InstallOptions{})
 			interrupt()
 		},
 		func() {},
@@ -234,7 +243,9 @@ func TestInterruptingAWaitForInfisicalRevokes(t *testing.T) {
 	revoked := false
 	start := time.Now()
 	interrupted := prepareAgentVaultRunSkills(ctx,
-		func(stepCtx context.Context) { installAgentVaultRunSkills(stepCtx, "", client, os.Symlink) },
+		func(stepCtx context.Context) {
+			installAgentVaultRunSkills(stepCtx, client, agentvault.InstallOptions{})
+		},
 		func() {},
 		func() { revoked = true })
 	if !interrupted || !revoked {
@@ -249,7 +260,9 @@ func TestAnUninterruptedSkillsStepDoesNotRevoke(t *testing.T) {
 	home := isolateSkillsHome(t)
 	client := fakeSessionSkills(t, http.StatusOK, nil, testSessionSkill("code-review", "x"))
 	interrupted := prepareAgentVaultRunSkills(context.Background(),
-		func(stepCtx context.Context) { installAgentVaultRunSkills(stepCtx, "", client, os.Symlink) },
+		func(stepCtx context.Context) {
+			installAgentVaultRunSkills(stepCtx, client, agentvault.InstallOptions{})
+		},
 		func() { t.Fatal("signals stopped without an interrupt") },
 		func() { t.Fatal("revoked without an interrupt") })
 	if interrupted || !exists(filepath.Join(home, ".agents", "skills", "code-review", "SKILL.md")) {
@@ -266,5 +279,203 @@ func TestAnInterruptStopsSignalsBeforeRevoking(t *testing.T) {
 		func() { order = append(order, "revoke") })
 	if !interrupted || !reflect.DeepEqual(order, []string{"stop signals", "revoke"}) {
 		t.Fatalf("interrupted %v, order %v", interrupted, order)
+	}
+}
+
+func captureWarnings(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	old := util.GetStderrWriter
+	util.GetStderrWriter = func() io.Writer { return &buf }
+	t.Cleanup(func() { util.GetStderrWriter = old })
+	return &buf
+}
+
+func TestAPlainFastifyNotFoundIsAMissingRoute(t *testing.T) {
+	isolateSkillsHome(t)
+	warnings := captureWarnings(t)
+	body := map[string]any{"statusCode": 404, "error": "Not Found", "message": "Route GET:/api/v1/agent-vault/session/skills not found"}
+	client := fakeSessionSkills(t, http.StatusNotFound, body)
+
+	_, err := client.list(context.Background())
+	if !isInfisicalRouteMissing(err) {
+		t.Fatalf("not read as a missing route: %v", err)
+	}
+	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{})
+	if warnings.Len() != 0 {
+		t.Fatalf("warned %q", warnings.String())
+	}
+}
+
+func TestTheSessionWarningUsesInfisicalsMessage(t *testing.T) {
+	isolateSkillsHome(t)
+	for _, tc := range []struct {
+		body map[string]any
+		want string
+	}{
+		{sessionInvalidBody, "Starting without skills: Invalid session."},
+		{map[string]any{"statusCode": 401, "error": "UnauthorizedError", "message": "Session expired."}, "Starting without skills: Session expired."},
+		{map[string]any{"statusCode": 401, "error": "UnauthorizedError"}, "Starting without skills: the session is no longer valid."},
+	} {
+		warnings := captureWarnings(t)
+		installAgentVaultRunSkills(context.Background(), fakeSessionSkills(t, http.StatusUnauthorized, tc.body), agentvault.InstallOptions{})
+		if !strings.Contains(warnings.String(), tc.want) {
+			t.Fatalf("warned %q, want %q", warnings.String(), tc.want)
+		}
+	}
+}
+
+// Answers 401 to the first unauthorized requests, then lists the skill.
+func fakeSessionSkillsAfter401s(t *testing.T, unauthorized int, skill api.AgentVaultSessionSkill) (*agentVaultSkillsClient, *atomic.Int32) {
+	t.Helper()
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if int(requests.Add(1)) <= unauthorized {
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(sessionInvalidBody)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(api.ListAgentVaultSessionSkillsResponse{Skills: []api.AgentVaultSessionSkill{skill}})
+	}))
+	t.Cleanup(srv.Close)
+	useInfisicalURL(t, srv.URL+"/api")
+	old := agentVaultSkillsUnauthorizedRetryDelays
+	agentVaultSkillsUnauthorizedRetryDelays = []time.Duration{time.Millisecond, time.Millisecond}
+	t.Cleanup(func() { agentVaultSkillsUnauthorizedRetryDelays = old })
+	return &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok"}, &requests
+}
+
+func TestAMintedRunRetriesASessionNotFoundYet(t *testing.T) {
+	home := isolateSkillsHome(t)
+	client, requests := fakeSessionSkillsAfter401s(t, 2, testSessionSkill("code-review", "x"))
+	client.retryUnauthorized = true
+
+	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{})
+	if requests.Load() != 3 || !exists(filepath.Join(home, ".agents", "skills", "code-review", "SKILL.md")) {
+		t.Fatalf("%d requests, skill installed %v", requests.Load(), exists(filepath.Join(home, ".agents", "skills", "code-review")))
+	}
+}
+
+func TestAMintedRunStopsRetryingAfterTwo(t *testing.T) {
+	isolateSkillsHome(t)
+	client, requests := fakeSessionSkillsAfter401s(t, 3, testSessionSkill("code-review", "x"))
+	client.retryUnauthorized = true
+
+	if _, err := client.list(context.Background()); !isAgentVaultSessionInvalid(err) || requests.Load() != 3 {
+		t.Fatalf("%d requests, err %v", requests.Load(), err)
+	}
+}
+
+func TestASessionTokenRunDoesNotRetry(t *testing.T) {
+	home := isolateSkillsHome(t)
+	client, requests := fakeSessionSkillsAfter401s(t, 1, testSessionSkill("code-review", "x"))
+
+	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{})
+	if requests.Load() != 1 || exists(filepath.Join(home, ".agents")) {
+		t.Fatalf("%d requests", requests.Load())
+	}
+}
+
+func TestSkillsAreLinkedForClaudeWhenItIsTheAgent(t *testing.T) {
+	home := isolateSkillsHome(t)
+	client := fakeSessionSkills(t, http.StatusOK, nil, testSessionSkill("code-review", "x"))
+
+	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{ForceClaude: agentVaultRunStartsClaude([]string{"/usr/local/bin/claude", "--resume"})})
+	assertRunLinked(t, filepath.Join(home, ".claude", "skills", "code-review"), filepath.Join(home, ".agents", "skills", "code-review"))
+}
+
+func assertRunLinked(t *testing.T, link, target string) {
+	t.Helper()
+	if got, err := os.Readlink(link); err != nil || got != target {
+		t.Fatalf("%s: %s, %v", link, got, err)
+	}
+}
+
+func TestAgentVaultRunStartsClaude(t *testing.T) {
+	for agent, want := range map[string]bool{
+		"claude": true, "/opt/bin/claude": true, "claude.exe": true, "claude.cmd": true, "claude.bat": true,
+		"codex": false, "claude-code": false, "hermes": false,
+	} {
+		if got := agentVaultRunStartsClaude([]string{agent}); got != want {
+			t.Errorf("%s: %v, want %v", agent, got, want)
+		}
+	}
+}
+
+func skillsFlagsCmd(t *testing.T, args ...string) *cobra.Command {
+	t.Helper()
+	cmd := &cobra.Command{Use: "run", Run: func(*cobra.Command, []string) {}}
+	cmd.Flags().String("skills-dir", "", "")
+	cmd.Flags().Bool("no-skills", false, "")
+	if err := cmd.Flags().Parse(args); err != nil {
+		t.Fatal(err)
+	}
+	return cmd
+}
+
+func TestResolveAgentVaultRunSkills(t *testing.T) {
+	dir, skip, err := resolveAgentVaultRunSkills(skillsFlagsCmd(t, "--skills-dir", "./skills"))
+	if err != nil || dir != "./skills" || skip {
+		t.Fatalf("dir %q, skip %v, err %v", dir, skip, err)
+	}
+	if _, skip, err = resolveAgentVaultRunSkills(skillsFlagsCmd(t, "--no-skills")); err != nil || !skip {
+		t.Fatalf("skip %v, err %v", skip, err)
+	}
+
+	_, _, err = resolveAgentVaultRunSkills(skillsFlagsCmd(t, "--skills-dir", " "))
+	want := "--skills-dir was given but is empty; pass a folder, or drop the flag to install into ~/.agents/skills"
+	if err == nil || err.Error() != want {
+		t.Fatalf("err %v, want %q", err, want)
+	}
+	_, _, err = resolveAgentVaultRunSkills(skillsFlagsCmd(t, "--no-skills", "--skills-dir", "./skills"))
+	want = "--skills-dir was given with --no-skills, which installs no skills; drop one of the two"
+	if err == nil || err.Error() != want {
+		t.Fatalf("err %v, want %q", err, want)
+	}
+}
+
+func TestNoSkillsMakesNoRequest(t *testing.T) {
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests.Add(1) }))
+	defer srv.Close()
+	useInfisicalURL(t, srv.URL+"/api")
+	client := &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok"}
+
+	_, interrupted := runAgentVaultRunSkillsStep(true,
+		func(ctx context.Context) { installAgentVaultRunSkills(ctx, client, agentvault.InstallOptions{}) },
+		func() { t.Fatal("revoked") })
+	if interrupted || requests.Load() != 0 {
+		t.Fatalf("interrupted %v, %d requests", interrupted, requests.Load())
+	}
+}
+
+func TestASkillsStepThatTimesOutStillStartsTheAgent(t *testing.T) {
+	isolateSkillsHome(t)
+	warnings := captureWarnings(t)
+	old := agentVaultSkillsTimeout
+	agentVaultSkillsTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { agentVaultSkillsTimeout = old })
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+	defer srv.Close()
+	useInfisicalURL(t, srv.URL+"/api")
+	client := &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok", retryUnauthorized: true}
+
+	_, interrupted := runAgentVaultRunSkillsStep(false,
+		func(ctx context.Context) { installAgentVaultRunSkills(ctx, client, agentvault.InstallOptions{}) },
+		func() { t.Fatal("revoked after a timeout") })
+	if interrupted {
+		t.Fatal("a timeout was taken for an interrupt")
+	}
+	if want := "Starting without skills: Infisical did not send them within 100ms."; !strings.Contains(warnings.String(), want) {
+		t.Fatalf("warned %q, want %q", warnings.String(), want)
+	}
+}
+
+func TestAgentVaultSignalExitCode(t *testing.T) {
+	for sig, want := range map[os.Signal]int{syscall.SIGINT: 130, syscall.SIGTERM: 143, syscall.SIGHUP: 129, syscall.SIGQUIT: 131} {
+		if got := agentVaultSignalExitCode(sig); got != want {
+			t.Errorf("%v: %d, want %d", sig, got, want)
+		}
 	}
 }

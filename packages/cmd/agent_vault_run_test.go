@@ -468,7 +468,7 @@ func TestRevocationTokenGivesUpOnALoginThatNeverAnswers(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	if _, err := revocationToken(ctx, cmd); err == nil {
+	if _, err := revocationToken(ctx, cmd, util.BestEffortRetryPolicy()); err == nil {
 		t.Fatal("a login that never answered returned a token")
 	}
 	if waited := time.Since(start); waited > 3*time.Second {

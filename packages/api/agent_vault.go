@@ -371,8 +371,7 @@ func CallListAgentVaultSkillsByName(httpClient *resty.Client, name string) (List
 }
 
 type AgentVaultSkillFilesRequest struct {
-	Files  []AgentVaultSkillFile `json:"files"`
-	Source string                `json:"source,omitempty"`
+	Files []AgentVaultSkillFile `json:"files"`
 }
 
 type CreateAgentVaultSkillResponse struct {

@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bytes"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -9,14 +8,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 
+	"github.com/Infisical/infisical-merge/packages/agentvault"
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 var agentVaultSkillsCmd = &cobra.Command{
@@ -47,7 +45,7 @@ name creates it, and an existing one gets a new version unless nothing changed.`
 		}
 		httpClient.SetAuthToken(identity)
 
-		result, err := pushAgentVaultSkill(httpClient, name, api.AgentVaultSkillFilesRequest{Files: files, Source: "cli"})
+		result, err := pushAgentVaultSkill(httpClient, name, api.AgentVaultSkillFilesRequest{Files: files})
 		if err != nil {
 			util.HandleError(err)
 		}
@@ -167,30 +165,11 @@ func readAgentVaultSkillFolder(dir string) ([]api.AgentVaultSkillFile, string, e
 	if skillMd == nil {
 		return nil, "", fmt.Errorf("%s has no SKILL.md at its root", dir)
 	}
-	name, err := agentVaultSkillName(skillMd)
+	name, err := agentvault.SkillHeaderName(skillMd)
 	if err != nil {
 		return nil, "", err
 	}
 	return files, name, nil
-}
-
-// Only the name is read here, to find the skill. Infisical parses and validates the whole header.
-func agentVaultSkillName(skillMd []byte) (string, error) {
-	lines := strings.Split(string(bytes.TrimPrefix(skillMd, []byte("\ufeff"))), "\n")
-	isDelimiter := func(line string) bool { return strings.TrimRight(line, " \t\r") == "---" }
-	end := slices.IndexFunc(lines[1:], isDelimiter)
-	if !isDelimiter(lines[0]) || end < 0 {
-		return "", errors.New("SKILL.md must start with a header between '---' lines that sets name")
-	}
-	var header map[string]any
-	if err := yaml.Unmarshal([]byte(strings.Join(lines[1:end+1], "\n")), &header); err != nil {
-		return "", fmt.Errorf("the SKILL.md header is not valid YAML: %w", err)
-	}
-	name, _ := header["name"].(string)
-	if strings.TrimSpace(name) == "" {
-		return "", errors.New("the SKILL.md header does not set name")
-	}
-	return name, nil
 }
 
 func init() {

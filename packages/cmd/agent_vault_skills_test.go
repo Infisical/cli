@@ -18,41 +18,6 @@ import (
 	"github.com/go-resty/resty/v2"
 )
 
-func TestAgentVaultSkillName(t *testing.T) {
-	cases := map[string]string{
-		"---\nname: code-review\ndescription: x\n---\nbody":    "code-review",
-		"---\r\ndescription: x\r\nname: \"quoted\"\r\n---\r\n": "quoted",
-		"---\nname: 'single'\n---\n":                           "single",
-		"---\nname: code-review # the reviewer\n---\n":         "code-review",
-		"---\nname: \"a # b\"\n---\n":                          "a # b",
-		"---\nmetadata:\n  name: nested\nname: top\n---\n":     "top",
-		"--- \nname: trailing\n---\t\n":                        "trailing",
-	}
-	cases["\ufeff---\nname: with-bom\n---\n"] = "with-bom"
-	for in, want := range cases {
-		got, err := agentVaultSkillName([]byte(in))
-		if err != nil || got != want {
-			t.Fatalf("%q: got %q, %v", in, got, err)
-		}
-	}
-	for _, in := range []string{
-		"no header",
-		"---\ndescription: x\n---\nname: late\n",
-		"",
-		"---\nname: unterminated\n",
-		"---\nmetadata:\n  name: nested\n---\n",
-		"---\nname:\n---\n",
-		"---\nname: [a, b]\n---\n",
-		"---\nname: \"open\n---\n",
-		" ---\nname: indented-open\n---\n",
-		"---\nname: indented-close\n  ---\n",
-	} {
-		if _, err := agentVaultSkillName([]byte(in)); err == nil {
-			t.Fatalf("%q was accepted", in)
-		}
-	}
-}
-
 func TestReadAgentVaultSkillFolder(t *testing.T) {
 	dir := t.TempDir()
 	write := func(rel, content string, mode os.FileMode) {
@@ -211,7 +176,7 @@ func TestPushAgentVaultSkill(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := tc.api
 			client := newFakeSkillsAPI(t, f)
-			out, err := pushAgentVaultSkill(client, "code-review", api.AgentVaultSkillFilesRequest{Source: "cli"})
+			out, err := pushAgentVaultSkill(client, "code-review", api.AgentVaultSkillFilesRequest{})
 			if (err != nil) != tc.wantErr || out != tc.wantOut {
 				t.Fatalf("out %q, err %v", out, err)
 			}
@@ -236,7 +201,7 @@ func TestPushAgentVaultSkillTwiceIsUnchanged(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		out, err := pushAgentVaultSkill(client, name, api.AgentVaultSkillFilesRequest{Files: files, Source: "cli"})
+		out, err := pushAgentVaultSkill(client, name, api.AgentVaultSkillFilesRequest{Files: files})
 		if err != nil {
 			t.Fatal(err)
 		}

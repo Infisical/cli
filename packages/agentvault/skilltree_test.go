@@ -65,6 +65,14 @@ func install(t *testing.T, opts InstallOptions, skills ...api.AgentVaultSessionS
 	return result
 }
 
+func linkedAgents(result InstallResult) []string {
+	var agents []string
+	for _, linked := range result.Linked {
+		agents = append(agents, linked.Agent)
+	}
+	return agents
+}
+
 func assertLinked(t *testing.T, link, canonical string) {
 	t.Helper()
 	target, err := os.Readlink(link)
@@ -122,7 +130,7 @@ func TestInstallSkillsLinksOnlyForAgentsThatAreInstalled(t *testing.T) {
 	if exists(filepath.Join(home, ".hermes")) {
 		t.Fatal("a folder was created for Hermes, which is not installed")
 	}
-	if !reflect.DeepEqual(result.Linked, []string{ClaudeCodeAgent}) {
+	if !reflect.DeepEqual(linkedAgents(result), []string{ClaudeCodeAgent}) {
 		t.Fatalf("linked %v", result.Linked)
 	}
 
@@ -130,7 +138,7 @@ func TestInstallSkillsLinksOnlyForAgentsThatAreInstalled(t *testing.T) {
 	result = install(t, InstallOptions{}, sessionSkill("code-review", skillFile("SKILL.md", "0644", "x")))
 	assertLinked(t, filepath.Join(home, ".claude", "skills", "code-review"), canonical)
 	assertLinked(t, filepath.Join(home, ".hermes", "skills", "code-review"), canonical)
-	if !reflect.DeepEqual(result.Linked, []string{ClaudeCodeAgent, HermesAgent}) {
+	if !reflect.DeepEqual(linkedAgents(result), []string{ClaudeCodeAgent, HermesAgent}) {
 		t.Fatalf("linked %v", result.Linked)
 	}
 }
@@ -150,22 +158,97 @@ func TestInstallSkillsFollowsTheAgentFolderVariables(t *testing.T) {
 	if exists(filepath.Join(home, ".claude", "skills")) || exists(filepath.Join(home, ".hermes", "skills")) {
 		t.Fatal("the default agent folders were used although the variables point elsewhere")
 	}
-	if !reflect.DeepEqual(result.Linked, []string{ClaudeCodeAgent, HermesAgent}) {
+	if !reflect.DeepEqual(linkedAgents(result), []string{ClaudeCodeAgent, HermesAgent}) {
 		t.Fatalf("linked %v", result.Linked)
 	}
 }
 
-func TestInstallSkillsReplacesWhateverIsInTheAgentFolder(t *testing.T) {
+func TestInstallSkillsReplacesAnEarlierCopyOfTheSkillInTheAgentFolder(t *testing.T) {
 	home := isolateHome(t)
-	userSkill := filepath.Join(home, ".claude", "skills", "code-review")
-	mkdir(t, userSkill)
-	if err := os.WriteFile(filepath.Join(userSkill, "SKILL.md"), []byte("mine"), 0o644); err != nil {
+	copied := filepath.Join(home, ".claude", "skills", "code-review")
+	mkdir(t, copied)
+	if err := os.WriteFile(filepath.Join(copied, "SKILL.md"), []byte("---\nname: code-review\n---\nold"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	install(t, InstallOptions{}, sessionSkill("code-review", skillFile("SKILL.md", "0644", "ours")))
-	assertLinked(t, userSkill, filepath.Join(home, ".agents", "skills", "code-review"))
-	if got := readFile(t, filepath.Join(userSkill, "SKILL.md")); got != "ours" {
-		t.Fatalf("SKILL.md %q", got)
+	result := install(t, InstallOptions{}, sessionSkill("code-review", skillFile("SKILL.md", "0644", "ours")))
+	assertLinked(t, copied, filepath.Join(home, ".agents", "skills", "code-review"))
+	if len(result.LinkFailed) != 0 {
+		t.Fatalf("result %+v", result)
+	}
+}
+
+func TestInstallSkillsReplacesALinkInTheAgentFolder(t *testing.T) {
+	home := isolateHome(t)
+	mkdir(t, filepath.Join(home, ".claude", "skills"))
+	link := filepath.Join(home, ".claude", "skills", "code-review")
+	if err := os.Symlink(t.TempDir(), link); err != nil {
+		t.Fatal(err)
+	}
+	result := install(t, InstallOptions{}, sessionSkill("code-review", skillFile("SKILL.md", "0644", "ours")))
+	assertLinked(t, link, filepath.Join(home, ".agents", "skills", "code-review"))
+	if len(result.LinkFailed) != 0 {
+		t.Fatalf("result %+v", result)
+	}
+}
+
+func TestInstallSkillsKeepsTheUsersFolderInTheAgentFolder(t *testing.T) {
+	for name, skillMd := range map[string]string{
+		"no SKILL.md":          "",
+		"no header":            "mine",
+		"another skill's name": "---\nname: my-review\n---\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := isolateHome(t)
+			userSkill := filepath.Join(home, ".claude", "skills", "code-review")
+			mkdir(t, userSkill)
+			if skillMd != "" {
+				if err := os.WriteFile(filepath.Join(userSkill, "SKILL.md"), []byte(skillMd), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			result := install(t, InstallOptions{}, sessionSkill("code-review", skillFile("SKILL.md", "0644", "ours")))
+			info, err := os.Lstat(userSkill)
+			if err != nil || !info.IsDir() {
+				t.Fatalf("the user's folder was replaced: %v", err)
+			}
+			if skillMd != "" && readFile(t, filepath.Join(userSkill, "SKILL.md")) != skillMd {
+				t.Fatal("the user's SKILL.md was changed")
+			}
+			want := []string{"code-review for Claude Code (a folder named code-review already exists)"}
+			if result.Installed != 1 || !reflect.DeepEqual(result.LinkFailed, want) || len(result.Linked) != 0 {
+				t.Fatalf("result %+v", result)
+			}
+		})
+	}
+}
+
+func TestInstallSkillsNamesACaseVariantFolderAsItIsOnDisk(t *testing.T) {
+	home := isolateHome(t)
+	skillsDir := filepath.Join(home, ".claude", "skills")
+	mkdir(t, filepath.Join(skillsDir, "Code-Review"))
+	if _, err := os.Lstat(filepath.Join(skillsDir, "code-review")); err != nil {
+		t.Skip("this file system tells names apart by case")
+	}
+	result := install(t, InstallOptions{}, sessionSkill("code-review", skillFile("SKILL.md", "0644", "ours")))
+	if info, err := os.Lstat(filepath.Join(skillsDir, "Code-Review")); err != nil || !info.IsDir() {
+		t.Fatalf("the user's folder was replaced: %v", err)
+	}
+	want := []string{"code-review for Claude Code (a folder named Code-Review already exists)"}
+	if !reflect.DeepEqual(result.LinkFailed, want) {
+		t.Fatalf("link failures %q", result.LinkFailed)
+	}
+}
+
+func TestInstallSkillsLinksForClaudeCodeWhenItIsTheAgent(t *testing.T) {
+	home := isolateHome(t)
+	result := install(t, InstallOptions{ForceClaude: true}, sessionSkill("code-review", skillFile("SKILL.md", "0644", "x")))
+	assertLinked(t, filepath.Join(home, ".claude", "skills", "code-review"), filepath.Join(home, ".agents", "skills", "code-review"))
+	want := []LinkedAgent{{Agent: ClaudeCodeAgent, Dir: filepath.Join(home, ".claude", "skills")}}
+	if !reflect.DeepEqual(result.Linked, want) {
+		t.Fatalf("linked %+v", result.Linked)
+	}
+	if exists(filepath.Join(home, ".hermes")) {
+		t.Fatal("a folder was created for Hermes, which is not installed")
 	}
 }
 
@@ -186,7 +269,7 @@ func TestInstallSkillsDoesNotLinkASkillsFolderThatIsTheInstallFolder(t *testing.
 	if got := readFile(t, filepath.Join(canonical, "code-review", "SKILL.md")); got != "x" {
 		t.Fatalf("SKILL.md %q", got)
 	}
-	if len(result.LinkFailed) != 0 || !reflect.DeepEqual(result.Linked, []string{ClaudeCodeAgent}) {
+	if len(result.LinkFailed) != 0 || !reflect.DeepEqual(linkedAgents(result), []string{ClaudeCodeAgent}) {
 		t.Fatalf("result %+v", result)
 	}
 }
@@ -210,7 +293,7 @@ func TestInstallSkillsDoesNotLinkARelativeAgentFolderIntoTheInstallFolder(t *tes
 	if got := readFile(t, filepath.Join(canonical, "code-review", "SKILL.md")); got != "x" {
 		t.Fatalf("SKILL.md %q", got)
 	}
-	if len(result.LinkFailed) != 0 || !reflect.DeepEqual(result.Linked, []string{ClaudeCodeAgent}) {
+	if len(result.LinkFailed) != 0 || !reflect.DeepEqual(linkedAgents(result), []string{ClaudeCodeAgent}) {
 		t.Fatalf("result %+v", result)
 	}
 }
@@ -229,7 +312,7 @@ func TestInstallSkillsCopiesWhereLinksAreRefused(t *testing.T) {
 	if got := readFile(t, filepath.Join(dest, "SKILL.md")); got != "x" {
 		t.Fatalf("SKILL.md %q", got)
 	}
-	if len(result.LinkFailed) != 0 || !reflect.DeepEqual(result.Linked, []string{ClaudeCodeAgent}) {
+	if len(result.LinkFailed) != 0 || !reflect.DeepEqual(linkedAgents(result), []string{ClaudeCodeAgent}) {
 		t.Fatalf("result %+v", result)
 	}
 }

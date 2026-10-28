@@ -23,6 +23,8 @@ type InstallOptions struct {
 	Dir string
 	// Symlink is os.Symlink unless a test replaces it.
 	Symlink func(oldname, newname string) error
+	// ForceClaude links for Claude Code even before its folder exists, for a run that starts Claude Code.
+	ForceClaude bool
 }
 
 type InstallResult struct {
@@ -30,13 +32,21 @@ type InstallResult struct {
 	Installed int
 	Failed    []string
 	// Linked names the agents that can see the installed skills through their own skills folder.
-	Linked     []string
+	Linked     []LinkedAgent
 	LinkFailed []string
+}
+
+type LinkedAgent struct {
+	Agent string
+	Dir   string
 }
 
 type linkTarget struct {
 	agent string
 	dir   string
+	// isInstallDir marks a skills folder that already resolves to the install directory, so the agent sees
+	// the skills without a link.
+	isInstallDir bool
 }
 
 // InstallSkills writes each skill as a real folder under the install directory, replacing whatever has that
@@ -63,7 +73,7 @@ func InstallSkills(ctx context.Context, skills []api.AgentVaultSessionSkill, opt
 
 	var targets []linkTarget
 	if opts.Dir == "" {
-		targets = result.prepareLinks(dir)
+		targets = result.prepareLinks(dir, opts.ForceClaude)
 	}
 	symlink := opts.Symlink
 	if symlink == nil {
@@ -90,11 +100,11 @@ func InstallSkills(ctx context.Context, skills []api.AgentVaultSessionSkill, opt
 		}
 		result.Installed++
 		for _, target := range targets {
-			if target.dir == "" {
+			if target.isInstallDir {
 				linked[target.agent] = true
 				continue
 			}
-			if err := linkSkill(symlink, filepath.Join(dir, skill.Name), filepath.Join(target.dir, skill.Name), skill.Files); err != nil {
+			if err := linkSkill(symlink, skill.Name, filepath.Join(dir, skill.Name), target.dir, skill.Files); err != nil {
 				result.LinkFailed = append(result.LinkFailed, fmt.Sprintf("%s for %s (%v)", skill.Name, target.agent, err))
 				continue
 			}
@@ -103,15 +113,14 @@ func InstallSkills(ctx context.Context, skills []api.AgentVaultSessionSkill, opt
 	}
 	for _, target := range targets {
 		if linked[target.agent] {
-			result.Linked = append(result.Linked, target.agent)
+			result.Linked = append(result.Linked, LinkedAgent{Agent: target.agent, Dir: target.dir})
 		}
 	}
 	return result, nil
 }
 
-// prepareLinks returns the skills folder of each agent installed here. An empty dir marks one that already
-// resolves to the install directory, so the agent sees the skills without a link.
-func (r *InstallResult) prepareLinks(canonical string) []linkTarget {
+// prepareLinks returns the skills folder of each agent installed here, and of Claude Code when forceClaude is set.
+func (r *InstallResult) prepareLinks(canonical string, forceClaude bool) []linkTarget {
 	home, _ := os.UserHomeDir()
 	agentDir := func(env, fallback string) string {
 		if v := os.Getenv(env); v != "" {
@@ -125,14 +134,18 @@ func (r *InstallResult) prepareLinks(canonical string) []linkTarget {
 	canonicalInfo, canonicalErr := os.Stat(canonical)
 
 	var targets []linkTarget
-	for _, agent := range []struct{ name, dir string }{
-		{ClaudeCodeAgent, agentDir("CLAUDE_CONFIG_DIR", ".claude")},
-		{HermesAgent, agentDir("HERMES_HOME", ".hermes")},
+	for _, agent := range []struct {
+		name  string
+		dir   string
+		force bool
+	}{
+		{ClaudeCodeAgent, agentDir("CLAUDE_CONFIG_DIR", ".claude"), forceClaude},
+		{HermesAgent, agentDir("HERMES_HOME", ".hermes"), false},
 	} {
 		if agent.dir == "" {
 			continue
 		}
-		if info, err := os.Stat(agent.dir); err != nil || !info.IsDir() {
+		if info, err := os.Stat(agent.dir); !agent.force && (err != nil || !info.IsDir()) {
 			continue
 		}
 		skillsDir := filepath.Join(agent.dir, "skills")
@@ -143,7 +156,7 @@ func (r *InstallResult) prepareLinks(canonical string) []linkTarget {
 		// By identity, not path: a relative agent folder or a link through another name still lands on the
 		// install directory, and linking a skill there would replace it with a link to itself.
 		if info, err := os.Stat(skillsDir); err == nil && canonicalErr == nil && os.SameFile(info, canonicalInfo) {
-			targets = append(targets, linkTarget{agent: agent.name})
+			targets = append(targets, linkTarget{agent: agent.name, dir: skillsDir, isInstallDir: true})
 			continue
 		}
 		targets = append(targets, linkTarget{agent: agent.name, dir: skillsDir})
@@ -166,8 +179,13 @@ func installSkillFolder(dir, name string, files []api.AgentVaultSkillFile) error
 	return nil
 }
 
-// Where links are not allowed, such as Windows without developer mode, the agent gets a copy instead.
-func linkSkill(symlink func(oldname, newname string) error, src, dest string, files []api.AgentVaultSkillFile) error {
+// Where links are not allowed, such as Windows without developer mode, the agent gets a copy instead. Only a
+// link or an earlier copy of this skill is replaced; anything else in the agent's folder is the user's.
+func linkSkill(symlink func(oldname, newname string) error, name, src, agentSkillsDir string, files []api.AgentVaultSkillFile) error {
+	dest := filepath.Join(agentSkillsDir, name)
+	if err := replaceableLinkDest(agentSkillsDir, name); err != nil {
+		return err
+	}
 	if err := os.RemoveAll(dest); err != nil {
 		return fmt.Errorf("failed to replace %s: %w", dest, err)
 	}
@@ -180,6 +198,46 @@ func linkSkill(symlink func(oldname, newname string) error, src, dest string, fi
 		return err
 	}
 	return nil
+}
+
+// On a case-insensitive file system dest can already exist under another spelling, so the message names the
+// entry as it is on disk.
+func replaceableLinkDest(agentSkillsDir, name string) error {
+	dest := filepath.Join(agentSkillsDir, name)
+	info, err := os.Lstat(dest)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to read %s: %w", dest, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil
+	}
+	if info.IsDir() {
+		if skillMd, readErr := os.ReadFile(filepath.Join(dest, "SKILL.md")); readErr == nil {
+			if headerName, nameErr := SkillHeaderName(skillMd); nameErr == nil && headerName == name {
+				return nil
+			}
+		}
+	}
+	onDisk := name
+	if entries, readErr := os.ReadDir(agentSkillsDir); readErr == nil {
+		for _, entry := range entries {
+			if entry.Name() == name {
+				onDisk = name
+				break
+			}
+			if strings.EqualFold(entry.Name(), name) {
+				onDisk = entry.Name()
+			}
+		}
+	}
+	kind := "folder"
+	if !info.IsDir() {
+		kind = "file"
+	}
+	return fmt.Errorf("a %s named %s already exists", kind, onDisk)
 }
 
 // Skill names become folder names, so anything that could step outside the install directory is refused.

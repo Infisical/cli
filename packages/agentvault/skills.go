@@ -4,10 +4,15 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"fmt"
+	"slices"
 	"sort"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/Infisical/infisical-merge/packages/api"
+	"gopkg.in/yaml.v3"
 )
 
 // SkillFilesSha256 is the hash Infisical stores for a version: sha256 over the files sorted by the UTF-8 bytes
@@ -68,4 +73,26 @@ func writeJSString(buf *bytes.Buffer, s string) {
 		}
 	}
 	buf.WriteByte('"')
+}
+
+// SkillHeaderName reads only the name from a SKILL.md header. Infisical parses and validates the whole header.
+func SkillHeaderName(skillMd []byte) (string, error) {
+	lines := strings.Split(string(bytes.TrimPrefix(skillMd, []byte("\ufeff"))), "\n")
+	isDelimiter := func(line string) bool { return strings.TrimRight(line, " \t\r") == "---" }
+	end := slices.IndexFunc(lines[1:], isDelimiter)
+	if !isDelimiter(lines[0]) || end < 0 {
+		return "", errors.New("SKILL.md must start with a header between '---' lines that sets name")
+	}
+	var header map[string]any
+	if err := yaml.Unmarshal([]byte(strings.Join(lines[1:end+1], "\n")), &header); err != nil {
+		return "", fmt.Errorf("the SKILL.md header is not valid YAML: %w", err)
+	}
+	name, isText := header["name"].(string)
+	if !isText && header["name"] != nil {
+		return "", errors.New("the 'name' in the SKILL.md header must be text. Put it in quotes")
+	}
+	if strings.TrimSpace(name) == "" {
+		return "", errors.New("the SKILL.md header does not set name")
+	}
+	return name, nil
 }
