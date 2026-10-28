@@ -116,6 +116,16 @@ func skillHeaderYAMLError(headerLines []string, err error) error {
 			return fmt.Errorf("Line %d of SKILL.md: the '%s' value contains ': '. Put the value in double quotes.", i+firstHeaderLine, key)
 		}
 	}
+	if line, key, opener, found := findUnclosedValue(headerLines); found {
+		what := fmt.Sprintf("a '%c'", opener)
+		switch opener {
+		case '"':
+			what = "a double quote"
+		case '\'':
+			what = "a single quote"
+		}
+		return fmt.Errorf("Line %d of SKILL.md: the '%s' value opens %s that never closes.", line+firstHeaderLine, key, what)
+	}
 	message := strings.TrimPrefix(err.Error(), "yaml: ")
 	message = strings.TrimLeft(strings.TrimPrefix(message, "unmarshal errors:"), " \n")
 	if rest, ok := strings.CutPrefix(message, "line "); ok {
@@ -132,4 +142,83 @@ func skillHeaderYAMLError(headerLines []string, err error) error {
 		}
 	}
 	return fmt.Errorf("the SKILL.md header is not valid YAML: %w", err)
+}
+
+func isBlankByte(c byte) bool { return c == ' ' || c == '\t' || c == '\n' }
+
+// findUnclosedValue finds a flow or quoted value that never closes. Such a value may continue on indented lines, so
+// its whole block is scanned first. It mirrors findUnclosedValue in Infisical's agent-vault-skill-fns.ts.
+func findUnclosedValue(headerLines []string) (line int, key string, opener byte, found bool) {
+	for i, raw := range headerLines {
+		k, value, ok := strings.Cut(strings.TrimRight(raw, "\r"), ": ")
+		if !ok || k == "" || strings.ContainsAny(k[:1], " \t#-") {
+			continue
+		}
+		value = strings.TrimLeft(value, " \t")
+		if value == "" || !strings.ContainsAny(value[:1], "[{\"'") {
+			continue
+		}
+		block := []string{value}
+		for _, next := range headerLines[i+1:] {
+			next = strings.TrimRight(next, "\r")
+			if next != "" && !isBlankByte(next[0]) {
+				break
+			}
+			block = append(block, next)
+		}
+		if !valueCloses(strings.Join(block, "\n")) {
+			return i, strings.TrimRight(k, " \t"), value[0], true
+		}
+	}
+	return 0, "", 0, false
+}
+
+func valueCloses(text string) bool {
+	depth := 0
+	var quote, previous byte
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		switch {
+		case quote == '"':
+			if c == '\\' {
+				i++
+			} else if c == '"' {
+				if depth == 0 {
+					return true
+				}
+				quote, previous = 0, c
+			}
+		case quote == '\'':
+			if c == '\'' && i+1 < len(text) && text[i+1] == '\'' {
+				i++
+			} else if c == '\'' {
+				if depth == 0 {
+					return true
+				}
+				quote, previous = 0, c
+			}
+		case c == '#' && (i == 0 || isBlankByte(text[i-1])):
+			newline := strings.IndexByte(text[i:], '\n')
+			if newline < 0 {
+				return false
+			}
+			i += newline
+		case (c == '"' || c == '\'') && strings.IndexByte("\x00[{,:", previous) >= 0:
+			quote = c
+		default:
+			if c == '[' || c == '{' {
+				depth++
+			}
+			if c == ']' || c == '}' {
+				depth--
+				if depth == 0 {
+					return true
+				}
+			}
+			if !isBlankByte(c) {
+				previous = c
+			}
+		}
+	}
+	return false
 }

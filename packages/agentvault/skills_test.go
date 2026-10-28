@@ -84,6 +84,13 @@ func TestSkillHeaderNameSaysWhichLineIsNotYAML(t *testing.T) {
 		bom + "---\nname: s\nmetadata:\n  a: b\nsummary: one: two\n---\n":                                            "Line 5 of SKILL.md: the 'summary' value contains ': '. Put the value in double quotes.",
 		"---\nname: a\nb: c\n  d: e\n---\n":                                                                          "Line 4 of SKILL.md: the header is not valid YAML (mapping values are not allowed in this context).",
 		"---\r\nname: a\r\n\tbad: x\r\n---\r\n":                                                                      "Line 3 of SKILL.md: the header is not valid YAML (found a tab character that violates indentation).",
+		"---\nname: a\ndescription: d\nx: 1\nhint: [x\n---\n":                                                        "Line 5 of SKILL.md: the 'hint' value opens a '[' that never closes.",
+		"---\nname: a\ndescription: d\nx: 1\nhint: {x\n---\n":                                                        "Line 5 of SKILL.md: the 'hint' value opens a '{' that never closes.",
+		"---\nname: a\ndescription: d\nx: 1\nhint: \"x\n---\n":                                                       "Line 5 of SKILL.md: the 'hint' value opens a double quote that never closes.",
+		"---\nname: a\ndescription: d\nx: 1\nhint: 'x\n---\n":                                                        "Line 5 of SKILL.md: the 'hint' value opens a single quote that never closes.",
+		"---\nname: a\nlist: [a,\n  b]\nhint: {x\n---\n":                                                             "Line 5 of SKILL.md: the 'hint' value opens a '{' that never closes.",
+		"---\r\nname: a\r\ndescription: d\r\nx: 1\r\nhint: [x\r\n---\r\n":                                            "Line 5 of SKILL.md: the 'hint' value opens a '[' that never closes.",
+		bom + "---\nname: a\ndescription: d\nx: 1\nhint: [x\n---\n":                                                  "Line 5 of SKILL.md: the 'hint' value opens a '[' that never closes.",
 		"---\nname: x\nname: y\n---\n":                                                                               "Line 3 of SKILL.md: the header is not valid YAML (mapping key \"name\" already defined at line 2).",
 	} {
 		if _, err := SkillHeaderName([]byte(in)); err == nil || err.Error() != want {
