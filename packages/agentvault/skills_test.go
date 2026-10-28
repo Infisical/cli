@@ -115,4 +115,15 @@ func TestSkillHeaderNameSaysWhichLineIsNotYAML(t *testing.T) {
 			t.Errorf("%q: got %v, want a YAML error that doesn't blame a ': ' value", in, err)
 		}
 	}
+	for _, in := range []string{
+		"---\ndescription: \"first\nsecond\"\nname: a\nname: b\n---\n",
+		"---\nhint: [a,\n# note\n  b]\nname: a\nname: b\n---\n",
+	} {
+		if _, err := SkillHeaderName([]byte(in)); err == nil || strings.Contains(err.Error(), "never closes") {
+			t.Errorf("%q: got %v, want the duplicate key error, not a valid value blamed", in, err)
+		}
+	}
+	if _, err := SkillHeaderName([]byte("---\nname: \"oops\ndescription: y\n---\n")); err == nil || err.Error() != "Line 2 of SKILL.md: the 'name' value opens a double quote that never closes." {
+		t.Errorf("unclosed quote before the next key: got %v", err)
+	}
 }

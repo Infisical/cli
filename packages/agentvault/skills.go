@@ -146,8 +146,18 @@ func skillHeaderYAMLError(headerLines []string, err error) error {
 
 func isBlankByte(c byte) bool { return c == ' ' || c == '\t' || c == '\n' }
 
-// findUnclosedValue finds a flow or quoted value that never closes. Such a value may continue on indented lines, so
-// its whole block is scanned first. It mirrors findUnclosedValue in Infisical's agent-vault-skill-fns.ts.
+// startsTopLevelKey reports whether line begins a new top-level key. A quoted or flow value may continue on lines
+// that start at column zero, and comments may sit between its lines, so only the next key ends it.
+func startsTopLevelKey(line string) bool {
+	if line == "" || strings.ContainsAny(line[:1], " \t#-") {
+		return false
+	}
+	colon := strings.IndexByte(line, ':')
+	return colon > 0 && (colon == len(line)-1 || line[colon+1] == ' ' || line[colon+1] == '\t')
+}
+
+// findUnclosedValue finds a flow or quoted value that never closes. Its whole block, up to the next top-level key,
+// is scanned first. It mirrors findUnclosedValue in Infisical's agent-vault-skill-fns.ts.
 func findUnclosedValue(headerLines []string) (line int, key string, opener byte, found bool) {
 	for i, raw := range headerLines {
 		k, value, ok := strings.Cut(strings.TrimRight(raw, "\r"), ": ")
@@ -161,7 +171,7 @@ func findUnclosedValue(headerLines []string) (line int, key string, opener byte,
 		block := []string{value}
 		for _, next := range headerLines[i+1:] {
 			next = strings.TrimRight(next, "\r")
-			if next != "" && !isBlankByte(next[0]) {
+			if startsTopLevelKey(next) {
 				break
 			}
 			block = append(block, next)
