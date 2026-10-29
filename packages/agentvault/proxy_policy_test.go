@@ -56,6 +56,16 @@ func newPolicyFixture(t *testing.T, build func(host string) *resolvedService) (*
 	}
 	host := "127.0.0.1:" + upstreamURL.Port()
 
+	_, client := newTLSProxy(t, upstream, fixedResolver{services: []*resolvedService{build(host)}})
+	return client, host
+}
+
+// The proxy in front of a TLS upstream, and a client that goes through it: the proxy trusts the upstream's
+// certificate and the client trusts the proxy's CA. The proxy is returned so a test can set it up further
+// before its first request.
+func newTLSProxy(t *testing.T, upstream *httptest.Server, resolver sessionResolver) (*proxyServer, *http.Client) {
+	t.Helper()
+
 	upstreamPool := x509.NewCertPool()
 	upstreamPool.AddCert(upstream.Certificate())
 
@@ -69,7 +79,7 @@ func newPolicyFixture(t *testing.T, build func(host string) *resolvedService) (*
 
 	ps := &proxyServer{transport: transport, ca: newCaManager(key, cert)}
 	ps.setConfig(ProxyConfig{TrafficPolicy: TrafficPolicyAnyHost})
-	ps.cache = newSessionCache(fixedResolver{services: []*resolvedService{build(host)}}, ps.pollInterval)
+	ps.cache = newSessionCache(resolver, ps.pollInterval)
 
 	front := httptest.NewServer(http.HandlerFunc(ps.dispatch))
 	t.Cleanup(front.Close)
@@ -85,7 +95,7 @@ func newPolicyFixture(t *testing.T, build func(host string) *resolvedService) (*
 			TLSClientConfig: &tls.Config{RootCAs: clientPool},
 		},
 	}
-	return client, host
+	return ps, client
 }
 
 func policyService(host string, methods, prefixes []string, customHeaders []customHeader, subs []substitution) *resolvedService {

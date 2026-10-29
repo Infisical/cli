@@ -439,3 +439,49 @@ func TestDecideAgentVaultSessionTieErrorNamesBothVariables(t *testing.T) {
 		}
 	}
 }
+
+func labelCmd(t *testing.T, args ...string) *cobra.Command {
+	t.Helper()
+	cmd := &cobra.Command{Use: "run", Run: func(*cobra.Command, []string) {}}
+	cmd.Flags().String("label", "", "")
+	if err := cmd.Flags().Parse(args); err != nil {
+		t.Fatal(err)
+	}
+	return cmd
+}
+
+func TestResolveAgentVaultSessionLabelTrimsTheFlag(t *testing.T) {
+	label, err := resolveAgentVaultSessionLabel(labelCmd(t, "--label", "  nightly deploy  "), "", agentVaultSourceNone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if label != "nightly deploy" {
+		t.Errorf("label = %q, want %q", label, "nightly deploy")
+	}
+}
+
+func TestResolveAgentVaultSessionLabelWithoutTheFlagIsEmpty(t *testing.T) {
+	// An empty label is what keeps the key out of the request body.
+	label, err := resolveAgentVaultSessionLabel(labelCmd(t), "agv_token", agentVaultSourceFlag)
+	if err != nil || label != "" {
+		t.Errorf("label, err = %q, %v; want empty and no error", label, err)
+	}
+}
+
+func TestResolveAgentVaultSessionLabelRefusesASessionToken(t *testing.T) {
+	for _, tc := range []struct {
+		source agentVaultSource
+		names  string
+	}{
+		{agentVaultSourceFlag, "--session-token"},
+		{agentVaultSourceEnv, agentVaultSessionTokenEnv},
+	} {
+		_, err := resolveAgentVaultSessionLabel(labelCmd(t, "--label", "nightly deploy"), "agv_token", tc.source)
+		if err == nil {
+			t.Fatalf("token from %s: want an error", tc.names)
+		}
+		if !strings.Contains(err.Error(), tc.names) || !strings.Contains(err.Error(), "--label") {
+			t.Errorf("the message should name --label and %q, got %q", tc.names, err)
+		}
+	}
+}

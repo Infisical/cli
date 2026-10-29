@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/denisbrodbeck/machineid"
@@ -35,49 +36,88 @@ func (NoOpLogger) Errorf(format string, args ...interface{}) {
 }
 
 func NewTelemetry(telemetryIsEnabled bool) *Telemetry {
-	if POSTHOG_API_KEY_FOR_CLI != "" {
-		client, _ := posthog.NewWithConfig(
-			POSTHOG_API_KEY_FOR_CLI,
-			posthog.Config{
-				Logger: NoOpLogger{},
-			},
-		)
+	return newTelemetry(POSTHOG_API_KEY_FOR_CLI, "", telemetryIsEnabled)
+}
 
-		return &Telemetry{isEnabled: telemetryIsEnabled, posthogClient: client}
-	} else {
+// newTelemetry takes the endpoint so tests can point the client at a local server; empty means PostHog's.
+func newTelemetry(apiKey string, endpoint string, telemetryIsEnabled bool) *Telemetry {
+	if apiKey == "" {
 		return &Telemetry{isEnabled: false}
 	}
+
+	client, _ := posthog.NewWithConfig(
+		apiKey,
+		posthog.Config{
+			Endpoint: endpoint,
+			Logger:   NoOpLogger{},
+		},
+	)
+
+	return &Telemetry{isEnabled: telemetryIsEnabled, posthogClient: client}
+}
+
+// SetEnabled applies the opt-out once flags are parsed. A build without a PostHog key has no client, so it
+// stays disabled whatever is passed.
+func (t *Telemetry) SetEnabled(enabled bool) {
+	t.isEnabled = enabled && t.posthogClient != nil
+}
+
+func (t *Telemetry) IsEnabled() bool {
+	return t.isEnabled
+}
+
+// CaptureEventAsync sends the event without waiting on PostHog. It is for commands that go on to run something
+// long-lived, whose start would otherwise wait on an unreachable PostHog. The event is lost if the process exits
+// before the send completes.
+func (t *Telemetry) CaptureEventAsync(eventName string, properties posthog.Properties) {
+	// Everything that reads or writes the config file or this struct runs here, on the caller: these commands
+	// can exit at any moment, and an exit in the middle of a config write would leave the file truncated. The
+	// goroutine only talks to PostHog.
+	if !t.enqueue(eventName, properties) {
+		return
+	}
+	go t.posthogClient.Close()
 }
 
 func (t *Telemetry) CaptureEvent(eventName string, properties posthog.Properties) {
-	userIdentity, err := t.GetDistinctId()
-	if err != nil {
+	if !t.enqueue(eventName, properties) {
 		return
 	}
+	t.closeWithin(flushTimeout)
+}
 
-	if t.isEnabled {
-		// Lazily issue the PostHog Identify/Alias for the current logged-in
-		// user before capturing the event. This catches the case where the
-		// user logged in on an older CLI version that predates IdentifyUser
-		// (so their PostHog person record was never enriched with `email`),
-		// as well as profile switches via `infisical user switch`. The call
-		// is idempotent and persists its state in the local config file.
-		t.IdentifyUserIfNeeded()
-
-		capture := posthog.Capture{
-			DistinctId: userIdentity,
-			Event:      eventName,
-			Properties: properties,
-		}
-
-		if orgId := t.resolveOrganizationId(); orgId != "" {
-			capture.Groups = posthog.NewGroups().Set("organization", orgId)
-		}
-
-		t.posthogClient.Enqueue(capture)
-
-		defer t.posthogClient.Close()
+// enqueue does everything but the send, and reports whether an event was queued.
+func (t *Telemetry) enqueue(eventName string, properties posthog.Properties) bool {
+	// Checked first, so a run that opted out never reads the machine ID or the config file.
+	if !t.isEnabled {
+		return false
 	}
+
+	userIdentity, err := t.GetDistinctId()
+	if err != nil {
+		return false
+	}
+
+	// Lazily issue the PostHog Identify/Alias for the current logged-in
+	// user before capturing the event. This catches the case where the
+	// user logged in on an older CLI version that predates IdentifyUser
+	// (so their PostHog person record was never enriched with `email`),
+	// as well as profile switches via `infisical user switch`. The call
+	// is idempotent and persists its state in the local config file.
+	t.IdentifyUserIfNeeded()
+
+	capture := posthog.Capture{
+		DistinctId: userIdentity,
+		Event:      eventName,
+		Properties: properties,
+	}
+
+	if orgId := t.resolveOrganizationId(); orgId != "" {
+		capture.Groups = posthog.NewGroups().Set("organization", orgId)
+	}
+
+	t.posthogClient.Enqueue(capture)
+	return true
 }
 
 // SetActor records who the command is acting as, for commands that resolve their
@@ -289,4 +329,24 @@ func (t *Telemetry) GetDistinctId() (string, error) {
 	}
 
 	return distinctId, nil
+}
+
+// flushTimeout caps how long a command waits for PostHog before giving up on the event. Without it, an
+// unreachable PostHog holds the command for the client's full 10s timeout.
+var flushTimeout = 3 * time.Second
+
+// closeWithin sends what is queued and waits at most timeout for it. On timeout the send carries on in the
+// background until the process exits.
+func (t *Telemetry) closeWithin(timeout time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		t.posthogClient.Close()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		log.Debug().Msgf("telemetry: PostHog did not respond within %s, continuing", timeout)
+	}
 }

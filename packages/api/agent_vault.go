@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"net/url"
 
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/go-resty/resty/v2"
@@ -79,6 +80,8 @@ type AgentVaultCredential struct {
 	Value        string `json:"value,omitempty"`
 	Username     string `json:"username,omitempty"`
 	Password     string `json:"password,omitempty"`
+	// "oauth" marks a token Infisical can refresh; every other credential leaves it empty.
+	Source string `json:"source,omitempty"`
 }
 
 type AgentVaultCustomHeader struct {
@@ -96,6 +99,7 @@ type AgentVaultSubstitution struct {
 type AgentVaultService struct {
 	ID               string `json:"id"`
 	Name             string `json:"name"`
+	Type             string `json:"type"`
 	AccessBundleName string `json:"accessBundleName"`
 	HostPattern      string `json:"hostPattern"`
 	// A nil slice means unrestricted, which is what JSON null decodes to.
@@ -144,6 +148,64 @@ func CallResolveAgentVaultSession(httpClient *resty.Client, sessionToken string,
 	return res, nil
 }
 
+// The proxy calls these while an agent's request waits, and keeps a failed refresh's error for a few seconds,
+// so neither may buffer an unbounded body. A credential answer is a few kilobytes at most.
+const agentVaultCredentialResponseLimit = 64 << 10
+
+type RefreshAgentVaultServiceCredentialRequest struct {
+	HostPattern       string `json:"hostPattern"`
+	RejectedTokenHash string `json:"rejectedTokenHash"`
+}
+
+type RefreshAgentVaultServiceCredentialResponse struct {
+	Credential AgentVaultCredential `json:"credential"`
+	Status     string               `json:"status"`
+}
+
+func CallRefreshAgentVaultServiceCredential(httpClient *resty.Client, sessionToken, serviceID string, request RefreshAgentVaultServiceCredentialRequest) (RefreshAgentVaultServiceCredentialResponse, error) {
+	var res RefreshAgentVaultServiceCredentialResponse
+	response, err := httpClient.
+		R().
+		SetResponseBodyLimit(agentVaultCredentialResponseLimit).
+		SetResult(&res).
+		SetHeader("User-Agent", USER_AGENT).
+		SetHeader(AgentVaultSessionHeader, sessionToken).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/agent-vault/proxy/services/%s/credential-refresh", config.INFISICAL_URL, url.PathEscape(serviceID)))
+
+	if err != nil {
+		return RefreshAgentVaultServiceCredentialResponse{}, NewGenericRequestError("CallRefreshAgentVaultServiceCredential", err)
+	}
+	if response.IsError() {
+		return RefreshAgentVaultServiceCredentialResponse{}, NewAPIErrorWithResponse("CallRefreshAgentVaultServiceCredential", response, nil)
+	}
+	return res, nil
+}
+
+type ReportAgentVaultServiceMissingScopesRequest struct {
+	HostPattern       string   `json:"hostPattern"`
+	RejectedTokenHash string   `json:"rejectedTokenHash"`
+	RequiredScopes    []string `json:"requiredScopes"`
+}
+
+func CallReportAgentVaultServiceMissingScopes(httpClient *resty.Client, sessionToken, serviceID string, request ReportAgentVaultServiceMissingScopesRequest) error {
+	response, err := httpClient.
+		R().
+		SetResponseBodyLimit(agentVaultCredentialResponseLimit).
+		SetHeader("User-Agent", USER_AGENT).
+		SetHeader(AgentVaultSessionHeader, sessionToken).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/agent-vault/proxy/services/%s/missing-scopes", config.INFISICAL_URL, url.PathEscape(serviceID)))
+
+	if err != nil {
+		return NewGenericRequestError("CallReportAgentVaultServiceMissingScopes", err)
+	}
+	if response.IsError() {
+		return NewAPIErrorWithResponse("CallReportAgentVaultServiceMissingScopes", response, nil)
+	}
+	return nil
+}
+
 type CreateAgentVaultSessionLogChunkRequest struct {
 	ChunkID          string `json:"chunkId"`
 	EndedAt          string `json:"endedAt"`
@@ -179,6 +241,7 @@ func CallCreateAgentVaultSessionLogChunk(ctx context.Context, httpClient *resty.
 type CreateAgentVaultSessionRequest struct {
 	AccessBundles []string `json:"accessBundles"`
 	TTL           string   `json:"ttl"`
+	Label         string   `json:"label,omitempty"`
 }
 
 type AgentVaultSession struct {

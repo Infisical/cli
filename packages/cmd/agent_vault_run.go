@@ -228,6 +228,18 @@ func agentVaultSourceName(source agentVaultSource, flagName, envName string) str
 	return flagName
 }
 
+// resolveAgentVaultSessionLabel returns the label to send when this command mints a session. A session token names
+// a session created in the dashboard, whose label is edited there, so --label alongside one is refused.
+func resolveAgentVaultSessionLabel(cmd *cobra.Command, sessionToken string, tokenSource agentVaultSource) (string, error) {
+	if sessionToken != "" && cmd.Flags().Changed("label") {
+		return "", fmt.Errorf(
+			"--label applies to a session this command mints; label the one behind %s in the dashboard. Drop --label, or mint here with --access-bundle",
+			agentVaultSourceName(tokenSource, "--session-token", agentVaultSessionTokenEnv))
+	}
+	label, _ := cmd.Flags().GetString("label")
+	return strings.TrimSpace(label), nil
+}
+
 func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	sessionToken, tokenSource, err := resolveAgentVaultSessionToken(cmd)
 	if err != nil {
@@ -266,6 +278,10 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	}
 
 	ttl, _ := cmd.Flags().GetString("ttl")
+	label, err := resolveAgentVaultSessionLabel(cmd, sessionToken, tokenSource)
+	if err != nil {
+		util.HandleError(err)
+	}
 
 	// Neither flag can reach a session minted in the dashboard: its expiry was fixed when it was created.
 	if sessionToken != "" {
@@ -378,7 +394,7 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		}
 		httpClient.SetAuthToken(identity)
 
-		created, mintErr := api.CallCreateAgentVaultSession(httpClient, api.CreateAgentVaultSessionRequest{AccessBundles: accessBundles, TTL: ttl})
+		created, mintErr := api.CallCreateAgentVaultSession(httpClient, api.CreateAgentVaultSessionRequest{AccessBundles: accessBundles, TTL: ttl, Label: label})
 		if mintErr != nil {
 			util.HandleError(mintErr, "Unable to mint an Agent Vault session")
 		}
@@ -388,7 +404,7 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		Telemetry.SetActor(telemetry.IdentityClaimsFromToken(identity))
 	}
 
-	Telemetry.CaptureEvent("cli-command:agent-vault run", posthog.NewProperties().
+	Telemetry.CaptureEventAsync("cli-command:agent-vault run", posthog.NewProperties().
 		Set("version", util.CLI_VERSION).
 		Set("agent", telemetryAgentName(args)).
 		Set("platform", runtime.GOOS).
@@ -662,6 +678,7 @@ func init() {
 	agentVaultRunCmd.Flags().String("session-token", "", "run with a session token minted in the dashboard instead of minting one (falls back to "+agentVaultSessionTokenEnv+")")
 	agentVaultRunCmd.Flags().String("ttl", "never", "lifetime of the session this command creates: one number and one unit, such as 30m, 8h or 7d (not 2h30m), or never")
 	agentVaultRunCmd.Flags().Bool("keep-session", false, "leave a minted session active when the agent exits")
+	agentVaultRunCmd.Flags().String("label", "", "describe what the session this command creates is for (up to 128 characters)")
 	agentVaultRunCmd.Flags().String("proxy", "", "address of the Agent Vault proxy as host:port (falls back to "+agentVaultProxyAddressEnv+")")
 	agentVaultRunCmd.Flags().String("ca-fingerprint", "", "abort unless the proxy's certificate authority matches this SHA256 fingerprint from Infisical")
 	agentVaultRunCmd.Flags().String("no-proxy", "", "additional comma-separated hosts to bypass the proxy (always merged with localhost,127.0.0.1)")
