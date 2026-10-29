@@ -123,7 +123,7 @@ neither flag is passed, the run stops and asks which you meant.
 The proxy's certificate authority is fetched from the proxy on every run and trusted for the agent. Pass
 --ca-fingerprint to abort if the served certificate does not match the proxy's fingerprint from Infisical.
 
-The skills attached to the session's access bundles are installed when the agent starts, into
+The skills in the session's access bundle are installed when the agent starts, into
 ~/.agents/skills, where Codex, OpenCode and OpenClaw find them. If ~/.claude (or $CLAUDE_CONFIG_DIR) or
 ~/.hermes (or $HERMES_HOME) exists, each skill is also linked into its skills folder for Claude Code or
 Hermes, and for Claude Code whenever the agent is claude. Pass --skills-dir to install them into another
