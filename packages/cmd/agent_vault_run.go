@@ -446,7 +446,7 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 
 	if exitCode, interrupted := runAgentVaultRunSkillsStep(noSkills,
 		func(ctx context.Context) {
-			skillsHTTPClient, clientErr := util.GetRestyClientWithCustomHeaders()
+			skillsHTTPClient, clientErr := newAgentVaultSkillsHTTPClient()
 			if clientErr != nil {
 				util.PrintWarning(fmt.Sprintf("Starting without skills: %v.", clientErr))
 				return

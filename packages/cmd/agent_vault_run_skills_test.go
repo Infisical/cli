@@ -474,8 +474,53 @@ func TestASkillsStepThatTimesOutStillStartsTheAgent(t *testing.T) {
 	if interrupted {
 		t.Fatal("a timeout was taken for an interrupt")
 	}
-	if want := "Starting without skills: Infisical did not send them within 100ms."; !strings.Contains(warnings.String(), want) {
+	if want := "Starting without skills: Infisical did not send them within 100ms. Pass --no-skills if this host can't reach Infisical."; !strings.Contains(warnings.String(), want) {
 		t.Fatalf("warned %q, want %q", warnings.String(), want)
+	}
+}
+
+func TestAnUnreachableInfisicalNamesTheFlag(t *testing.T) {
+	isolateSkillsHome(t)
+	warnings := captureWarnings(t)
+	useInfisicalURL(t, "http://127.0.0.1:1/api")
+	client := &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok"}
+
+	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{})
+	got := strings.TrimSpace(warnings.String())
+	if !strings.Contains(got, "Starting without skills: CallListAgentVaultSessionSkills: ") || !strings.HasSuffix(got, ". Pass --no-skills if this host can't reach Infisical.") {
+		t.Fatalf("warned %q", got)
+	}
+}
+
+func TestAnInfisicalErrorDoesNotNameTheFlag(t *testing.T) {
+	isolateSkillsHome(t)
+	warnings := captureWarnings(t)
+	installAgentVaultRunSkills(context.Background(), fakeSessionSkills(t, http.StatusInternalServerError, map[string]any{"message": "boom"}), agentvault.InstallOptions{})
+	if got := strings.TrimSpace(warnings.String()); !strings.HasSuffix(got, "Starting without skills: Infisical answered 500: boom.") {
+		t.Fatalf("warned %q", got)
+	}
+}
+
+func TestTheSkillsClientGivesUpOnAConnectionEarly(t *testing.T) {
+	old := agentVaultSkillsConnectTimeout
+	agentVaultSkillsConnectTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { agentVaultSkillsConnectTimeout = old })
+	t.Setenv(util.INFISICAL_RETRY_MAX_RETRIES_NAME, "0")
+	client, err := newAgentVaultSkillsHTTPClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	// A non-routable address, so the dial hangs until the connect timeout unless the network refuses it first.
+	_, err = client.R().SetContext(ctx).Get("http://10.255.255.1:81/")
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	if ctx.Err() != nil || time.Since(start) > 5*time.Second {
+		t.Fatalf("the connection was not given up early: %v after %s", err, time.Since(start))
 	}
 }
 

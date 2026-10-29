@@ -2,21 +2,38 @@ package agentvault
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/gofrs/flock"
 )
 
 const (
 	ClaudeCodeAgent = "Claude Code"
 	HermesAgent     = "Hermes"
 )
+
+// Every skill folder the CLI writes holds this file, and only a folder that holds it is ever replaced. Hidden,
+// so skills push and zip uploads leave it out.
+const SkillMarkerFile = ".infisical-agent-vault"
+
+type skillMarker struct {
+	SkillID string `json:"skillId"`
+	Sha256  string `json:"sha256"`
+}
+
+// A variable so tests keep their locks out of the real data directory.
+var skillsLockDir = DefaultDataDir
 
 type InstallOptions struct {
 	// Dir replaces ~/.agents/skills, and no agent folder is linked to it.
@@ -46,9 +63,9 @@ type linkTarget struct {
 	dir   string
 }
 
-// InstallSkills writes each skill as a real folder under the install directory, replacing whatever has that
-// name, and links it into the skills folder of every agent found on this machine. Skills stay after the run.
-// Every skill ctx leaves unwritten is named, so the failures account for all of them.
+// InstallSkills writes each skill as a real folder under the install directory, replacing only a folder it
+// wrote before, and links it into the skills folder of every agent found on this machine. Skills stay after
+// the run. Every skill ctx leaves unwritten is named, so the failures account for all of them.
 func InstallSkills(ctx context.Context, skills []api.AgentVaultSessionSkill, opts InstallOptions) (InstallResult, error) {
 	var result InstallResult
 	dir := opts.Dir
@@ -67,6 +84,11 @@ func InstallSkills(ctx context.Context, skills []api.AgentVaultSessionSkill, opt
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return result, fmt.Errorf("failed to create %s: %w", dir, err)
 	}
+	unlock, err := lockSkillsDir(ctx, dir)
+	if err != nil {
+		return result, err
+	}
+	defer unlock()
 
 	var targets []linkTarget
 	if opts.Dir == "" {
@@ -91,13 +113,13 @@ func InstallSkills(ctx context.Context, skills []api.AgentVaultSessionSkill, opt
 			result.Failed = append(result.Failed, fmt.Sprintf("%s (its files do not match their checksum)", skill.Name))
 			continue
 		}
-		if err := installSkillFolder(dir, skill.Name, skill.Files); err != nil {
+		if err := installSkillFolder(dir, skill); err != nil {
 			result.Failed = append(result.Failed, fmt.Sprintf("%s (%v)", skill.Name, err))
 			continue
 		}
 		result.Installed++
 		for _, target := range targets {
-			if err := linkSkill(symlink, skill.Name, filepath.Join(dir, skill.Name), target.dir, skill.Files); err != nil {
+			if err := linkSkill(symlink, dir, target.dir, skill); err != nil {
 				result.LinkFailed = append(result.LinkFailed, fmt.Sprintf("%s for %s (%v)", skill.Name, target.agent, err))
 				continue
 			}
@@ -160,15 +182,52 @@ func (r *InstallResult) prepareLinks(canonical string, forceClaude bool) []linkT
 	return targets
 }
 
-func installSkillFolder(dir, name string, files []api.AgentVaultSkillFile) error {
-	if !validSkillFolderName(name) {
-		return fmt.Errorf("the name %q cannot be used as a folder name", name)
+// lockSkillsDir keeps two runs from writing one install directory at once. The lock lives in the data
+// directory, not beside the skills, so nothing extra appears in a folder agents read. A ctx that ends first
+// returns a no-op unlock, and the caller's ctx check names what was left unwritten.
+func lockSkillsDir(ctx context.Context, dir string) (func(), error) {
+	lockDir, err := skillsLockDir()
+	if err != nil {
+		return nil, err
 	}
-	dest := filepath.Join(dir, name)
+	if err := os.MkdirAll(lockDir, 0o700); err != nil {
+		return nil, fmt.Errorf("failed to create %s: %w", lockDir, err)
+	}
+	key := dir
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		key = resolved
+	}
+	sum := sha256.Sum256([]byte(key))
+	fl := flock.New(filepath.Join(lockDir, "skills-"+hex.EncodeToString(sum[:8])+".lock"))
+	locked, err := fl.TryLockContext(ctx, 50*time.Millisecond)
+	switch {
+	case locked:
+		return func() { _ = fl.Unlock() }, nil
+	case ctx.Err() != nil:
+		_ = fl.Close()
+		return func() {}, nil
+	default:
+		_ = fl.Close()
+		return nil, fmt.Errorf("failed to lock %s: %w", dir, err)
+	}
+}
+
+func installSkillFolder(dir string, skill api.AgentVaultSessionSkill) error {
+	if !validSkillFolderName(skill.Name) {
+		return fmt.Errorf("the name %q cannot be used as a folder name", skill.Name)
+	}
+	dest := filepath.Join(dir, skill.Name)
+	owned, err := ownedSkillEntry(dir, skill.Name)
+	if err != nil {
+		return err
+	}
+	if owned && skillFolderIsCurrent(dest, skill.Sha256) {
+		return nil
+	}
 	if err := os.RemoveAll(dest); err != nil {
 		return fmt.Errorf("failed to replace %s: %w", dest, err)
 	}
-	if err := writeSkillFiles(dest, files); err != nil {
+	if err := writeSkillFolder(dest, skill); err != nil {
 		_ = os.RemoveAll(dest)
 		return err
 	}
@@ -176,11 +235,32 @@ func installSkillFolder(dir, name string, files []api.AgentVaultSkillFile) error
 }
 
 // Where links are not allowed, such as Windows without developer mode, the agent gets a copy instead. Only a
-// link or an earlier copy of this skill is replaced; anything else in the agent's folder is the user's.
-func linkSkill(symlink func(oldname, newname string) error, name, src, agentSkillsDir string, files []api.AgentVaultSkillFile) error {
-	dest := filepath.Join(agentSkillsDir, name)
-	if err := replaceableLinkDest(agentSkillsDir, name); err != nil {
-		return err
+// link into the install directory or a folder the CLI wrote is replaced; anything else is the user's.
+func linkSkill(symlink func(oldname, newname string) error, installDir, agentSkillsDir string, skill api.AgentVaultSessionSkill) error {
+	src := filepath.Join(installDir, skill.Name)
+	dest := filepath.Join(agentSkillsDir, skill.Name)
+	info, err := os.Lstat(dest)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
+		return fmt.Errorf("failed to read %s: %w", dest, err)
+	case info.Mode()&os.ModeSymlink != 0:
+		target, readErr := os.Readlink(dest)
+		if readErr != nil {
+			return fmt.Errorf("failed to read %s: %w", dest, readErr)
+		}
+		if target == src {
+			return nil
+		}
+		if !linksIntoDir(agentSkillsDir, target, installDir) {
+			return notInstalledByInfisical(agentSkillsDir, skill.Name, info)
+		}
+	case info.IsDir() && hasSkillMarker(dest):
+		if skillFolderIsCurrent(dest, skill.Sha256) {
+			return nil
+		}
+	default:
+		return notInstalledByInfisical(agentSkillsDir, skill.Name, info)
 	}
 	if err := os.RemoveAll(dest); err != nil {
 		return fmt.Errorf("failed to replace %s: %w", dest, err)
@@ -189,36 +269,71 @@ func linkSkill(symlink func(oldname, newname string) error, name, src, agentSkil
 		return nil
 	}
 	_ = os.RemoveAll(dest)
-	if err := writeSkillFiles(dest, files); err != nil {
+	if err := writeSkillFolder(dest, skill); err != nil {
 		_ = os.RemoveAll(dest)
 		return err
 	}
 	return nil
 }
 
-// On a case-insensitive file system dest can already exist under another spelling, so the message names the
-// entry as it is on disk.
-func replaceableLinkDest(agentSkillsDir, name string) error {
-	dest := filepath.Join(agentSkillsDir, name)
+// ownedSkillEntry reports whether name exists in dir as a folder the CLI wrote. A missing entry is free to
+// write, and anything else there is refused.
+func ownedSkillEntry(dir, name string) (bool, error) {
+	dest := filepath.Join(dir, name)
 	info, err := os.Lstat(dest)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return false, nil
 	}
 	if err != nil {
-		return fmt.Errorf("failed to read %s: %w", dest, err)
+		return false, fmt.Errorf("failed to read %s: %w", dest, err)
 	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return nil
+	if info.IsDir() && hasSkillMarker(dest) {
+		return true, nil
 	}
-	if info.IsDir() {
-		if skillMd, readErr := os.ReadFile(filepath.Join(dest, "SKILL.md")); readErr == nil {
-			if headerName, nameErr := SkillHeaderName(skillMd); nameErr == nil && headerName == name {
-				return nil
-			}
-		}
+	return false, notInstalledByInfisical(dir, name, info)
+}
+
+func linksIntoDir(linkDir, target, dir string) bool {
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(linkDir, target)
 	}
+	parent := filepath.Dir(filepath.Clean(target))
+	if parent == dir {
+		return true
+	}
+	parentInfo, err := os.Stat(parent)
+	if err != nil {
+		return false
+	}
+	dirInfo, err := os.Stat(dir)
+	return err == nil && os.SameFile(parentInfo, dirInfo)
+}
+
+func hasSkillMarker(folder string) bool {
+	info, err := os.Lstat(filepath.Join(folder, SkillMarkerFile))
+	return err == nil && info.Mode().IsRegular()
+}
+
+// A folder already holding this version is left alone, so an agent reading it is not disturbed. The marker's
+// checksum is only written once every file is, so a folder cut short is rewritten.
+func skillFolderIsCurrent(folder, sha256 string) bool {
+	data, err := os.ReadFile(filepath.Join(folder, SkillMarkerFile))
+	if err != nil {
+		return false
+	}
+	var marker skillMarker
+	if json.Unmarshal(data, &marker) != nil || marker.Sha256 == "" || marker.Sha256 != sha256 {
+		return false
+	}
+	info, err := os.Lstat(filepath.Join(folder, "SKILL.md"))
+	return err == nil && info.Mode().IsRegular()
+}
+
+// On a case-insensitive file system the entry can exist under another spelling, so the message names it as it
+// is on disk.
+func notInstalledByInfisical(dir, name string, info os.FileInfo) error {
 	onDisk := name
-	if entries, readErr := os.ReadDir(agentSkillsDir); readErr == nil {
+	if entries, readErr := os.ReadDir(dir); readErr == nil {
 		for _, entry := range entries {
 			if entry.Name() == name {
 				onDisk = name
@@ -229,11 +344,14 @@ func replaceableLinkDest(agentSkillsDir, name string) error {
 			}
 		}
 	}
-	kind := "folder"
-	if !info.IsDir() {
-		kind = "file"
+	kind := "file"
+	switch {
+	case info.Mode()&os.ModeSymlink != 0:
+		kind = "link"
+	case info.IsDir():
+		kind = "folder"
 	}
-	return fmt.Errorf("a %s named %s already exists", kind, onDisk)
+	return fmt.Errorf("a %s named %s already exists and wasn't installed by Infisical", kind, onDisk)
 }
 
 // Skill names become folder names, so anything that could step outside the install directory is refused.
@@ -242,10 +360,32 @@ func validSkillFolderName(name string) bool {
 		!strings.ContainsAny(name, `/\:`) && filepath.IsLocal(name)
 }
 
-func writeSkillFiles(root string, files []api.AgentVaultSkillFile) error {
+// The marker goes in first, so a folder cut short is still known as the CLI's and replaced on the next run.
+func writeSkillFolder(root string, skill api.AgentVaultSessionSkill) error {
 	if err := os.Mkdir(root, 0o755); err != nil {
 		return fmt.Errorf("failed to create %s: %w", root, err)
 	}
+	if err := writeSkillMarker(root, skillMarker{SkillID: skill.ID}); err != nil {
+		return err
+	}
+	if err := writeSkillFiles(root, skill.Files); err != nil {
+		return err
+	}
+	return writeSkillMarker(root, skillMarker{SkillID: skill.ID, Sha256: skill.Sha256})
+}
+
+func writeSkillMarker(root string, marker skillMarker) error {
+	data, err := json.Marshal(marker)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(root, SkillMarkerFile), data, 0o644); err != nil {
+		return fmt.Errorf("failed to write %s: %w", SkillMarkerFile, err)
+	}
+	return nil
+}
+
+func writeSkillFiles(root string, files []api.AgentVaultSkillFile) error {
 	for _, file := range files {
 		rel := filepath.FromSlash(file.Path)
 		if file.Path == "" || strings.Contains(file.Path, `\`) || !filepath.IsLocal(rel) || filepath.Clean(rel) == "." {

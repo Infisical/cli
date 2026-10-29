@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -17,8 +18,30 @@ import (
 	"github.com/go-resty/resty/v2"
 )
 
-// A variable so tests can shorten it.
-var agentVaultSkillsTimeout = 30 * time.Second
+// Variables so tests can shorten them.
+var (
+	agentVaultSkillsTimeout = 30 * time.Second
+	// A host that cannot reach Infisical gives up on each connection attempt here, while a slow but reachable
+	// Infisical still gets the whole step to send the files.
+	agentVaultSkillsConnectTimeout = 5 * time.Second
+)
+
+const agentVaultSkillsUnreachableHint = " Pass --no-skills if this host can't reach Infisical."
+
+func newAgentVaultSkillsHTTPClient() (*resty.Client, error) {
+	httpClient, err := util.GetRestyClientWithCustomHeaders()
+	if err != nil {
+		return nil, err
+	}
+	transport, err := httpClient.Transport()
+	if err != nil {
+		return nil, err
+	}
+	transport.DialContext = (&net.Dialer{Timeout: agentVaultSkillsConnectTimeout, KeepAlive: 30 * time.Second}).DialContext
+	// The client's own retries would wait out the connect timeout again for each attempt.
+	httpClient.SetRetryCount(0)
+	return httpClient, nil
+}
 
 // The waits before each retry of a list that answered 401 on a minted run.
 var agentVaultSkillsUnauthorizedRetryDelays = []time.Duration{500 * time.Millisecond, time.Second}
@@ -102,7 +125,7 @@ func installAgentVaultRunSkills(ctx context.Context, client agentVaultSkillsList
 	case errors.Is(ctx.Err(), context.Canceled):
 		return
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
-		util.PrintWarning(fmt.Sprintf("Starting without skills: Infisical did not send them within %s.", agentVaultSkillsTimeout))
+		util.PrintWarning(fmt.Sprintf("Starting without skills: Infisical did not send them within %s.%s", agentVaultSkillsTimeout, agentVaultSkillsUnreachableHint))
 		return
 	case isInfisicalRouteMissing(err):
 		util.PrintWarning(fmt.Sprintf("Starting without skills: %s doesn't provide them. Check --domain.", strings.TrimSuffix(config.INFISICAL_URL, "/api")))
@@ -111,7 +134,12 @@ func installAgentVaultRunSkills(ctx context.Context, client agentVaultSkillsList
 		util.PrintWarning(agentVaultSessionInvalidWarning(err))
 		return
 	case err != nil:
-		util.PrintWarning(fmt.Sprintf("Starting without skills: %s.", agentVaultSkillsFailureReason(err)))
+		warning := fmt.Sprintf("Starting without skills: %s.", agentVaultSkillsFailureReason(err))
+		var apiErr *api.APIError
+		if !errors.As(err, &apiErr) {
+			warning += agentVaultSkillsUnreachableHint
+		}
+		util.PrintWarning(warning)
 		return
 	case len(listed.Skills) == 0:
 		return

@@ -3,16 +3,38 @@ package agentvault
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
 )
+
+func TestMain(m *testing.M) {
+	locks, err := os.MkdirTemp("", "agentvault-skill-locks")
+	if err != nil {
+		panic(err)
+	}
+	skillsLockDir = func() (string, error) { return locks, nil }
+	code := m.Run()
+	_ = os.RemoveAll(locks)
+	os.Exit(code)
+}
+
+// markAsInstalled makes folder look like one an earlier run wrote.
+func markAsInstalled(t *testing.T, folder string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(folder, SkillMarkerFile), []byte(`{"skillId":"old","sha256":"old"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func skillFile(path, mode, content string) api.AgentVaultSkillFile {
 	return api.AgentVaultSkillFile{Path: path, Mode: mode, ContentBase64: base64.StdEncoding.EncodeToString([]byte(content))}
@@ -100,16 +122,17 @@ func TestInstallSkillsWritesToTheHomeFolder(t *testing.T) {
 	}
 }
 
-func TestInstallSkillsReplacesAnExistingFolder(t *testing.T) {
+func TestInstallSkillsReplacesAFolderItInstalled(t *testing.T) {
 	home := isolateHome(t)
 	dest := filepath.Join(home, ".agents", "skills", "code-review")
 	mkdir(t, filepath.Join(dest, "scripts"))
 	if err := os.WriteFile(filepath.Join(dest, "scripts", "stale.sh"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dest, "SKILL.md"), []byte("mine"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dest, "SKILL.md"), []byte("v1"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	markAsInstalled(t, dest)
 
 	install(t, InstallOptions{}, sessionSkill("code-review", skillFile("SKILL.md", "0644", "v2")))
 	if got := readFile(t, filepath.Join(dest, "SKILL.md")); got != "v2" {
@@ -170,6 +193,7 @@ func TestInstallSkillsReplacesAnEarlierCopyOfTheSkillInTheAgentFolder(t *testing
 	if err := os.WriteFile(filepath.Join(copied, "SKILL.md"), []byte("---\nname: code-review\n---\nold"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	markAsInstalled(t, copied)
 	result := install(t, InstallOptions{}, sessionSkill("code-review", skillFile("SKILL.md", "0644", "ours")))
 	assertLinked(t, copied, filepath.Join(home, ".agents", "skills", "code-review"))
 	if len(result.LinkFailed) != 0 {
@@ -177,11 +201,11 @@ func TestInstallSkillsReplacesAnEarlierCopyOfTheSkillInTheAgentFolder(t *testing
 	}
 }
 
-func TestInstallSkillsReplacesALinkInTheAgentFolder(t *testing.T) {
+func TestInstallSkillsReplacesALinkIntoTheInstallFolder(t *testing.T) {
 	home := isolateHome(t)
 	mkdir(t, filepath.Join(home, ".claude", "skills"))
 	link := filepath.Join(home, ".claude", "skills", "code-review")
-	if err := os.Symlink(t.TempDir(), link); err != nil {
+	if err := os.Symlink(filepath.Join(home, ".agents", "skills", "old-name"), link); err != nil {
 		t.Fatal(err)
 	}
 	result := install(t, InstallOptions{}, sessionSkill("code-review", skillFile("SKILL.md", "0644", "ours")))
@@ -191,11 +215,28 @@ func TestInstallSkillsReplacesALinkInTheAgentFolder(t *testing.T) {
 	}
 }
 
+func TestInstallSkillsKeepsTheUsersLinkInTheAgentFolder(t *testing.T) {
+	home := isolateHome(t)
+	mkdir(t, filepath.Join(home, ".claude", "skills"))
+	link := filepath.Join(home, ".claude", "skills", "code-review")
+	elsewhere := t.TempDir()
+	if err := os.Symlink(elsewhere, link); err != nil {
+		t.Fatal(err)
+	}
+	result := install(t, InstallOptions{}, sessionSkill("code-review", skillFile("SKILL.md", "0644", "ours")))
+	assertLinked(t, link, elsewhere)
+	want := []string{"code-review for Claude Code (a link named code-review already exists and wasn't installed by Infisical)"}
+	if result.Installed != 1 || !reflect.DeepEqual(result.LinkFailed, want) {
+		t.Fatalf("result %+v", result)
+	}
+}
+
 func TestInstallSkillsKeepsTheUsersFolderInTheAgentFolder(t *testing.T) {
 	for name, skillMd := range map[string]string{
 		"no SKILL.md":          "",
 		"no header":            "mine",
 		"another skill's name": "---\nname: my-review\n---\n",
+		"the same name":        "---\nname: code-review\n---\nmine",
 	} {
 		t.Run(name, func(t *testing.T) {
 			home := isolateHome(t)
@@ -214,7 +255,7 @@ func TestInstallSkillsKeepsTheUsersFolderInTheAgentFolder(t *testing.T) {
 			if skillMd != "" && readFile(t, filepath.Join(userSkill, "SKILL.md")) != skillMd {
 				t.Fatal("the user's SKILL.md was changed")
 			}
-			want := []string{"code-review for Claude Code (a folder named code-review already exists)"}
+			want := []string{"code-review for Claude Code (a folder named code-review already exists and wasn't installed by Infisical)"}
 			if result.Installed != 1 || !reflect.DeepEqual(result.LinkFailed, want) || len(result.Linked) != 0 {
 				t.Fatalf("result %+v", result)
 			}
@@ -233,7 +274,7 @@ func TestInstallSkillsNamesACaseVariantFolderAsItIsOnDisk(t *testing.T) {
 	if info, err := os.Lstat(filepath.Join(skillsDir, "Code-Review")); err != nil || !info.IsDir() {
 		t.Fatalf("the user's folder was replaced: %v", err)
 	}
-	want := []string{"code-review for Claude Code (a folder named Code-Review already exists)"}
+	want := []string{"code-review for Claude Code (a folder named Code-Review already exists and wasn't installed by Infisical)"}
 	if !reflect.DeepEqual(result.LinkFailed, want) {
 		t.Fatalf("link failures %q", result.LinkFailed)
 	}
@@ -426,7 +467,7 @@ func TestInstallSkillsNeverWritesThroughAnExistingFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(skill, "SKILL.md"), []byte("untouched"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeSkillFiles(skill, []api.AgentVaultSkillFile{skillFile("SKILL.md", "0644", "ours")}); err == nil {
+	if err := writeSkillFolder(skill, sessionSkill("skill", skillFile("SKILL.md", "0644", "ours"))); err == nil {
 		t.Fatal("a folder that already exists was written into")
 	}
 	if got := readFile(t, filepath.Join(skill, "SKILL.md")); got != "untouched" {
@@ -466,5 +507,194 @@ func TestInstallSkillsMasksModes(t *testing.T) {
 		if info.Mode() != want {
 			t.Fatalf("%s has mode %v, want %v", path, info.Mode(), want)
 		}
+	}
+}
+
+func TestInstallSkillsKeepsTheUsersFolderInTheInstallFolder(t *testing.T) {
+	home := isolateHome(t)
+	userSkill := filepath.Join(home, ".agents", "skills", "code-review")
+	mkdir(t, userSkill)
+	if err := os.WriteFile(filepath.Join(userSkill, "SKILL.md"), []byte("---\nname: code-review\n---\nmine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mkdir(t, filepath.Join(home, ".claude"))
+
+	result := install(t, InstallOptions{}, sessionSkill("code-review", skillFile("SKILL.md", "0644", "ours")))
+	if got := readFile(t, filepath.Join(userSkill, "SKILL.md")); got != "---\nname: code-review\n---\nmine" {
+		t.Fatalf("the user's SKILL.md was changed: %q", got)
+	}
+	want := []string{"code-review (a folder named code-review already exists and wasn't installed by Infisical)"}
+	if result.Installed != 0 || !reflect.DeepEqual(result.Failed, want) || len(result.Linked) != 0 {
+		t.Fatalf("result %+v", result)
+	}
+	if exists(filepath.Join(home, ".claude", "skills", "code-review")) {
+		t.Fatal("a skill that was not installed was linked")
+	}
+}
+
+func TestInstallSkillsIntoTheWorkingFolderKeepsItsFolders(t *testing.T) {
+	project := t.TempDir()
+	mkdir(t, filepath.Join(project, "src"))
+	if err := os.WriteFile(filepath.Join(project, "src", "main.go"), []byte("package main"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(project)
+
+	result := install(t, InstallOptions{Dir: "."}, sessionSkill("src", skillFile("SKILL.md", "0644", "ours")), sessionSkill("deploy", skillFile("SKILL.md", "0644", "d")))
+	if got := readFile(t, filepath.Join(project, "src", "main.go")); got != "package main" {
+		t.Fatalf("main.go %q", got)
+	}
+	if exists(filepath.Join(project, "src", "SKILL.md")) {
+		t.Fatal("the skill was written into the project's folder")
+	}
+	want := []string{"src (a folder named src already exists and wasn't installed by Infisical)"}
+	if result.Installed != 1 || !reflect.DeepEqual(result.Failed, want) {
+		t.Fatalf("result %+v", result)
+	}
+}
+
+func TestInstallSkillsMarksEveryFolderItWrites(t *testing.T) {
+	home := isolateHome(t)
+	mkdir(t, filepath.Join(home, ".claude"))
+	refuse := func(string, string) error { return errors.New("links are not allowed") }
+	skill := sessionSkill("code-review", skillFile("SKILL.md", "0644", "x"))
+	skill.ID = "skill-id"
+
+	install(t, InstallOptions{Symlink: refuse}, skill)
+	for _, folder := range []string{
+		filepath.Join(home, ".agents", "skills", "code-review"),
+		filepath.Join(home, ".claude", "skills", "code-review"),
+	} {
+		var marker skillMarker
+		if err := json.Unmarshal([]byte(readFile(t, filepath.Join(folder, SkillMarkerFile))), &marker); err != nil {
+			t.Fatal(err)
+		}
+		if marker != (skillMarker{SkillID: "skill-id", Sha256: skill.Sha256}) {
+			t.Fatalf("%s: marker %+v", folder, marker)
+		}
+	}
+}
+
+func TestInstallSkillsLeavesAnUnchangedSkillAlone(t *testing.T) {
+	home := isolateHome(t)
+	mkdir(t, filepath.Join(home, ".claude"))
+	refuse := func(string, string) error { return errors.New("links are not allowed") }
+	skill := sessionSkill("code-review", skillFile("SKILL.md", "0644", "x"))
+	install(t, InstallOptions{Symlink: refuse}, skill)
+
+	paths := []string{
+		filepath.Join(home, ".agents", "skills", "code-review", "SKILL.md"),
+		filepath.Join(home, ".claude", "skills", "code-review", "SKILL.md"),
+	}
+	before := make([]os.FileInfo, len(paths))
+	for i, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[i] = info
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	result := install(t, InstallOptions{Symlink: refuse}, skill)
+	if result.Installed != 1 || len(result.LinkFailed) != 0 {
+		t.Fatalf("result %+v", result)
+	}
+	for i, path := range paths {
+		after, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !os.SameFile(before[i], after) || !after.ModTime().Equal(before[i].ModTime()) {
+			t.Fatalf("%s was rewritten", path)
+		}
+	}
+
+	install(t, InstallOptions{Symlink: refuse}, sessionSkill("code-review", skillFile("SKILL.md", "0644", "y")))
+	for _, path := range paths {
+		if got := readFile(t, path); got != "y" {
+			t.Fatalf("%s: a changed skill was not rewritten: %q", path, got)
+		}
+	}
+}
+
+func TestInstallSkillsRewritesAFolderCutShort(t *testing.T) {
+	dir := t.TempDir()
+	skill := sessionSkill("code-review", skillFile("SKILL.md", "0644", "x"), skillFile("scripts/run.sh", "0755", "y"))
+	dest := filepath.Join(dir, "code-review")
+	mkdir(t, dest)
+	if err := os.WriteFile(filepath.Join(dest, SkillMarkerFile), []byte(`{"skillId":"","sha256":""}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dest, "SKILL.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if result := install(t, InstallOptions{Dir: dir}, skill); result.Installed != 1 {
+		t.Fatalf("result %+v", result)
+	}
+	if got := readFile(t, filepath.Join(dest, "scripts", "run.sh")); got != "y" {
+		t.Fatalf("run.sh %q", got)
+	}
+}
+
+func TestConcurrentInstallsLeaveEverySkillWhole(t *testing.T) {
+	home := isolateHome(t)
+	mkdir(t, filepath.Join(home, ".claude"))
+	versions := make([][]api.AgentVaultSessionSkill, 4)
+	for i := range versions {
+		for _, name := range []string{"code-review", "deploy"} {
+			files := []api.AgentVaultSkillFile{skillFile("SKILL.md", "0644", fmt.Sprintf("%s v%d", name, i))}
+			for f := 0; f < 20; f++ {
+				files = append(files, skillFile(fmt.Sprintf("refs/%d.md", f), "0644", fmt.Sprintf("v%d", i)))
+			}
+			versions[i] = append(versions[i], sessionSkill(name, files...))
+		}
+	}
+
+	var wg sync.WaitGroup
+	results := make([]InstallResult, len(versions)*3)
+	for i := range results {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			result, err := InstallSkills(context.Background(), versions[i%len(versions)], InstallOptions{})
+			if err != nil {
+				t.Error(err)
+			}
+			results[i] = result
+		}(i)
+	}
+	wg.Wait()
+
+	for i, result := range results {
+		if result.Installed != 2 || len(result.Failed) != 0 || len(result.LinkFailed) != 0 {
+			t.Fatalf("run %d: %+v", i, result)
+		}
+	}
+	for _, name := range []string{"code-review", "deploy"} {
+		folder := filepath.Join(home, ".agents", "skills", name)
+		var marker skillMarker
+		if err := json.Unmarshal([]byte(readFile(t, filepath.Join(folder, SkillMarkerFile))), &marker); err != nil {
+			t.Fatal(err)
+		}
+		var want *api.AgentVaultSessionSkill
+		for v := range versions {
+			for s := range versions[v] {
+				if versions[v][s].Name == name && versions[v][s].Sha256 == marker.Sha256 {
+					want = &versions[v][s]
+				}
+			}
+		}
+		if want == nil {
+			t.Fatalf("%s: the marker names no version that was installed", name)
+		}
+		for _, file := range want.Files {
+			content, _ := base64.StdEncoding.DecodeString(file.ContentBase64)
+			if got := readFile(t, filepath.Join(folder, filepath.FromSlash(file.Path))); got != string(content) {
+				t.Fatalf("%s/%s: %q, want %q", name, file.Path, got, content)
+			}
+		}
+		assertLinked(t, filepath.Join(home, ".claude", "skills", name), folder)
 	}
 }
