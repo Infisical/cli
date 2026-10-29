@@ -158,7 +158,7 @@ func servePkcs11Mux(module Pkcs11Module) *http.ServeMux {
 
 type pkcs11Handler func(module Pkcs11Module, env *pkcs11RequestEnvelope) (any, error)
 
-const maxPkcs11RequestBodyBytes = 256 * 1024
+const maxPkcs11RequestBodyBytes = 24 * 1024 * 1024
 
 func zeroBytes(b []byte) {
 	for i := range b {
@@ -275,7 +275,7 @@ type keyRefParams struct {
 const (
 	maxKeyLabelLen   = 256
 	maxKeyIDBytes    = 128
-	maxSignDataBytes = 64 * 1024
+	maxSignDataBytes = 16 * 1024 * 1024
 )
 
 func handleTest(module Pkcs11Module, env *pkcs11RequestEnvelope) (any, error) {

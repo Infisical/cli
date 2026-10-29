@@ -464,9 +464,7 @@ func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 		}
 		if g.pkcs11Module != nil {
 			capabilities[CapabilityPkcs11] = true
-			if g.pkcs11Module.SupportsMlDsa() {
-				capabilities[CapabilityPkcs11MlDsa] = true
-			}
+			capabilities[CapabilityPkcs11MlDsa] = g.pkcs11Module.SupportsMlDsa()
 		}
 		capabilities[CapabilitySupportedAccountTypes] = pam.GetSupportedResourceTypes()
 		capabilities[CapabilityClickhouseNativeProtocol] = true

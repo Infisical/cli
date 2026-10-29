@@ -98,13 +98,6 @@ func slotsSupportMlDsa(ctx *pkcs11.Ctx, slots []uint) bool {
 }
 
 func (m *pkcs11ModuleImpl) SupportsMlDsa() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if !m.supportsMlDsa && m.ctx != nil {
-		if slots, err := m.ctx.GetSlotList(true); err == nil {
-			m.supportsMlDsa = slotsSupportMlDsa(m.ctx, slots)
-		}
-	}
 	return m.supportsMlDsa
 }
 
