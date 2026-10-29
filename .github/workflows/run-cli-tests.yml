@@ -48,7 +48,7 @@ jobs:
           go test -race -count=1 -run 'Telemetry' ./packages/cmd/
           go test -race -count=1 -run 'TestLoginRenewalArgs' ./packages/util/
       - name: Check command compatibility and conventions
-        run: go test -count=1 -run 'TestCommandSurfaceIsBackwardsCompatible|TestCommandConventions|TestSm|TestSecretsManager|TestServiceTokenAnnotation|TestTopLevelCommandName|TestProjectsIsRegisteredOnlyUnderSm' ./packages/cmd/
+        run: go test -count=1 -run 'TestCommandSurface|TestCommandConventions|TestSm|TestSecretsManager|TestServiceTokenAnnotation|TestTopLevelCommandName|TestProjectsIsRegisteredOnlyUnderSm' ./packages/cmd/
       - name: Test with the Go CLI
         env:
           CLI_TESTS_UA_CLIENT_ID: ${{ secrets.CLI_TESTS_UA_CLIENT_ID }}
