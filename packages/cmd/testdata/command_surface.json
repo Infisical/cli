@@ -47,6 +47,31 @@
     "session-token": "|string|",
     "ttl": "|string|never"
   },
+  "infisical av": {},
+  "infisical av proxy": {
+    "ca-cert": "|string|",
+    "ca-key": "|string|",
+    "data-dir": "|string|",
+    "enrollment-token": "|string|",
+    "log-file": "|string|",
+    "log-format": "|string|console",
+    "port": "|int|17323",
+    "proxy-token": "|string|"
+  },
+  "infisical av run": {
+    "access-bundle": "|stringArray|[]",
+    "ca-file": "|string|",
+    "ca-fingerprint": "|string|",
+    "client-id": "|string|",
+    "client-secret": "|string|",
+    "keep-session": "|bool|false",
+    "label": "|string|",
+    "no-ca-trust": "|bool|false",
+    "no-proxy": "|string|",
+    "proxy": "|string|",
+    "session-token": "|string|",
+    "ttl": "|string|never"
+  },
   "infisical bootstrap": {
     "domain": "|string|",
     "email": "|string|",
@@ -619,6 +644,23 @@
     "template": "|string|",
     "token": "|string|"
   },
+  "infisical secrets-manager project": {},
+  "infisical secrets-manager project create": {
+    "description": "|string|",
+    "name": "|string|",
+    "output": "o|string|",
+    "slug": "|string|",
+    "token": "|string|"
+  },
+  "infisical secrets-manager project get": {
+    "output": "o|string|",
+    "projectId": "|string|",
+    "token": "|string|"
+  },
+  "infisical secrets-manager project list": {
+    "output": "o|string|",
+    "token": "|string|"
+  },
   "infisical secrets-manager projects": {},
   "infisical secrets-manager projects create": {
     "description": "|string|",
@@ -888,6 +930,23 @@
     "secret-overriding": "|bool|true",
     "tags": "t|string|",
     "template": "|string|",
+    "token": "|string|"
+  },
+  "infisical sm project": {},
+  "infisical sm project create": {
+    "description": "|string|",
+    "name": "|string|",
+    "output": "o|string|",
+    "slug": "|string|",
+    "token": "|string|"
+  },
+  "infisical sm project get": {
+    "output": "o|string|",
+    "projectId": "|string|",
+    "token": "|string|"
+  },
+  "infisical sm project list": {
+    "output": "o|string|",
     "token": "|string|"
   },
   "infisical sm projects": {},
