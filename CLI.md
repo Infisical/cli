@@ -57,7 +57,7 @@ With `-o json`, the same error is JSON on stderr:
 
 ### How to return one
 
-- Return a `*util.CLIError` (`packages/util/cli_error.go`) from one of the constructors in `packages/cmd/secrets_manager_errors.go`, and print it to stderr with `util.WriteCLIError`, passing `errorOutputFormat(cmd)` so `-o json` and `-o yaml` get structured output. Then exit `1`.
+- Return a `*util.CLIError` (`packages/util/cli_error.go`) from one of the constructors in `packages/cmd/secrets_manager_errors.go`, and print it with `exitWithError(cmd, err)`. That function picks text, JSON, or YAML from `-o`, and exits `1`.
 - Pass API errors through `classifyAPIError(err, notFound)`. It uses only what is stable: the status code, the error names the backend guarantees (`TokenError`, `PermissionDenied`), and, for a 404, the `notFound` error the caller passes when the request had one subject (an environment by slug, a project by ID). It never reads the message text, which the backend can reword at any time. Any other error comes back unchanged and prints as it always did, including the backend's own message.
 - A backend error that can only be told apart by its message (a slug that's taken, delete protection, a plan limit) has no code until the backend gives it a stable error name. Never match on message text to add one.
 - Build every value in a suggested command with `util.SuggestedValue` (or `util.SuggestedDomain` for `--domain`). Anything that isn't a UUID, slug, secret name, or folder path becomes a `<placeholder>`.
@@ -85,8 +85,9 @@ With `-o json`, the same error is JSON on stderr:
 - Without a terminal and without `--yes`, delete nothing. Fail with code `confirmation_required`, and suggest the same command with `--yes`.
 - `--force` skips a safeguard, such as a soft-delete grace period. It never skips the question.
 - Never fall back to an implicit target (such as the project linked in `.infisical.yaml`) for a destructive command.
+- This applies to every delete under `secrets-manager`, including `secrets delete`, `secrets folders delete` and `dynamic-secrets lease delete`. The legacy top-level copies (`infisical secrets delete`, ...) keep deleting without asking, so existing scripts keep working.
 
-Add the flags with `addConfirmFlags(cmd)`, then call `confirmDestructive(cmd, args, destructiveAction{...})` before deleting (`packages/cmd/confirm.go`). The suggested rerun repeats the command under its full name, with the same arguments and flags. Only flags that hold identifiers (`--projectId`, `--env`, `--path`, ...) keep their values, and only when the value is a safe identifier. Any other flag's value becomes a `<placeholder>`, and credential flags are left out. To repeat a new identifier flag, add it to `rerunIdentifierFlags` in `confirm.go`.
+For a new command, add the flags with `addConfirmFlags(cmd)`, then call `confirmDestructive(cmd, args, destructiveAction{...})` before deleting (`packages/cmd/confirm.go`). For a delete whose builder is shared with a legacy top-level command, add it to `confirmedUnderSecretsManager` in `sm.go` with a function that describes what the arguments delete. The suggested rerun repeats the command under its full name, with the same arguments and flags. Only flags that hold identifiers (`--projectId`, `--env`, `--path`, ...) keep their values, and only when the value is a safe identifier. Any other flag's value becomes a `<placeholder>`, and credential flags are left out. To repeat a new identifier flag, add it to `rerunIdentifierFlags` in `confirm.go`.
 
 ## Backwards compatibility
 

@@ -102,9 +102,14 @@ func TestSmFlagsMatchTopLevel(t *testing.T) {
 				}
 			}
 			for flag := range smFlags {
-				if _, ok := topFlags[flag]; !ok {
-					t.Errorf("%s: %s flag --%s exists only under sm", name, kind, flag)
+				if _, ok := topFlags[flag]; ok {
+					continue
 				}
+				// Deletes confirm only under secrets-manager; the legacy copies keep deleting without asking.
+				if _, confirmed := confirmedUnderSecretsManager[name]; confirmed && kind == "local" && flag == "yes" {
+					continue
+				}
+				t.Errorf("%s: %s flag --%s exists only under sm", name, kind, flag)
 			}
 		}
 	}
@@ -276,5 +281,58 @@ func TestServiceTokenAnnotationHoldsUnderEveryName(t *testing.T) {
 	}
 	if rejectsServiceTokens(findCommand(t, smPath([]string{"projects", "get"}))) {
 		t.Error("projects get accepts service tokens")
+	}
+}
+
+// Deletes under secrets-manager (and so under sm) confirm and take -y/--yes. The legacy top-level copies
+// must not change: existing scripts keep deleting without --yes.
+func TestDeletesConfirmOnlyUnderSecretsManager(t *testing.T) {
+	if len(confirmedUnderSecretsManager) != 3 {
+		t.Errorf("want the three existing deletes wired, got %d", len(confirmedUnderSecretsManager))
+	}
+	for path := range confirmedUnderSecretsManager {
+		words := strings.Fields(path)
+		for _, prefix := range []string{secretsManagerCommandName, secretsManagerAlias} {
+			cmd, _, err := RootCmd.Find(append([]string{prefix}, words...))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if f := cmd.Flags().Lookup("yes"); f == nil || f.Shorthand != "y" {
+				t.Errorf("%s %s should take -y/--yes", prefix, path)
+			}
+		}
+		if findCommand(t, words).Flags().Lookup("yes") != nil {
+			t.Errorf("legacy top-level %s must not change", path)
+		}
+	}
+}
+
+func TestDescribeDeletes(t *testing.T) {
+	secretsDelete := findCommand(t, smPath([]string{"secrets", "delete"}))
+	one, ok := describeSecretsDelete(secretsDelete, []string{"API_KEY"})
+	if !ok || one.Target != `secret "API_KEY"` || one.Expected != "API_KEY" || one.Label != "the secret name" {
+		t.Errorf("one secret: %+v", one)
+	}
+	many, _ := describeSecretsDelete(secretsDelete, []string{"A", "B", "C"})
+	if many.Target != "3 secrets" || many.Expected != "3" || !strings.Contains(many.Description, "A, B, C") {
+		t.Errorf("several secrets: %+v", many)
+	}
+	if _, ok := describeSecretsDelete(secretsDelete, nil); ok {
+		t.Error("no names: the command's own validation should report it")
+	}
+
+	folderDelete := findCommand(t, smPath([]string{"secrets", "folders", "delete"}))
+	if _, ok := describeFolderDelete(folderDelete, nil); ok {
+		t.Error("no --name: the command's own error should report it")
+	}
+	_ = folderDelete.Flags().Set("name", "api")
+	t.Cleanup(func() { _ = folderDelete.Flags().Set("name", ""); folderDelete.Flags().Lookup("name").Changed = false })
+	if folder, ok := describeFolderDelete(folderDelete, nil); !ok || folder.Expected != "api" || folder.Label != "the folder name" {
+		t.Errorf("folder: %+v", folder)
+	}
+
+	lease, ok := describeLeaseDelete(findCommand(t, smPath([]string{"dynamic-secrets", "lease", "delete"})), []string{testProjectID})
+	if !ok || lease.Expected != testProjectID || lease.Label != "the lease ID" {
+		t.Errorf("lease: %+v", lease)
 	}
 }

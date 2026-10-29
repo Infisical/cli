@@ -31,15 +31,16 @@ var credentialFlags = map[string]bool{"token": true, "client-secret": true, "cli
 // flag's value becomes a placeholder, so a secret in a flag nobody anticipated can't reach the
 // suggestion even when it looks like a slug.
 var rerunIdentifierFlags = map[string]bool{
-	"projectId": true, "env": true, "path": true, "type": true, "tag": true, "tags": true,
+	"projectId": true, "project-slug": true, "env": true, "path": true, "type": true, "tag": true, "tags": true,
 	"name": true, "slug": true, "position": true, "output": true,
 }
 
 // destructiveAction is what a command is about to delete.
 type destructiveAction struct {
-	Kind        string // "project", "environment"
-	Slug        string // what the user has to type to confirm
-	Description string // "project payments-api and all of its environments and secrets"
+	Target      string // named in messages: `environment "qa"`, `3 secrets`
+	Expected    string // what the user types to confirm: "qa", "3"
+	Label       string // how the prompt names Expected: "the environment slug", "the number of secrets"
+	Description string // "environment qa and all of its secrets"
 }
 
 // addConfirmFlags gives a destructive command -y/--yes. Pair it with confirmDestructive.
@@ -47,7 +48,7 @@ func addConfirmFlags(cmd *cobra.Command) {
 	cmd.Flags().BoolP("yes", "y", false, "Delete without asking for confirmation (for scripts and agents)")
 }
 
-// confirmDestructive asks the user to type the slug of what's being deleted. --yes skips the
+// confirmDestructive asks the user to type the name of what's being deleted. --yes skips the
 // question. Without a terminal and without --yes, it returns a confirmation_required error that
 // suggests the same command with --yes, so a script or agent never deletes by accident.
 func confirmDestructive(cmd *cobra.Command, args []string, action destructiveAction) error {
@@ -59,8 +60,8 @@ func confirmDestructive(cmd *cobra.Command, args []string, action destructiveAct
 	}
 
 	util.PrintlnStderr(fmt.Sprintf("This deletes %s.", util.SanitizeDisplay(action.Description)))
-	typed, err := promptForConfirmation(fmt.Sprintf("Type the %s slug to confirm", action.Kind))
-	if err != nil || strings.TrimSpace(typed) != action.Slug {
+	typed, err := promptForConfirmation(fmt.Sprintf("Type %s to confirm", action.Label))
+	if err != nil || strings.TrimSpace(typed) != action.Expected {
 		return errConfirmationDeclined(action)
 	}
 	return nil
@@ -108,4 +109,20 @@ func rerunWithYes(cmd *cobra.Command, args []string) string {
 	})
 
 	return strings.Join(append(parts, "--yes"), " ")
+}
+
+// requireConfirmation gives cmd -y/--yes and makes it confirm before its Run deletes anything.
+// describe says what the arguments would delete; when it returns false (missing input), Run reports
+// the problem itself, as before.
+func requireConfirmation(cmd *cobra.Command, describe func(cmd *cobra.Command, args []string) (destructiveAction, bool)) {
+	addConfirmFlags(cmd)
+	run := cmd.Run
+	cmd.Run = func(cmd *cobra.Command, args []string) {
+		if action, ok := describe(cmd, args); ok {
+			if err := confirmDestructive(cmd, args, action); err != nil {
+				exitWithError(cmd, err)
+			}
+		}
+		run(cmd, args)
+	}
 }

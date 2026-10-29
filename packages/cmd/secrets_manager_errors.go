@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/api"
@@ -178,13 +179,13 @@ func errNothingToUpdate(flags []string) *util.CLIError {
 
 func errConfirmationRequired(action destructiveAction, rerun string) *util.CLIError {
 	return &util.CLIError{Code: errCodeConfirmationRequired,
-		Message: fmt.Sprintf("Deleting %s %q needs confirmation, and there's no terminal to ask. Nothing was deleted.", action.Kind, action.Slug),
+		Message: fmt.Sprintf("Deleting %s needs confirmation, and there's no terminal to ask. Nothing was deleted.", action.Target),
 		Next:    []util.NextStep{{Purpose: "To delete it without asking", Command: rerun}}}
 }
 
 func errConfirmationDeclined(action destructiveAction) *util.CLIError {
 	return &util.CLIError{Code: errCodeConfirmationDeclined,
-		Message: fmt.Sprintf("Nothing was deleted: the confirmation didn't match the %s slug %q.", action.Kind, action.Slug)}
+		Message: fmt.Sprintf("Nothing was deleted: the confirmation didn't match %s %q.", action.Label, action.Expected)}
 }
 
 // classifyAPIError turns a backend error into a CLIError using only what is stable: the status code,
@@ -220,4 +221,15 @@ func errorOutputFormat(cmd *cobra.Command) string {
 		}
 	}
 	return ""
+}
+
+// exitWithError prints err and exits 1: a *util.CLIError in the CLI.md format, anything else the way
+// util.HandleError always has.
+func exitWithError(cmd *cobra.Command, err error) {
+	var cliErr *util.CLIError
+	if errors.As(err, &cliErr) {
+		util.WriteCLIError(util.GetStderrWriter(), cliErr, errorOutputFormat(cmd))
+		os.Exit(1)
+	}
+	util.HandleError(err)
 }

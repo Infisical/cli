@@ -29,7 +29,7 @@ var notYetShippedCommands = []string{
 
 func everyConstructedError() []*util.CLIError {
 	cause := errors.New("cause")
-	action := destructiveAction{Kind: "environment", Slug: "qa", Description: "environment qa"}
+	action := destructiveAction{Target: `environment "qa"`, Expected: "qa", Label: "the environment slug", Description: "environment qa"}
 	return []*util.CLIError{
 		errAuthRequired(cause),
 		errPermissionDenied("You are not allowed to create on environments", cause),

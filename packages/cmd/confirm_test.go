@@ -12,7 +12,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var testDeleteAction = destructiveAction{Kind: "environment", Slug: "qa", Description: "environment qa from payments-api and all of its secrets"}
+var testDeleteAction = destructiveAction{Target: `environment "qa"`, Expected: "qa", Label: "the environment slug", Description: "environment qa from payments-api and all of its secrets"}
 
 // runDelete parses args through a throwaway `infisical secrets-manager environments delete` tree, the
 // way cobra would for a user, and returns what confirmDestructive decided. It resolves and parses
