@@ -37,15 +37,19 @@ var rerunIdentifierFlags = map[string]bool{
 	"name": true, "slug": true, "position": true, "output": true,
 }
 
+// scopeFlag is a flag that says where a delete acts, with the value the command resolved for it.
+type scopeFlag struct{ Name, Value string }
+
 // destructiveAction is what a command is about to delete.
 type destructiveAction struct {
 	Target      string // named in messages: `environment "qa"`, `3 secrets`
 	Expected    string // what the user types to confirm: "qa", "3"
 	Label       string // how the prompt names Expected: "the environment slug", "the number of secrets"
 	Description string // "environment qa and all of its secrets"
-	// ProjectID is set when the project came from INFISICAL_PROJECT_ID or the workspace file rather
-	// than a flag. The suggested rerun passes it with --projectId, so it can't land on another project.
-	ProjectID string
+	// Scope is where the delete acts (--env, --path, --projectId), as resolved from flags, INFISICAL_*
+	// variables or the workspace file. The suggested rerun passes every one that wasn't typed, so
+	// running it without those variables or that file can't delete somewhere else.
+	Scope []scopeFlag
 }
 
 // addConfirmFlags gives a destructive command -y/--yes. Pair it with confirmDestructive.
@@ -61,7 +65,7 @@ func confirmDestructive(cmd *cobra.Command, args []string, action destructiveAct
 		return nil
 	}
 	if !stdinIsTerminal() {
-		return errConfirmationRequired(action, rerunWithYes(cmd, args, action.ProjectID))
+		return errConfirmationRequired(action, rerunWithYes(cmd, args, action.Scope))
 	}
 
 	util.PrintlnStderr(fmt.Sprintf("This deletes %s.", util.SanitizeDisplay(action.Description)))
@@ -75,8 +79,8 @@ func confirmDestructive(cmd *cobra.Command, args []string, action destructiveAct
 // rerunWithYes rebuilds the command the user ran, with --yes added. It uses the full command path, so
 // a command run as `sm` is suggested as `secrets-manager`. Positional arguments and identifier flags
 // keep their values when they are safe identifiers; every other value becomes a placeholder, and
-// credential flags are left out. pinnedProjectID is added as --projectId.
-func rerunWithYes(cmd *cobra.Command, args []string, pinnedProjectID string) string {
+// credential flags are left out. Each scope flag that wasn't typed is added with its resolved value.
+func rerunWithYes(cmd *cobra.Command, args []string, scope []scopeFlag) string {
 	parts := []string{cmd.CommandPath()}
 	for _, arg := range args {
 		if name, _, isAssignment := strings.Cut(arg, "="); isAssignment {
@@ -113,8 +117,10 @@ func rerunWithYes(cmd *cobra.Command, args []string, pinnedProjectID string) str
 		}
 	})
 
-	if pinnedProjectID != "" {
-		parts = append(parts, "--projectId "+util.SuggestedValue(pinnedProjectID, "projectId"))
+	for _, f := range scope {
+		if f.Value != "" && !cmd.Flags().Changed(f.Name) {
+			parts = append(parts, "--"+f.Name+" "+util.SuggestedValue(f.Value, f.Name))
+		}
 	}
 	return strings.Join(append(parts, "--yes"), " ")
 }

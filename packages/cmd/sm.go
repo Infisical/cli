@@ -44,14 +44,14 @@ var confirmedUnderSecretsManager = map[string]func(cmd *cobra.Command, args []st
 
 // deleteProject resolves the project a delete acts on, in the order the deletes themselves use
 // (--project-slug, --projectId, INFISICAL_PROJECT_ID, then the workspace file), so the question can
-// name it. pinned is set when no flag chose the project. ok is false when nothing resolves; the
-// command then reports that itself.
-func deleteProject(cmd *cobra.Command) (phrase, pinned string, ok bool) {
+// name it. id is empty when --project-slug chose it. ok is false when nothing resolves; the command
+// then reports that itself.
+func deleteProject(cmd *cobra.Command) (phrase, id string, ok bool) {
 	if slug, _ := cmd.Flags().GetString("project-slug"); slug != "" {
 		return "in project " + util.SuggestedValue(slug, "project-slug"), "", true
 	}
 	if id, _ := cmd.Flags().GetString("projectId"); id != "" {
-		return "in project " + util.SuggestedValue(id, "project-id"), "", true
+		return "in project " + util.SuggestedValue(id, "project-id"), id, true
 	}
 	if id := strings.TrimSpace(os.Getenv(util.INFISICAL_PROJECT_ID_NAME)); id != "" {
 		return fmt.Sprintf("in project %s (from %s)", util.SuggestedValue(id, "project-id"), util.INFISICAL_PROJECT_ID_NAME), id, true
@@ -68,45 +68,50 @@ func deleteProject(cmd *cobra.Command) (phrase, pinned string, ok bool) {
 }
 
 func describeSecretsDelete(cmd *cobra.Command, args []string) (destructiveAction, bool) {
-	project, pinned, ok := deleteProject(cmd)
+	project, projectID, ok := deleteProject(cmd)
 	if len(args) == 0 || !ok {
 		return destructiveAction{}, false
 	}
-	where := fmt.Sprintf("from the %s environment at %s %s", util.SuggestedValue(util.ResolveEnvironmentName(cmd), "env"),
-		util.SuggestedValue(util.ResolveSecretPath(cmd), "path"), project)
+	env, path := util.ResolveEnvironmentName(cmd), util.ResolveSecretPath(cmd)
+	scope := []scopeFlag{{"env", env}, {"path", path}, {"projectId", projectID}}
+	where := fmt.Sprintf("from the %s environment at %s %s", util.SuggestedValue(env, "env"), util.SuggestedValue(path, "path"), project)
 	names := make([]string, len(args))
 	for i, arg := range args {
 		names[i] = util.SuggestedValue(arg, "name")
 	}
 	if len(args) == 1 {
 		return destructiveAction{Target: "secret " + quoted(args[0], "name"), Expected: args[0], Label: "the secret name",
-			Description: fmt.Sprintf("secret %s %s", names[0], where), ProjectID: pinned}, true
+			Description: fmt.Sprintf("secret %s %s", names[0], where), Scope: scope}, true
 	}
 	return destructiveAction{Target: fmt.Sprintf("%d secrets", len(args)), Expected: strconv.Itoa(len(args)), Label: "the number of secrets",
-		Description: fmt.Sprintf("%d secrets (%s) %s", len(args), strings.Join(names, ", "), where), ProjectID: pinned}, true
+		Description: fmt.Sprintf("%d secrets (%s) %s", len(args), strings.Join(names, ", "), where), Scope: scope}, true
 }
 
 func describeFolderDelete(cmd *cobra.Command, args []string) (destructiveAction, bool) {
-	project, pinned, ok := deleteProject(cmd)
+	project, projectID, ok := deleteProject(cmd)
 	name, _ := cmd.Flags().GetString("name")
 	if name == "" || !ok {
 		return destructiveAction{}, false
 	}
+	// Unlike the other deletes, folder delete reads --path only from the flag.
 	path, _ := cmd.Flags().GetString("path")
+	env := util.ResolveEnvironmentName(cmd)
 	return destructiveAction{Target: "folder " + quoted(name, "name"), Expected: name, Label: "the folder name",
 		Description: fmt.Sprintf("folder %s at %s in the %s environment %s, with every secret and folder inside it",
-			util.SuggestedValue(name, "name"), util.SuggestedValue(path, "path"), util.SuggestedValue(util.ResolveEnvironmentName(cmd), "env"), project),
-		ProjectID: pinned}, true
+			util.SuggestedValue(name, "name"), util.SuggestedValue(path, "path"), util.SuggestedValue(env, "env"), project),
+		Scope: []scopeFlag{{"env", env}, {"path", path}, {"projectId", projectID}}}, true
 }
 
 func describeLeaseDelete(cmd *cobra.Command, args []string) (destructiveAction, bool) {
-	project, pinned, ok := deleteProject(cmd)
+	project, projectID, ok := deleteProject(cmd)
 	if len(args) != 1 || !ok {
 		return destructiveAction{}, false
 	}
+	env, path := util.ResolveEnvironmentName(cmd), util.ResolveSecretPath(cmd)
 	return destructiveAction{Target: "lease " + quoted(args[0], "lease-id"), Expected: args[0], Label: "the lease ID",
-		Description: fmt.Sprintf("dynamic secret lease %s %s, which revokes its credentials", util.SuggestedValue(args[0], "lease-id"), project),
-		ProjectID:   pinned}, true
+		Description: fmt.Sprintf("dynamic secret lease %s in the %s environment at %s %s, which revokes its credentials",
+			util.SuggestedValue(args[0], "lease-id"), util.SuggestedValue(env, "env"), util.SuggestedValue(path, "path"), project),
+		Scope: []scopeFlag{{"env", env}, {"path", path}, {"projectId", projectID}}}, true
 }
 
 func init() {

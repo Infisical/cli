@@ -154,20 +154,32 @@ func TestConfirmWithoutATerminalSuggestsTheRerun(t *testing.T) {
 	}
 }
 
-// When the project came from INFISICAL_PROJECT_ID or the workspace file, the suggestion pins it, so
-// running it somewhere else can't delete from another project.
-func TestConfirmRerunPinsAnImplicitProject(t *testing.T) {
+// Where the delete acts may come from INFISICAL_* variables or the workspace file. The suggestion
+// pins every scope value that wasn't typed, so running it without them can't delete somewhere else,
+// and doesn't repeat one that was typed.
+func TestConfirmRerunPinsTheResolvedScope(t *testing.T) {
 	fakeTerminal(t, false, "", nil)
 	cmd := &cobra.Command{Use: "delete"}
+	cmd.Flags().String("env", "dev", "")
+	cmd.Flags().String("path", "/", "")
+	cmd.Flags().String("projectId", "", "")
 	addConfirmFlags(cmd)
 	action := testDeleteAction
-	action.ProjectID = testProjectID
-	var cliErr *util.CLIError
-	if err := confirmDestructive(cmd, []string{"qa"}, action); !errors.As(err, &cliErr) {
-		t.Fatalf("want a CLIError, got %v", err)
+	action.Scope = []scopeFlag{{"env", "staging"}, {"path", "/app"}, {"projectId", testProjectID}}
+
+	rerun := func() string {
+		var cliErr *util.CLIError
+		if err := confirmDestructive(cmd, []string{"qa"}, action); !errors.As(err, &cliErr) {
+			t.Fatalf("want a CLIError, got %v", err)
+		}
+		return cliErr.Next[0].Command
 	}
-	if want := "delete qa --projectId " + testProjectID + " --yes"; cliErr.Next[0].Command != want {
-		t.Errorf("got %s, want %s", cliErr.Next[0].Command, want)
+	if got, want := rerun(), "delete qa --env staging --path /app --projectId "+testProjectID+" --yes"; got != want {
+		t.Errorf("got %s, want %s", got, want)
+	}
+	_ = cmd.Flags().Set("env", "staging")
+	if got, want := rerun(), "delete qa --env staging --path /app --projectId "+testProjectID+" --yes"; got != want {
+		t.Errorf("a typed --env must appear once: got %s, want %s", got, want)
 	}
 }
 

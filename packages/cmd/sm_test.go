@@ -315,6 +315,8 @@ func TestDeletesConfirmOnlyUnderSecretsManager(t *testing.T) {
 // confirmation_required before its own Run, which would otherwise log in and call the API.
 func TestRegisteredDeletesStopWithoutConfirmation(t *testing.T) {
 	t.Setenv(util.INFISICAL_PROJECT_ID_NAME, testProjectID)
+	t.Setenv(util.INFISICAL_ENVIRONMENT_NAME, "staging")
+	t.Setenv(util.INFISICAL_SECRET_PATH_NAME, "/app")
 	fakeTerminal(t, false, "", errors.New("must not prompt"))
 	stderr := captureStderr(t)
 	exits := 0
@@ -326,13 +328,20 @@ func TestRegisteredDeletesStopWithoutConfirmation(t *testing.T) {
 	_ = folderDelete.Flags().Set("name", "api")
 	t.Cleanup(func() { _ = folderDelete.Flags().Set("name", ""); folderDelete.Flags().Lookup("name").Changed = false })
 
+	// The suggestion pins what the variables chose, so running it without them deletes the same thing.
+	// Folder delete reads --path only from its flag, so it acts at / and says so.
+	wantScope := map[string]string{
+		"secrets delete":               "--env staging --path /app --projectId " + testProjectID + " --yes",
+		"secrets folders delete":       "--env staging --path / --projectId " + testProjectID + " --yes",
+		"dynamic-secrets lease delete": "--env staging --path /app --projectId " + testProjectID + " --yes",
+	}
 	for path := range confirmedUnderSecretsManager {
 		stderr.Reset()
 		exits = 0
 		cmd := findCommand(t, smPath(strings.Fields(path)))
 		cmd.Run(cmd, []string{"API_KEY"})
-		if exits != 1 || !strings.Contains(stderr.String(), "needs confirmation") || !strings.Contains(stderr.String(), "--projectId "+testProjectID+" --yes") {
-			t.Errorf("%s: exits=%d, stderr=%q", path, exits, stderr.String())
+		if exits != 1 || !strings.Contains(stderr.String(), "needs confirmation") || !strings.Contains(stderr.String(), wantScope[path]+"\n") {
+			t.Errorf("%s: exits=%d, stderr=%q, want the suggestion to end with %q", path, exits, stderr.String(), wantScope[path])
 		}
 	}
 }
@@ -341,7 +350,7 @@ func TestDescribeDeletes(t *testing.T) {
 	t.Setenv(util.INFISICAL_PROJECT_ID_NAME, testProjectID)
 	secretsDelete := findCommand(t, smPath([]string{"secrets", "delete"}))
 	one, ok := describeSecretsDelete(secretsDelete, []string{"API_KEY"})
-	if !ok || one.Target != `secret "API_KEY"` || one.Expected != "API_KEY" || one.Label != "the secret name" || one.ProjectID != testProjectID {
+	if !ok || one.Target != `secret "API_KEY"` || one.Expected != "API_KEY" || one.Label != "the secret name" || scopeValue(one, "projectId") != testProjectID {
 		t.Errorf("one secret: %+v", one)
 	}
 	if want := "in project " + testProjectID + " (from INFISICAL_PROJECT_ID)"; !strings.Contains(one.Description, want) {
@@ -378,7 +387,16 @@ func TestDescribeDeletes(t *testing.T) {
 	}
 }
 
-// A project chosen by flag is named, but not pinned again: the rerun already repeats the flag.
+func scopeValue(action destructiveAction, flag string) string {
+	for _, f := range action.Scope {
+		if f.Name == flag {
+			return f.Value
+		}
+	}
+	return ""
+}
+
+// A project chosen by flag is named without a source; the rerun repeats the typed flag once.
 func TestDescribeDeletesNamesAFlaggedProject(t *testing.T) {
 	t.Setenv(util.INFISICAL_PROJECT_ID_NAME, "")
 	secretsDelete := findCommand(t, smPath([]string{"secrets", "delete"}))
@@ -388,8 +406,11 @@ func TestDescribeDeletesNamesAFlaggedProject(t *testing.T) {
 		secretsDelete.Flags().Lookup("projectId").Changed = false
 	})
 	action, ok := describeSecretsDelete(secretsDelete, []string{"API_KEY"})
-	if !ok || action.ProjectID != "" || !strings.HasSuffix(action.Description, "in project "+testProjectID) {
+	if !ok || !strings.HasSuffix(action.Description, "in project "+testProjectID) {
 		t.Errorf("%+v", action)
+	}
+	if got := rerunWithYes(secretsDelete, []string{"API_KEY"}, action.Scope); strings.Count(got, "--projectId") != 1 {
+		t.Errorf("--projectId should appear once: %s", got)
 	}
 }
 
@@ -411,7 +432,7 @@ func TestDescribeDeletesNamesTheWorkspaceFile(t *testing.T) {
 	}
 	t.Chdir(dir)
 	action, ok := describeSecretsDelete(findCommand(t, smPath([]string{"secrets", "delete"})), []string{"API_KEY"})
-	if !ok || action.ProjectID != testProjectID || !strings.Contains(action.Description, util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME+")") {
+	if !ok || scopeValue(action, "projectId") != testProjectID || !strings.Contains(action.Description, util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME+")") {
 		t.Errorf("%+v", action)
 	}
 }
