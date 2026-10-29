@@ -271,6 +271,28 @@ func TestABodyTheProxyCannotReadIsRefusedOnlyUnderAnAllowlist(t *testing.T) {
 	}
 }
 
+// An ASCII string as UTF-16, big- or little-endian.
+func utf16Body(s string, bigEndian bool) string {
+	var buf bytes.Buffer
+	for _, c := range []byte(s) {
+		if bigEndian {
+			buf.Write([]byte{0, c})
+		} else {
+			buf.Write([]byte{c, 0})
+		}
+	}
+	return buf.String()
+}
+
+// An ASCII string as big-endian UTF-32.
+func utf32BEBody(s string) string {
+	var buf bytes.Buffer
+	for _, c := range []byte(s) {
+		buf.Write([]byte{0, 0, 0, c})
+	}
+	return buf.String()
+}
+
 func TestABodyIsCheckedWhateverItsContentType(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -283,6 +305,10 @@ func TestABodyIsCheckedWhateverItsContentType(t *testing.T) {
 		{"listed call as text/plain", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_file"}}`, "text/plain", 0},
 		{"unlisted call as text/plain", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"delete_repo"}}`, "text/plain", http.StatusOK},
 		{"call after a byte order mark as a form", " \xef\xbb\xbf[{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"read_file\"}}]", "application/x-www-form-urlencoded", http.StatusBadRequest},
+		{"UTF-16BE call without a byte order mark", utf16Body(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"delete_repo"}}`, true), "text/plain", http.StatusBadRequest},
+		{"UTF-16LE call after a space", utf16Body(` {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"delete_repo"}}`, false), "text/plain", http.StatusBadRequest},
+		{"UTF-16LE call after a byte order mark", "\xff\xfe" + utf16Body(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"delete_repo"}}`, false), "text/plain", http.StatusBadRequest},
+		{"UTF-32BE call after a byte order mark", "\x00\x00\xfe\xff" + utf32BEBody(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"delete_repo"}}`), "text/plain", http.StatusBadRequest},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

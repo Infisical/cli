@@ -140,8 +140,14 @@ func toolsAllowedAfterSubstitution(svc *resolvedService, req *http.Request) bool
 }
 
 // Whether a parser could read the body as a JSON object or array, the only shapes a JSON-RPC message takes:
-// its first byte after whitespace, and after a byte order mark some parsers skip, opens one.
+// its first byte after whitespace, and after a byte order mark some parsers skip, opens one. A body in UTF-16
+// or UTF-32 counts too, since parsers such as Python's json.loads detect those from a byte order mark or from
+// a NUL in the first four bytes; no MCP client sends one, so it fails the strict parse and is refused.
 func mayBeJSON(body []byte) bool {
+	if bytes.HasPrefix(body, []byte("\xfe\xff")) || bytes.HasPrefix(body, []byte("\xff\xfe")) ||
+		bytes.IndexByte(body[:min(len(body), 4)], 0) >= 0 {
+		return true
+	}
 	body = bytes.TrimLeft(bytes.TrimPrefix(bytes.TrimLeft(body, " \t\r\n"), []byte("\xef\xbb\xbf")), " \t\r\n")
 	return len(body) > 0 && (body[0] == '{' || body[0] == '[')
 }
