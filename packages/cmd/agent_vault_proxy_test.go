@@ -23,6 +23,12 @@ var agentVaultProxyEnv = []string{
 	"INFISICAL_AGENT_VAULT_CA_CERT",
 	"INFISICAL_AGENT_VAULT_CA_KEY",
 	"INFISICAL_AGENT_VAULT_ENROLLMENT_TOKEN",
+	"INFISICAL_AGENT_VAULT_LISTEN_HOST",
+	"INFISICAL_AGENT_VAULT_SOCKS5_PORT",
+	"INFISICAL_AGENT_VAULT_SOCKS5_TLS_NAME",
+	"INFISICAL_AGENT_VAULT_SOCKS5_TLS_CERT",
+	"INFISICAL_AGENT_VAULT_SOCKS5_TLS_KEY",
+	"INFISICAL_AGENT_VAULT_SOCKS5_ALLOW_PRIVATE_DESTINATIONS",
 }
 
 func readProxyInputs(t *testing.T, env map[string]string, args ...string) (agentVaultProxyInputs, error) {
@@ -175,5 +181,123 @@ func TestAgentVaultProxyNamesTheEnvVarAValueCameFrom(t *testing.T) {
 	_, err = readProxyInputs(t, nil, "--port", "70000")
 	if err == nil || !strings.HasPrefix(err.Error(), "--port must be between") {
 		t.Fatalf("port from flag: got %v", err)
+	}
+}
+
+func TestAgentVaultProxyListenHostTakesAHostOnly(t *testing.T) {
+	for _, tc := range []struct {
+		value   string
+		want    string
+		wantErr bool
+	}{
+		{"127.0.0.1", "127.0.0.1", false},
+		{"localhost", "localhost", false},
+		{"::1", "::1", false},
+		{"[::1]", "::1", false},
+		{"127.0.0.1:17323", "", true},
+		{"[::1]:17323", "", true},
+		{"localhost:80", "", true},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			in, err := readProxyInputs(t, nil, "--listen-host", tc.value)
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "takes a host only") {
+					t.Fatalf("got %v, want a host-only error", err)
+				}
+				return
+			}
+			if err != nil || in.listenHost != tc.want {
+				t.Fatalf("got %q err=%v, want %q", in.listenHost, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestAgentVaultProxyListenHostFromEnv(t *testing.T) {
+	in, err := readProxyInputs(t, map[string]string{"INFISICAL_AGENT_VAULT_LISTEN_HOST": "127.0.0.1"})
+	if err != nil || in.listenHost != "127.0.0.1" {
+		t.Fatalf("got %q err=%v", in.listenHost, err)
+	}
+}
+
+func TestAgentVaultProxySocks5IsOffByDefault(t *testing.T) {
+	in, err := readProxyInputs(t, nil)
+	if err != nil || in.socks5 != nil {
+		t.Fatalf("got %+v err=%v, want SOCKS5 off", in.socks5, err)
+	}
+}
+
+func TestAgentVaultProxySocks5FromFlagsAndEnv(t *testing.T) {
+	in, err := readProxyInputs(t, nil, "--socks5-port", "1080", "--socks5-tls-name", "Proxy.Example.com.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.socks5 == nil || in.socks5.Port != 1080 || in.socks5.TLSName != "proxy.example.com" || in.socks5.AllowPrivateDestinations {
+		t.Fatalf("got %+v", in.socks5)
+	}
+
+	in, err = readProxyInputs(t, map[string]string{
+		"INFISICAL_AGENT_VAULT_SOCKS5_PORT":                       "1080",
+		"INFISICAL_AGENT_VAULT_SOCKS5_TLS_NAME":                   "10.0.0.5",
+		"INFISICAL_AGENT_VAULT_SOCKS5_ALLOW_PRIVATE_DESTINATIONS": "TRUE",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.socks5 == nil || in.socks5.TLSName != "10.0.0.5" || !in.socks5.AllowPrivateDestinations {
+		t.Fatalf("env should turn SOCKS5 on: got %+v", in.socks5)
+	}
+}
+
+func TestAgentVaultProxySocks5Validation(t *testing.T) {
+	certPEM, keyPEM := caPair(t)
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+		args []string
+		want string
+	}{
+		{"port 0", nil, []string{"--socks5-port", "0", "--socks5-tls-name", "p.example.com"}, "must be between 1 and 65535"},
+		{"port out of range", nil, []string{"--socks5-port", "70000", "--socks5-tls-name", "p.example.com"}, "must be between 1 and 65535"},
+		{"port from env not a number", map[string]string{"INFISICAL_AGENT_VAULT_SOCKS5_PORT": "x"}, nil, "must be a whole number"},
+		{"same port as HTTP", nil, []string{"--socks5-port", "17323", "--socks5-tls-name", "p.example.com"}, "can't be the same port"},
+		{"no TLS name and no certificate", nil, []string{"--socks5-port", "1080"}, "needs --socks5-tls-name"},
+		{"TLS name with a port", nil, []string{"--socks5-port", "1080", "--socks5-tls-name", "p.example.com:1080"}, "takes a host only"},
+		{"wildcard TLS name", nil, []string{"--socks5-port", "1080", "--socks5-tls-name", "*.example.com"}, "must be a DNS name or an IP address"},
+		{"certificate without key", nil, []string{"--socks5-port", "1080", "--socks5-tls-cert", certPEM}, "go together"},
+		{"TLS name without port", nil, []string{"--socks5-tls-name", "p.example.com"}, "--socks5-tls-name only applies with --socks5-port"},
+		{"certificate without port", nil, []string{"--socks5-tls-cert", certPEM, "--socks5-tls-key", keyPEM}, "--socks5-tls-cert only applies with --socks5-port"},
+		{"allow-private without port", nil, []string{"--socks5-allow-private-destinations"}, "only applies with --socks5-port"},
+		{"allow-private env not a boolean", map[string]string{"INFISICAL_AGENT_VAULT_SOCKS5_ALLOW_PRIVATE_DESTINATIONS": "yes"}, nil, "must be true, false, 1 or 0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := readProxyInputs(t, tc.env, tc.args...)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v, want an error containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestAgentVaultProxySocks5OwnCertificate(t *testing.T) {
+	certPEM, keyPEM := caPair(t)
+	in, err := readProxyInputs(t, map[string]string{"INFISICAL_AGENT_VAULT_SOCKS5_TLS_KEY": keyPEM},
+		"--socks5-port", "1080", "--socks5-tls-cert", certPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.socks5 == nil || in.socks5.Cert == nil || in.socks5.TLSName != "" {
+		t.Fatalf("got %+v", in.socks5)
+	}
+	if len(in.warnings) != 0 {
+		t.Fatalf("a key from the env var should not warn: %v", in.warnings)
+	}
+
+	in, err = readProxyInputs(t, nil, "--socks5-port", "1080", "--socks5-tls-cert", certPEM, "--socks5-tls-key", keyPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(in.warnings) != 1 || !strings.Contains(in.warnings[0], "--socks5-tls-key is visible in the process list") {
+		t.Fatalf("a key on the command line should warn: %v", in.warnings)
 	}
 }

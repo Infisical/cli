@@ -193,6 +193,43 @@ func LoadOwnCa(in OwnCaInput) (*OwnCa, error) {
 	return own, nil
 }
 
+// ListenerCert is the operator's own certificate for the SOCKS5 listener. It is read once at start, so a
+// renewed certificate takes effect on the next restart.
+type ListenerCert struct {
+	certificate tls.Certificate
+	leaf        *x509.Certificate
+}
+
+func (c *ListenerCert) Fingerprint() string { return FingerprintOf(c.leaf.Raw) }
+
+func (c *ListenerCert) NotAfter() time.Time { return c.leaf.NotAfter }
+
+// Any key type and the full chain, unlike a CA, which has to be an ECDSA P-256 key the proxy can sign with.
+func LoadListenerCert(in OwnCaInput) (*ListenerCert, error) {
+	certPEM, ok := loadCaValue(in.Cert)
+	if !ok {
+		return nil, fmt.Errorf("%s is not a PEM, base64 PEM or readable file: %s", in.CertSource, shortenValue(in.Cert))
+	}
+	keyPEM, ok := loadCaValue(in.Key)
+	if !ok {
+		return nil, fmt.Errorf("%s is not a PEM, base64 PEM or readable file (value hidden)", in.KeySource)
+	}
+	pair, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("the certificate in %s and the key in %s can't be used together: %w", in.CertSource, in.KeySource, err)
+	}
+	leaf, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		return nil, fmt.Errorf("the certificate in %s can't be parsed: %w", in.CertSource, err)
+	}
+	if now := time.Now(); now.Before(leaf.NotBefore) || now.After(leaf.NotAfter) {
+		return nil, fmt.Errorf("the certificate in %s isn't valid yet or has expired (valid from %s to %s)",
+			in.CertSource, leaf.NotBefore.UTC().Format(time.RFC3339), leaf.NotAfter.UTC().Format(time.RFC3339))
+	}
+	pair.Leaf = leaf
+	return &ListenerCert{certificate: pair, leaf: leaf}, nil
+}
+
 func countPEMBlocks(data []byte, blockType string) int {
 	n := 0
 	for {
