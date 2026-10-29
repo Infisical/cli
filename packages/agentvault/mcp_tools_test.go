@@ -189,7 +189,10 @@ func TestABatchWithAnUnlistedCallIsRefusedWhole(t *testing.T) {
 		t.Fatalf("status %d, %d errors, want 3: %s", res.status, len(got), res.body)
 	}
 	for i, wantID := range []string{"1", "2", "3"} {
-		if string(got[i].ID) != wantID || got[i].Error.Code != jsonrpcInvalidParams || !strings.Contains(got[i].Error.Message, `"delete_repo"`) {
+		// Only the call that was refused names the tool, so the answer does not grow with the name times the batch.
+		namesTool := strings.Contains(got[i].Error.Message, `"delete_repo"`)
+		if string(got[i].ID) != wantID || got[i].Error.Code != jsonrpcInvalidParams || namesTool != (wantID == "3") ||
+			!strings.Contains(got[i].Error.Message, "isn't allowed") {
 			t.Fatalf("error %d = %+v", i, got[i])
 		}
 	}
@@ -225,7 +228,7 @@ func TestABodyTheProxyCannotReadIsRefusedOnlyUnderAnAllowlist(t *testing.T) {
 		header      http.Header
 	}{
 		{"gzip", gzipped(t, listed), "application/json", http.Header{"Content-Encoding": {"gzip"}}},
-		{"text/plain", listed, "text/plain", nil},
+		{"text/plain holding malformed JSON-RPC", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_file","name":"delete_repo"}}`, "text/plain", nil},
 		{"duplicate name", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_file","name":"delete_repo"}}`, "application/json", nil},
 		{"case-variant key", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_file","Name":"delete_repo"}}`, "application/json", nil},
 		{"case-variant id", `{"jsonrpc":"2.0","Id":1,"method":"tools/call","params":{"name":"delete_repo"}}`, "application/json", nil},
@@ -265,6 +268,69 @@ func TestABodyTheProxyCannotReadIsRefusedOnlyUnderAnAllowlist(t *testing.T) {
 				t.Fatalf("upstream body changed (%d bytes, sent %d)", len(got), len(tc.body))
 			}
 		})
+	}
+}
+
+func TestABodyIsCheckedWhateverItsContentType(t *testing.T) {
+	cases := []struct {
+		name        string
+		body        string
+		contentType string
+		// 0 when the body must reach the upstream unchanged.
+		refusedWith int
+	}{
+		{"form-encoded token request", "grant_type=refresh_token&refresh_token=abc&client_id=agent", "application/x-www-form-urlencoded", 0},
+		{"listed call as text/plain", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_file"}}`, "text/plain", 0},
+		{"unlisted call as text/plain", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"delete_repo"}}`, "text/plain", http.StatusOK},
+		{"call after a byte order mark as a form", " \xef\xbb\xbf[{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"read_file\"}}]", "application/x-www-form-urlencoded", http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			up := newMCPUpstream(t)
+			client, _ := newMCPRecordingProxy(t, up, []*resolvedService{allowlistedMCPService(up.host(), "read_file")})
+
+			res := proxiedPost(t, client, up.server.URL+"/token", tc.contentType, tc.body, http.Header{"Accept": {streamableAccept}})
+			if tc.refusedWith != 0 {
+				assertUpstreamSawNothing(t, up)
+				if res.status != tc.refusedWith || !strings.Contains(res.body, `\"github-mcp\"`) {
+					t.Fatalf("status %d body %s", res.status, res.body)
+				}
+				return
+			}
+			if res.status != http.StatusOK {
+				t.Fatalf("status %d body %s", res.status, res.body)
+			}
+			if got := <-up.bodies; string(got) != tc.body {
+				t.Fatalf("upstream body changed: %s", got)
+			}
+		})
+	}
+}
+
+func TestABodyOverTheCapIsRefused(t *testing.T) {
+	up := newMCPUpstream(t)
+	client, log := newMCPRecordingProxy(t, up, []*resolvedService{allowlistedMCPService(up.host(), "write_file")})
+
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"write_file","arguments":{"x":"` + strings.Repeat("x", maxToolsAllowlistBody) + `"}}}`
+	res := proxiedPost(t, client, up.server.URL+"/mcp", "application/json", body, http.Header{"Accept": {streamableAccept}})
+	assertUpstreamSawNothing(t, up)
+	var got jsonrpcErrorResponse
+	if err := json.Unmarshal([]byte(res.body), &got); err != nil {
+		t.Fatalf("status %d body %s: %v", res.status, res.body, err)
+	}
+	if res.status != http.StatusRequestEntityTooLarge || !strings.Contains(got.Error.Message, "32 MiB") {
+		t.Fatalf("status %d body %s", res.status, res.body)
+	}
+	if rec := drainOneRecord(t, log); rec.Decision != decisionBlocked {
+		t.Fatalf("record = %s", recordJSON(t, rec))
+	}
+
+	// Without a length, so the cap is found by reading rather than from Content-Length.
+	chunked := proxiedDo(t, client, http.MethodPost, up.server.URL+"/mcp", "application/json",
+		io.MultiReader(strings.NewReader(body)), http.Header{"Accept": {streamableAccept}})
+	assertUpstreamSawNothing(t, up)
+	if chunked.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("chunked status %d", chunked.StatusCode)
 	}
 }
 
@@ -499,6 +565,29 @@ func TestToolsListResultsHideUnlistedTools(t *testing.T) {
 		}
 	})
 
+	t.Run("escaped tools key", func(t *testing.T) {
+		escaped := `{"jsonrpc":"2.0","id":3,"result":{"\u0074ools":[{"name":"read_file"},{"name":"delete_repo"}]}}`
+		want := `{"id":3,"jsonrpc":"2.0","result":{"tools":[{"name":"read_file"}]}}`
+		resp := jsonResponse(escaped, nil)
+		hideUnlistedTools(resp, allowed)
+		if got := readResponse(t, resp); got != want {
+			t.Fatalf("json: got %s", got)
+		}
+		resp = jsonResponse("data: "+escaped+"\n\n", http.Header{"Content-Type": {"text/event-stream"}})
+		hideUnlistedTools(resp, allowed)
+		if got := readResponse(t, resp); got != "data: "+want+"\n\n" {
+			t.Fatalf("sse: got %q", got)
+		}
+	})
+
+	t.Run("sse lines ended by a bare CR", func(t *testing.T) {
+		resp := jsonResponse(": ping\revent: message\rdata: "+toolsListResult+"\r\r", http.Header{"Content-Type": {"text/event-stream"}})
+		hideUnlistedTools(resp, allowed)
+		if got := readResponse(t, resp); got != ": ping\revent: message\rdata: "+wantFiltered+"\n\r" {
+			t.Fatalf("got %q", got)
+		}
+	})
+
 	t.Run("oversized sse event passes through", func(t *testing.T) {
 		big := "data: " + `{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"delete_repo","description":"` + strings.Repeat("x", maxToolsListRewrite) + `"}]}}` + "\n\n"
 		stream := big + "data: " + toolsListResult + "\n\n"
@@ -531,6 +620,44 @@ func TestAFilteredStreamHandsOnEachEventAsItArrives(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the first event was held back waiting for more of the stream")
+	}
+}
+
+// A CR may end a line on its own, so an event ended by CRs is handed on without waiting for an LF that may
+// never come, and an LF that does come next is kept with its CR rather than read as a blank line.
+func TestAFilteredStreamHandsOnACREndedEventAtOnce(t *testing.T) {
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	resp := &http.Response{Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: pr}
+	hideUnlistedTools(resp, toToolSet([]string{"read_file"}))
+
+	writes := []string{"data: " + toolsListResult + "\r", "\r", "\ndata: " + toolsListResult + "\r", "\n\r\n"}
+	go func() {
+		for _, w := range writes {
+			_, _ = io.WriteString(pw, w)
+		}
+	}()
+
+	got := make(chan string, 1)
+	go func() {
+		var all []byte
+		buf := make([]byte, 4096)
+		for strings.Count(string(all), "read_file") < 2 {
+			n, err := resp.Body.Read(buf)
+			all = append(all, buf[:n]...)
+			if err != nil {
+				break
+			}
+		}
+		got <- string(all)
+	}()
+	select {
+	case stream := <-got:
+		if strings.Contains(stream, "delete_repo") || strings.Count(stream, "read_file") != 2 {
+			t.Fatalf("stream = %q", stream)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("an event ended by CRs was held back waiting for more of the stream")
 	}
 }
 

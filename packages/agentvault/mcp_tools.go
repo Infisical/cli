@@ -19,6 +19,9 @@ const (
 	// Per message for a JSON response and per event for a stream. Anything larger is passed through as it
 	// came, since a call to a hidden tool is still refused on the way in.
 	maxToolsListRewrite = maxMCPInspectBody
+	// What the proxy holds in memory to check one request against an allowlist. Larger than the log's cap so
+	// a call with a sizeable argument still goes through, and finite so no agent can exhaust the proxy.
+	maxToolsAllowlistBody = 32 << 20
 )
 
 // A request the service's tool allowlist refuses, answered by the proxy so the upstream never sees it.
@@ -50,10 +53,12 @@ type jsonrpcError struct {
 	Message string `json:"message"`
 }
 
-// Every POST to a service with an allowlist is read here in full, however large, whether or not session logs
-// are on, and refused whole when any call in it names a tool the list leaves out. A body the proxy cannot
-// read is refused too, so the list fails closed. The detail is what the session log records, from the same
-// parse.
+// Every POST to a service with an allowlist is read here, up to maxToolsAllowlistBody, whether or not session
+// logs are on, and refused whole when any call in it names a tool the list leaves out. A server may parse JSON
+// whatever its Content-Type, so a body that could be read as JSON is checked whatever its type, and refused
+// when it does not parse strictly; any other body, such as a form-encoded OAuth token request, cannot be a
+// JSON-RPC message and is forwarded. A body the proxy cannot read is refused, so the list fails closed. The
+// detail is what the session log records, from the same parse.
 func checkToolAllowlist(svc *resolvedService, req *http.Request, logging bool) (*mcpDetail, *mcpToolRefusal) {
 	if !strings.EqualFold(req.Method, http.MethodPost) {
 		// JSON-RPC only comes as a POST, but a server that ignores the method would run a body sent with any
@@ -63,13 +68,25 @@ func checkToolAllowlist(svc *resolvedService, req *http.Request, logging bool) (
 		}
 		return nil, unreadableToolsRequest(svc.name)
 	}
-	body, applicable, whole := bufferMCPRequest(req, -1)
+	mediaType, _, _ := mime.ParseMediaType(req.Header.Get("Content-Type"))
+	declaredJSON := mediaType == "application/json"
 	var detail *mcpDetail
-	if applicable && logging {
+	if logging && declaredJSON {
 		detail = unparsedMCP()
 	}
-	if !applicable || !whole {
+	if req.Header.Get("Content-Encoding") != "" {
 		return detail, unreadableToolsRequest(svc.name)
+	}
+	body, whole := bufferRequestBody(req, maxToolsAllowlistBody)
+	if !whole {
+		// Over the cap, or the read failed, in which case the agent has gone and never sees this answer.
+		return detail, oversizedToolsRequest(svc.name)
+	}
+	if !declaredJSON && !mayBeJSON(body) {
+		return nil, nil
+	}
+	if logging {
+		detail = unparsedMCP()
 	}
 	messages, ok := parseJSONRPCMessages(body)
 	if !ok {
@@ -122,6 +139,13 @@ func toolsAllowedAfterSubstitution(svc *resolvedService, req *http.Request) bool
 	return true
 }
 
+// Whether a parser could read the body as a JSON object or array, the only shapes a JSON-RPC message takes:
+// its first byte after whitespace, and after a byte order mark some parsers skip, opens one.
+func mayBeJSON(body []byte) bool {
+	body = bytes.TrimLeft(bytes.TrimPrefix(bytes.TrimLeft(body, " \t\r\n"), []byte("\xef\xbb\xbf")), " \t\r\n")
+	return len(body) > 0 && (body[0] == '{' || body[0] == '[')
+}
+
 func unlistedToolMessage(tool, service string) string {
 	return fmt.Sprintf("Tool %q isn't allowed on service %q. An admin controls which tools this service allows in Agent Vault.", tool, service)
 }
@@ -134,11 +158,13 @@ func unlistedToolMessage(tool, service string) string {
 func unlistedToolRefusal(svc *resolvedService, tool string, messages []jsonrpcMessage, batch, streamable bool) *mcpToolRefusal {
 	reason := unlistedToolMessage(tool, svc.name)
 	responses := make([]jsonrpcErrorResponse, 0, len(messages))
+	// Without the refused tool's name, so a long name in a long batch is not copied into every answer.
+	batchRefused := fmt.Sprintf("This batch was refused because it calls a tool that isn't allowed on service %q. An admin controls which tools this service allows in Agent Vault.", svc.name)
 	for _, message := range messages {
 		if message.id == nil {
 			continue
 		}
-		msg := fmt.Sprintf("This batch was refused because it calls tool %q, which isn't allowed on service %q. An admin controls which tools this service allows in Agent Vault.", tool, svc.name)
+		msg := batchRefused
 		if message.Method == mcpMethodToolsCall && !svc.allowedTools[message.Tool] {
 			msg = unlistedToolMessage(message.Tool, svc.name)
 		}
@@ -167,9 +193,16 @@ func unlistedToolRefusal(svc *resolvedService, tool string, messages []jsonrpcMe
 // With no id to answer, a JSON-RPC error alone would match no pending call, so the status carries the
 // failure for any client.
 func unreadableToolsRequest(service string) *mcpToolRefusal {
-	reason := fmt.Sprintf("Agent Vault couldn't read this request to check which tools it calls, so it was refused. Service %q only allows some tools, so requests to it that carry a body must be POSTs of uncompressed JSON (Content-Type: application/json).", service)
+	return toolsRequestRefusal(http.StatusBadRequest, fmt.Sprintf("Agent Vault couldn't read this request to check which tools it calls, so it was refused. Service %q only allows some tools, so requests to it that carry a body must be uncompressed POSTs, and a JSON body must be valid JSON-RPC.", service))
+}
+
+func oversizedToolsRequest(service string) *mcpToolRefusal {
+	return toolsRequestRefusal(http.StatusRequestEntityTooLarge, fmt.Sprintf("Agent Vault refused this request because its body is larger than the %d MiB it can check against the tools service %q allows.", maxToolsAllowlistBody>>20, service))
+}
+
+func toolsRequestRefusal(status int, reason string) *mcpToolRefusal {
 	return &mcpToolRefusal{
-		status: http.StatusBadRequest,
+		status: status,
 		body:   marshalJSONRPC(newJSONRPCError(nil, jsonrpcInvalidRequest, reason)),
 		reason: reason,
 	}
@@ -245,8 +278,9 @@ func hideUnlistedToolsInJSON(resp *http.Response, allowed map[string]bool) {
 
 // Returns the message, or batch of messages, with unlisted tools removed, and whether anything was.
 func filterToolsListJSON(data []byte, allowed map[string]bool) ([]byte, bool) {
-	// Most responses are not a tools/list result, and this spares them a full decode.
-	if !bytes.Contains(data, []byte(`"tools"`)) {
+	// Most responses are not a tools/list result, and this spares them a full decode. The key can only be
+	// spelled another way with a \u escape, so a body holding one is decoded too.
+	if !bytes.Contains(data, []byte(`"tools"`)) && !bytes.Contains(data, []byte(`\u`)) {
 		return nil, false
 	}
 	trimmed := bytes.TrimSpace(data)
@@ -325,6 +359,8 @@ type sseToolsFilter struct {
 	passthrough bool
 	// The previous read stopped part way through a line longer than the reader's buffer.
 	midLine bool
+	// The previous line ended in a CR that was the last byte read, so an LF read next belongs to that line.
+	afterCR bool
 	err     error
 }
 
@@ -341,12 +377,18 @@ func (f *sseToolsFilter) Read(p []byte) (int, error) {
 }
 
 func (f *sseToolsFilter) fill() {
-	line, err := f.src.ReadSlice('\n')
-	startsLine := !f.midLine
+	line, err := readSSELine(f.src)
+	tailOfCRLF := f.afterCR && len(line) == 1 && line[0] == '\n'
+	startsLine := !f.midLine && !tailOfCRLF
 	endsEvent := startsLine && isBlankSSELine(line)
 	f.midLine = err == bufio.ErrBufferFull
+	f.afterCR = err == nil && len(line) > 0 && line[len(line)-1] == '\r'
 
 	switch {
+	case tailOfCRLF && len(f.event) == 0:
+		f.out = append([]byte(nil), line...)
+	case tailOfCRLF:
+		f.event = append(f.event, line...)
 	case f.passthrough:
 		f.out = append([]byte(nil), line...)
 		if endsEvent {
@@ -373,6 +415,54 @@ func (f *sseToolsFilter) fill() {
 	}
 }
 
+// Reads up to the end of a line, which in SSE is an LF, a CRLF, or a bare CR. A CR at the end of what has
+// arrived ends the line at once rather than waiting to see whether an LF follows, so an event is never held
+// back; an LF read next comes back alone, as the tail of that line. err is bufio.ErrBufferFull when the line
+// is longer than the reader's buffer. The line is only valid until the next read, as with ReadSlice.
+func readSSELine(r *bufio.Reader) ([]byte, error) {
+	n, scanned := 1, 0
+	for {
+		buf, err := r.Peek(n)
+		if buffered := r.Buffered(); buffered > len(buf) {
+			buf, _ = r.Peek(buffered)
+		}
+		if end := sseLineEnd(buf[scanned:]); end > 0 {
+			_, _ = r.Discard(scanned + end)
+			return buf[:scanned+end], nil
+		}
+		if err != nil {
+			_, _ = r.Discard(len(buf))
+			return buf, err
+		}
+		n, scanned = len(buf)+1, len(buf)
+	}
+}
+
+// The length of the first line in data, line ending included, or 0 when data holds no line ending.
+func sseLineEnd(data []byte) int {
+	i := bytes.IndexAny(data, "\r\n")
+	if i < 0 {
+		return 0
+	}
+	if data[i] == '\r' && i+1 < len(data) && data[i+1] == '\n' {
+		return i + 2
+	}
+	return i + 1
+}
+
+func splitSSELines(event []byte) [][]byte {
+	var lines [][]byte
+	for len(event) > 0 {
+		end := sseLineEnd(event)
+		if end == 0 {
+			end = len(event)
+		}
+		lines = append(lines, event[:end])
+		event = event[end:]
+	}
+	return lines
+}
+
 func isBlankSSELine(line []byte) bool {
 	return len(line) > 0 && len(bytes.TrimRight(line, "\r\n")) == 0
 }
@@ -380,7 +470,7 @@ func isBlankSSELine(line []byte) bool {
 // An event whose data is a tools/list result is rebuilt with the filtered data on one data line where the
 // first one was; every other line keeps its place. Any other event is returned as it came.
 func rewriteSSEEvent(event []byte, allowed map[string]bool) []byte {
-	lines := bytes.SplitAfter(event, []byte("\n"))
+	lines := splitSSELines(event)
 	var data [][]byte
 	for _, line := range lines {
 		if value, ok := sseDataValue(line); ok {

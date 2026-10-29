@@ -71,10 +71,9 @@ func inspectMCPRequest(req *http.Request) *mcpDetail {
 	return parseMCPBody(body)
 }
 
-// Reads a JSON-RPC POST body into memory, up to limit bytes or whole when limit is negative, so it can be
-// parsed and sent again on an OAuth retry. applicable is false when the request is not one the proxy buffers,
-// and whole is false when the body could not be held in full. Whatever is read is put back so the upstream
-// gets the same bytes.
+// Reads a JSON-RPC POST body into memory, up to limit bytes, so it can be parsed and sent again on an OAuth
+// retry. applicable is false when the request is not one the proxy buffers, and whole is false when the body
+// could not be held in full. Whatever is read is put back so the upstream gets the same bytes.
 func bufferMCPRequest(req *http.Request, limit int64) (body []byte, applicable, whole bool) {
 	if !strings.EqualFold(req.Method, http.MethodPost) {
 		return nil, false, false
@@ -83,18 +82,25 @@ func bufferMCPRequest(req *http.Request, limit int64) (body []byte, applicable, 
 	if err != nil || mediaType != "application/json" {
 		return nil, false, false
 	}
-	if req.Header.Get("Content-Encoding") != "" || (limit >= 0 && req.ContentLength > limit) {
-		return nil, true, false
+	body, whole = bufferRequestBody(req, limit)
+	return body, true, whole
+}
+
+// Reads any request body into memory, up to limit bytes and whatever its type. whole is false when the body
+// is compressed or could not be held in full.
+func bufferRequestBody(req *http.Request, limit int64) (body []byte, whole bool) {
+	if req.Header.Get("Content-Encoding") != "" || req.ContentLength > limit {
+		return nil, false
 	}
 	if req.Body == nil || req.Body == http.NoBody {
-		return nil, true, true
+		return nil, true
 	}
 
 	original := req.Body
 	var rest io.ReadCloser
 	if body, rest, whole = readBounded(original, limit); !whole {
 		req.Body = rest
-		return nil, true, false
+		return nil, false
 	}
 	_ = original.Close()
 	if len(body) == 0 {
@@ -102,23 +108,18 @@ func bufferMCPRequest(req *http.Request, limit int64) (body []byte, applicable, 
 	} else {
 		req.Body = &bufferedBody{Reader: bytes.NewReader(body), data: body}
 	}
-	return body, true, true
+	return body, true
 }
 
-// Reads rc whole, or up to limit bytes when limit is not negative. When it cannot, whole is false and rest
-// gives back what was read followed by the rest of rc, or by the error the read failed with, so whatever
-// reads it next meets the same bytes and a truncated body is refused or fails exactly as it would have
-// without this read.
+// Reads rc up to limit bytes. When it cannot, whole is false and rest gives back what was read followed by
+// the rest of rc, or by the error the read failed with, so whatever reads it next meets the same bytes and a
+// truncated body is refused or fails exactly as it would have without this read.
 func readBounded(rc io.ReadCloser, limit int64) (body []byte, rest io.ReadCloser, whole bool) {
-	var r io.Reader = rc
-	if limit >= 0 {
-		r = io.LimitReader(rc, limit+1)
-	}
-	body, err := io.ReadAll(r)
+	body, err := io.ReadAll(io.LimitReader(rc, limit+1))
 	if err != nil {
 		return nil, rechainedBody{Reader: io.MultiReader(bytes.NewReader(body), erroringReader{err}), Closer: rc}, false
 	}
-	if limit >= 0 && int64(len(body)) > limit {
+	if int64(len(body)) > limit {
 		return nil, rechainedBody{Reader: io.MultiReader(bytes.NewReader(body), rc), Closer: rc}, false
 	}
 	return body, nil, true
