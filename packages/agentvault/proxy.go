@@ -369,7 +369,10 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	decision := decisionPassthrough
 	status := 0
 	body := ""
+	var refusal *mcpToolRefusal
 	switch {
+	case errors.As(err, &refusal):
+		decision, status = decisionBlocked, refusal.status
 	case errors.Is(err, errHostBlocked), errors.Is(err, errPolicyBlocked):
 		decision, status, body = decisionBlocked, http.StatusForbidden, err.Error()
 	case errors.Is(err, errBodyUnreadable):
@@ -442,6 +445,10 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 		})
 	}
 
+	if refusal != nil {
+		refusal.write(w)
+		return
+	}
 	if err != nil {
 		http.Error(w, body, status)
 		return
@@ -552,13 +559,18 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 
 	if matched != nil {
 		// Before anything is injected, so the names it records can only have come from the agent. Parsed
-		// only for a session log; with logs off the body is still buffered for an OAuth credential, so a
-		// rejected token's request can be sent again.
-		if matched.kind == serviceKindMCP {
+		// only for a session log or a tool allowlist; with neither the body is still buffered for an OAuth
+		// credential, so a rejected token's request can be sent again.
+		if matched.kind == serviceKindMCP && matched.allowedTools != nil {
+			var refusal *mcpToolRefusal
+			if outcome.mcp, refusal = checkToolAllowlist(matched, req, grant != nil); refusal != nil {
+				return nil, matched, outcome, refusal
+			}
+		} else if matched.kind == serviceKindMCP {
 			if grant != nil {
 				outcome.mcp = inspectMCPRequest(req)
 			} else if matched.credential.refreshable {
-				bufferMCPRequest(req)
+				bufferMCPRequest(req, maxMCPInspectBody)
 			}
 		}
 
@@ -601,6 +613,16 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 				)
 			}
 		}
+		if matched.kind == serviceKindMCP && matched.allowedTools != nil {
+			// Go then asks for gzip itself and hands back the response decompressed, so a tools/list result
+			// can be filtered whatever encodings the agent accepts.
+			req.Header.Del("Accept-Encoding")
+			// The refusal names no tool: after the substitution the body can carry a real value.
+			if containsSurface(outcome.substituted, surfaceBody) && !toolsAllowedAfterSubstitution(matched, req) {
+				return nil, matched, outcome, fmt.Errorf(
+					"service %q does not allow the tool this request substitutes to: %w", matched.name, errPolicyBlocked)
+			}
+		}
 	}
 
 	// Captured before the round trip, which consumes the body.
@@ -628,6 +650,9 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 		if err != nil {
 			return nil, matched, outcome, err
 		}
+	}
+	if matched != nil && matched.kind == serviceKindMCP && matched.allowedTools != nil {
+		hideUnlistedTools(resp, matched.allowedTools)
 	}
 	return resp, matched, outcome, nil
 }
