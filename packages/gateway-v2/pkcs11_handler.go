@@ -54,7 +54,10 @@ type pkcs11ErrorBody struct {
 	Message string          `json:"message"`
 }
 
-const pkcs11RequestDeadline = 30 * time.Second
+const (
+	pkcs11RequestDeadline = 30 * time.Second
+	pkcs11BodyBudgetWait  = 10 * time.Second
+)
 
 func servePkcs11OverTLS(ctx context.Context, conn *tls.Conn, reader *bufio.Reader, module Pkcs11Module, bodyBudget *semaphore.Weighted) error {
 	_ = conn.SetDeadline(time.Now().Add(pkcs11RequestDeadline))
@@ -86,10 +89,8 @@ func servePkcs11OverTLS(ctx context.Context, conn *tls.Conn, reader *bufio.Reade
 
 	log.Debug().Str("path", req.URL.Path).Int64("contentLength", req.ContentLength).Msg("pkcs11: request received")
 
-	reqCtx, cancel := context.WithTimeout(ctx, pkcs11RequestDeadline)
-	defer cancel()
 	rw := newBufferedResponseWriter()
-	servePkcs11Mux(module, bodyBudget).ServeHTTP(rw, req.WithContext(reqCtx))
+	servePkcs11Mux(module, bodyBudget).ServeHTTP(rw, req.WithContext(ctx))
 	if err := rw.writeTo(conn); err != nil {
 		return fmt.Errorf("failed to write response: %w", err)
 	}
@@ -227,7 +228,10 @@ func wrapPkcs11(module Pkcs11Module, bodyBudget *semaphore.Weighted, fn pkcs11Ha
 		if bodyWeight <= 0 {
 			bodyWeight = maxPkcs11RequestBodyBytes
 		}
-		if err := bodyBudget.Acquire(r.Context(), bodyWeight); err != nil {
+		budgetCtx, cancelBudgetWait := context.WithTimeout(r.Context(), pkcs11BodyBudgetWait)
+		err := bodyBudget.Acquire(budgetCtx, bodyWeight)
+		cancelBudgetWait()
+		if err != nil {
 			log.Warn().Int64("contentLength", r.ContentLength).Msg("pkcs11: too many requests in flight")
 			writeErrorResponse(w, http.StatusServiceUnavailable, Pkcs11ErrDriverUnavailable, "The gateway is busy with other HSM requests")
 			return
