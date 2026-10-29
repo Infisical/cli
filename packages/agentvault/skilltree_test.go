@@ -638,6 +638,84 @@ func TestInstallSkillsRewritesAFolderCutShort(t *testing.T) {
 	}
 }
 
+func TestInstallSkillsRepairsAFileAnAgentChanged(t *testing.T) {
+	dir := t.TempDir()
+	skill := sessionSkill("code-review",
+		skillFile("SKILL.md", "0644", "x"),
+		skillFile("scripts/run.sh", "0755", "y"),
+		skillFile("scripts/lint.sh", "0755", "z"))
+	install(t, InstallOptions{Dir: dir}, skill)
+	dest := filepath.Join(dir, "code-review")
+
+	if err := os.Remove(filepath.Join(dest, "scripts", "run.sh")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dest, "SKILL.md"), []byte("tampered"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(filepath.Join(dest, "scripts", "lint.sh"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if result := install(t, InstallOptions{Dir: dir}, skill); result.Installed != 1 {
+		t.Fatalf("result %+v", result)
+	}
+	if got := readFile(t, filepath.Join(dest, "scripts", "run.sh")); got != "y" {
+		t.Fatalf("run.sh %q", got)
+	}
+	if got := readFile(t, filepath.Join(dest, "SKILL.md")); got != "x" {
+		t.Fatalf("SKILL.md %q", got)
+	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(filepath.Join(dest, "scripts", "lint.sh"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o755 {
+			t.Fatalf("lint.sh mode %v", info.Mode().Perm())
+		}
+	}
+}
+
+func TestInstallSkillsKeepsAFileAnAgentAdded(t *testing.T) {
+	dir := t.TempDir()
+	skill := sessionSkill("code-review", skillFile("SKILL.md", "0644", "x"))
+	install(t, InstallOptions{Dir: dir}, skill)
+	notes := filepath.Join(dir, "code-review", "notes.md")
+	if err := os.WriteFile(notes, []byte("mine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	install(t, InstallOptions{Dir: dir}, skill)
+	if got := readFile(t, notes); got != "mine" {
+		t.Fatalf("notes.md %q", got)
+	}
+}
+
+func TestInstallSkillsWithoutALockWhenTheDataFolderIsReadOnly(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("a read-only folder does not stop this user from writing")
+	}
+	readOnly := t.TempDir()
+	if err := os.Chmod(readOnly, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(readOnly, 0o700) })
+	old := skillsLockDir
+	skillsLockDir = func() (string, error) { return filepath.Join(readOnly, "agent-vault"), nil }
+	t.Cleanup(func() { skillsLockDir = old })
+
+	dir := t.TempDir()
+	if result := install(t, InstallOptions{Dir: dir}, sessionSkill("code-review", skillFile("SKILL.md", "0644", "x"))); result.Installed != 1 {
+		t.Fatalf("result %+v", result)
+	}
+	if got := readFile(t, filepath.Join(dir, "code-review", "SKILL.md")); got != "x" {
+		t.Fatalf("SKILL.md %q", got)
+	}
+}
+
 func TestConcurrentInstallsLeaveEverySkillWhole(t *testing.T) {
 	home := isolateHome(t)
 	mkdir(t, filepath.Join(home, ".claude"))

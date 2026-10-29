@@ -1,6 +1,7 @@
 package agentvault
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -10,12 +11,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/gofrs/flock"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -84,10 +87,7 @@ func InstallSkills(ctx context.Context, skills []api.AgentVaultSessionSkill, opt
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return result, fmt.Errorf("failed to create %s: %w", dir, err)
 	}
-	unlock, err := lockSkillsDir(ctx, dir)
-	if err != nil {
-		return result, err
-	}
+	unlock := lockSkillsDir(ctx, dir)
 	defer unlock()
 
 	var targets []linkTarget
@@ -184,14 +184,16 @@ func (r *InstallResult) prepareLinks(canonical string, forceClaude bool) []linkT
 
 // lockSkillsDir keeps two runs from writing one install directory at once. The lock lives in the data
 // directory, not beside the skills, so nothing extra appears in a folder agents read. A ctx that ends first
-// returns a no-op unlock, and the caller's ctx check names what was left unwritten.
-func lockSkillsDir(ctx context.Context, dir string) (func(), error) {
+// returns a no-op unlock, and the caller's ctx check names what was left unwritten. A data directory that can't
+// hold the lock, such as one on a read-only root file system, installs without it rather than not at all.
+func lockSkillsDir(ctx context.Context, dir string) func() {
 	lockDir, err := skillsLockDir()
-	if err != nil {
-		return nil, err
+	if err == nil {
+		err = os.MkdirAll(lockDir, 0o700)
 	}
-	if err := os.MkdirAll(lockDir, 0o700); err != nil {
-		return nil, fmt.Errorf("failed to create %s: %w", lockDir, err)
+	if err != nil {
+		log.Debug().Err(err).Msg("agent-vault: installing skills without a lock")
+		return func() {}
 	}
 	key := dir
 	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
@@ -202,13 +204,14 @@ func lockSkillsDir(ctx context.Context, dir string) (func(), error) {
 	locked, err := fl.TryLockContext(ctx, 50*time.Millisecond)
 	switch {
 	case locked:
-		return func() { _ = fl.Unlock() }, nil
+		return func() { _ = fl.Unlock() }
 	case ctx.Err() != nil:
 		_ = fl.Close()
-		return func() {}, nil
+		return func() {}
 	default:
 		_ = fl.Close()
-		return nil, fmt.Errorf("failed to lock %s: %w", dir, err)
+		log.Debug().Err(err).Msg("agent-vault: installing skills without a lock")
+		return func() {}
 	}
 }
 
@@ -221,7 +224,7 @@ func installSkillFolder(dir string, skill api.AgentVaultSessionSkill) error {
 	if err != nil {
 		return err
 	}
-	if owned && skillFolderIsCurrent(dest, skill.Sha256) {
+	if owned && skillFolderIsCurrent(dest, skill) {
 		return nil
 	}
 	if err := os.RemoveAll(dest); err != nil {
@@ -256,7 +259,7 @@ func linkSkill(symlink func(oldname, newname string) error, installDir, agentSki
 			return notInstalledByInfisical(agentSkillsDir, skill.Name, info)
 		}
 	case info.IsDir() && hasSkillMarker(dest):
-		if skillFolderIsCurrent(dest, skill.Sha256) {
+		if skillFolderIsCurrent(dest, skill) {
 			return nil
 		}
 	default:
@@ -315,18 +318,37 @@ func hasSkillMarker(folder string) bool {
 }
 
 // A folder already holding this version is left alone, so an agent reading it is not disturbed. The marker's
-// checksum is only written once every file is, so a folder cut short is rewritten.
-func skillFolderIsCurrent(folder, sha256 string) bool {
+// checksum is only written once every file is, so a folder cut short is rewritten, and each file is compared
+// too, so one an agent deleted or changed is put back. Files an agent added are not the skill's and stay.
+func skillFolderIsCurrent(folder string, skill api.AgentVaultSessionSkill) bool {
 	data, err := os.ReadFile(filepath.Join(folder, SkillMarkerFile))
 	if err != nil {
 		return false
 	}
 	var marker skillMarker
-	if json.Unmarshal(data, &marker) != nil || marker.Sha256 == "" || marker.Sha256 != sha256 {
+	if json.Unmarshal(data, &marker) != nil || marker.Sha256 == "" || marker.Sha256 != skill.Sha256 {
 		return false
 	}
-	info, err := os.Lstat(filepath.Join(folder, "SKILL.md"))
-	return err == nil && info.Mode().IsRegular()
+	for _, file := range skill.Files {
+		path := filepath.Join(folder, filepath.FromSlash(file.Path))
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() {
+			return false
+		}
+		// Windows keeps no executable bit, so the mode can only be compared elsewhere.
+		if runtime.GOOS != "windows" && info.Mode().Perm() != skillFileMode(file.Mode) {
+			return false
+		}
+		content, err := base64.StdEncoding.DecodeString(file.ContentBase64)
+		if err != nil || int64(len(content)) != info.Size() {
+			return false
+		}
+		onDisk, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(onDisk, content) {
+			return false
+		}
+	}
+	return true
 }
 
 // On a case-insensitive file system the entry can exist under another spelling, so the message names it as it
