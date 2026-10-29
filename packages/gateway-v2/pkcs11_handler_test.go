@@ -2,6 +2,7 @@ package gatewayv2
 
 import (
 	"bytes"
+	"context"
 	"crypto"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseKeyRef(t *testing.T) {
@@ -53,13 +55,14 @@ func (m noopPkcs11Module) Sign(string, []byte, KeyRef, string, []byte, bool, cry
 	return SignResult{}, nil
 }
 func (noopPkcs11Module) FindPrivateKeys(string, []byte, string) ([]KeyInfo, error) { return nil, nil }
+func (noopPkcs11Module) SupportsMlDsa() bool                                       { return false }
 func (noopPkcs11Module) Finalize() error                                           { return nil }
 
 func TestBadRequestKeepsItsMessage(t *testing.T) {
 	body := strings.NewReader(`{"slotLabel":"slot","pin":"1234","params":{"keyLabel":"release-key","mechanism":"CKM_SHA256_RSA_PKCS","data":""}}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/sign", body)
 	rec := httptest.NewRecorder()
-	servePkcs11Mux(noopPkcs11Module{}).ServeHTTP(rec, req)
+	servePkcs11Mux(noopPkcs11Module{}, newPkcs11BodyBudget()).ServeHTTP(rec, req)
 
 	var resp pkcs11ErrorResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
@@ -75,7 +78,7 @@ func TestSignRejectsMalformedPublicKeyBeforeSigning(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/sign", body)
 	rec := httptest.NewRecorder()
 	signCalled := false
-	servePkcs11Mux(noopPkcs11Module{signCalled: &signCalled}).ServeHTTP(rec, req)
+	servePkcs11Mux(noopPkcs11Module{signCalled: &signCalled}, newPkcs11BodyBudget()).ServeHTTP(rec, req)
 
 	var resp pkcs11ErrorResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
@@ -86,5 +89,29 @@ func TestSignRejectsMalformedPublicKeyBeforeSigning(t *testing.T) {
 	}
 	if rec.Code != http.StatusBadRequest || resp.Error.Code != Pkcs11ErrBadRequest {
 		t.Fatalf("unexpected response %d %+v", rec.Code, resp.Error)
+	}
+}
+
+func TestRequestsWaitForTheBodyBudget(t *testing.T) {
+	budget := newPkcs11BodyBudget()
+	if !budget.TryAcquire(maxPkcs11InFlightBodyBytes) {
+		t.Fatal("the budget must start empty")
+	}
+	body := `{"slotLabel":"slot","pin":"1234","params":{"keyLabel":"release-key","mechanism":"CKM_SHA256_RSA_PKCS","data":"ZGF0YQ=="}}`
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequest(http.MethodPost, "/v1/sign", strings.NewReader(body)).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	signCalled := false
+	servePkcs11Mux(noopPkcs11Module{signCalled: &signCalled}, budget).ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable || signCalled {
+		t.Fatalf("a request over the in-flight budget must be refused before signing, got %d (signed=%v)", rec.Code, signCalled)
+	}
+
+	budget.Release(maxPkcs11InFlightBodyBytes)
+	rec = httptest.NewRecorder()
+	servePkcs11Mux(noopPkcs11Module{signCalled: &signCalled}, budget).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/sign", strings.NewReader(body)))
+	if rec.Code != http.StatusOK || !signCalled {
+		t.Fatalf("a request within the budget must be served, got %d", rec.Code)
 	}
 }
