@@ -17,8 +17,10 @@ var (
 	stdinIsTerminal = func() bool {
 		return isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())
 	}
+	// The prompt goes to stderr, like every other message, so `-o json | jq` gets only the result
+	// and the person at the terminal still sees the question.
 	promptForConfirmation = func(label string) (string, error) {
-		prompt := promptui.Prompt{Label: label}
+		prompt := promptui.Prompt{Label: label, Stdout: os.Stderr}
 		return prompt.Run()
 	}
 )
@@ -41,6 +43,9 @@ type destructiveAction struct {
 	Expected    string // what the user types to confirm: "qa", "3"
 	Label       string // how the prompt names Expected: "the environment slug", "the number of secrets"
 	Description string // "environment qa and all of its secrets"
+	// ProjectID is set when the project came from INFISICAL_PROJECT_ID or the workspace file rather
+	// than a flag. The suggested rerun passes it with --projectId, so it can't land on another project.
+	ProjectID string
 }
 
 // addConfirmFlags gives a destructive command -y/--yes. Pair it with confirmDestructive.
@@ -56,7 +61,7 @@ func confirmDestructive(cmd *cobra.Command, args []string, action destructiveAct
 		return nil
 	}
 	if !stdinIsTerminal() {
-		return errConfirmationRequired(action, rerunWithYes(cmd, args))
+		return errConfirmationRequired(action, rerunWithYes(cmd, args, action.ProjectID))
 	}
 
 	util.PrintlnStderr(fmt.Sprintf("This deletes %s.", util.SanitizeDisplay(action.Description)))
@@ -70,8 +75,8 @@ func confirmDestructive(cmd *cobra.Command, args []string, action destructiveAct
 // rerunWithYes rebuilds the command the user ran, with --yes added. It uses the full command path, so
 // a command run as `sm` is suggested as `secrets-manager`. Positional arguments and identifier flags
 // keep their values when they are safe identifiers; every other value becomes a placeholder, and
-// credential flags are left out.
-func rerunWithYes(cmd *cobra.Command, args []string) string {
+// credential flags are left out. pinnedProjectID is added as --projectId.
+func rerunWithYes(cmd *cobra.Command, args []string, pinnedProjectID string) string {
 	parts := []string{cmd.CommandPath()}
 	for _, arg := range args {
 		if name, _, isAssignment := strings.Cut(arg, "="); isAssignment {
@@ -108,6 +113,9 @@ func rerunWithYes(cmd *cobra.Command, args []string) string {
 		}
 	})
 
+	if pinnedProjectID != "" {
+		parts = append(parts, "--projectId "+util.SuggestedValue(pinnedProjectID, "projectId"))
+	}
 	return strings.Join(append(parts, "--yes"), " ")
 }
 
@@ -121,6 +129,7 @@ func requireConfirmation(cmd *cobra.Command, describe func(cmd *cobra.Command, a
 		if action, ok := describe(cmd, args); ok {
 			if err := confirmDestructive(cmd, args, action); err != nil {
 				exitWithError(cmd, err)
+				return
 			}
 		}
 		run(cmd, args)

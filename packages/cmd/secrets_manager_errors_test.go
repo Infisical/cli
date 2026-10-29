@@ -17,8 +17,8 @@ const testProjectID = "6f1c2a3e-8b4d-4c1a-9e2f-3a5b7c9d1e0f"
 
 var testScope = errorScope{ProjectID: testProjectID, ProjectName: "payments-api", Environment: "stagng", SecretPath: "/app"}
 
-// Commands later PRs in the stack add. A suggestion may name one before it ships, because nothing
-// calls these errors until then. Remove an entry when its command lands; the test fails if you forget.
+// Commands that don't exist yet. Only errors with no callers suggest them, so no user can see one.
+// Remove an entry when its command is added; the test fails if you forget.
 var notYetShippedCommands = []string{
 	"infisical secrets-manager environments get",
 	"infisical secrets-manager environments delete",
@@ -176,6 +176,28 @@ func TestUnsafeScopeValuesBecomePlaceholders(t *testing.T) {
 	}
 	if got := errFolderNotFound("qa\nrm -rf /", hostile).Next[0].Command; strings.ContainsAny(got, "\n;$`| ") && !strings.Contains(got, "<path>") {
 		t.Errorf("unsafe characters reached a suggestion: %q", got)
+	}
+}
+
+// A value the user typed is only named in a message when it is a safe identifier, so a credential
+// pasted in the wrong place never ends up in a message, a log, or an agent's transcript.
+func TestMessagesNeverRepeatUnsafeInput(t *testing.T) {
+	pasted := "API_KEY=st.abc.def.ghi"
+	scope := errorScope{ProjectID: pasted, Environment: pasted, SecretPath: pasted}
+	for _, err := range []*util.CLIError{
+		errEnvironmentNotFound(pasted, scope, nil),
+		errSecretExists([]string{"OK", pasted}, scope),
+		errSecretNotFound([]string{pasted}, scope),
+		errFolderNotFound(pasted, scope),
+		errProjectNotFound(scope, nil),
+		errConfirmationDeclined(destructiveAction{Label: "the secret name", Expected: pasted}),
+	} {
+		if strings.Contains(err.Message, "st.abc") || strings.Contains(err.Message, pasted) {
+			t.Errorf("%s repeated the input: %q", err.Code, err.Message)
+		}
+	}
+	if got := errSecretExists([]string{"OK", pasted}, scope).Message; got != `Secrets "OK", <name> already exist. Nothing was written.` {
+		t.Errorf("safe names should still be quoted: %q", got)
 	}
 }
 

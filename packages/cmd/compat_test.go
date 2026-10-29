@@ -3,8 +3,10 @@ package cmd
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -35,22 +37,34 @@ func flagSurface(cmd *cobra.Command) map[string]string {
 	return flags
 }
 
-// currentCommandSurface skips hidden commands: they are not public, and some are platform-specific
-// (the Linux sandbox supervisor), so recording them would make the snapshot differ per OS. A command
-// hidden after it was recorded stays in the snapshot and is still checked.
+// currentCommandSurface records every spelling of every path, aliases included at each level
+// (`infisical sm project list`), so removing an alias fails like removing a command. It skips:
+//   - hidden commands: they are not public, and some are platform-specific (the Linux sandbox
+//     supervisor). A command hidden after it was recorded stays in the snapshot and is still checked;
+//   - cobra's default `help` command, which RootCmd.Execute adds to the shared root, so whether it
+//     exists depends on which tests ran first.
 func currentCommandSurface() commandSurface {
 	surface := commandSurface{}
-	var walk func(*cobra.Command)
-	walk = func(cmd *cobra.Command) {
-		if cmd.Hidden {
+	var walk func(cmd *cobra.Command, paths []string)
+	walk = func(cmd *cobra.Command, paths []string) {
+		if cmd.Hidden || (cmd.Name() == "help" && cmd.Parent() == RootCmd) {
 			return
 		}
-		surface[cmd.CommandPath()] = flagSurface(cmd)
+		flags := flagSurface(cmd)
+		for _, path := range paths {
+			surface[path] = flags
+		}
 		for _, child := range cmd.Commands() {
-			walk(child)
+			var childPaths []string
+			for _, path := range paths {
+				for _, name := range append([]string{child.Name()}, child.Aliases...) {
+					childPaths = append(childPaths, path+" "+name)
+				}
+			}
+			walk(child, childPaths)
 		}
 	}
-	walk(RootCmd)
+	walk(RootCmd, []string{RootCmd.Name()})
 	return surface
 }
 
@@ -64,9 +78,8 @@ func resolveCommandPath(path string) *cobra.Command {
 	return cmd
 }
 
-// The snapshot only grows: -update-command-surface adds new paths and flags but never removes or
-// changes a recorded one, so a command line that worked once keeps working.
-func TestCommandSurfaceIsBackwardsCompatible(t *testing.T) {
+func readCommandSurface(t *testing.T) commandSurface {
+	t.Helper()
 	recorded := commandSurface{}
 	data, err := os.ReadFile(commandSurfaceFile)
 	if err != nil && !(os.IsNotExist(err) && *updateCommandSurface) {
@@ -77,21 +90,37 @@ func TestCommandSurfaceIsBackwardsCompatible(t *testing.T) {
 			t.Fatalf("parsing %s: %v", commandSurfaceFile, err)
 		}
 	}
+	return recorded
+}
 
+// incompatibilities lists every recorded command line that no longer works as it did.
+func incompatibilities(recorded commandSurface) []string {
+	var problems []string
 	for path, flags := range recorded {
 		cmd := resolveCommandPath(path)
 		if cmd == nil {
-			t.Errorf("`%s` no longer resolves. Commands are never removed or renamed; hide them instead (see CLI.md)", path)
+			problems = append(problems, fmt.Sprintf("`%s` no longer resolves. Commands and aliases are never removed or renamed; hide them instead (see CLI.md)", path))
 			continue
 		}
 		current := flagSurface(cmd)
 		for name, want := range flags {
 			if got, ok := current[name]; !ok {
-				t.Errorf("`%s --%s` was removed. Flags are never removed or renamed; hide them instead (see CLI.md)", path, name)
+				problems = append(problems, fmt.Sprintf("`%s --%s` was removed. Flags are never removed or renamed; hide them instead (see CLI.md)", path, name))
 			} else if got != want {
-				t.Errorf("`%s --%s` changed from %q to %q (shorthand|type|default)", path, name, want, got)
+				problems = append(problems, fmt.Sprintf("`%s --%s` changed from %q to %q (shorthand|type|default)", path, name, want, got))
 			}
 		}
+	}
+	sort.Strings(problems)
+	return problems
+}
+
+// The snapshot only grows: -update-command-surface adds new paths and flags but never removes or
+// changes a recorded one, so a command line that worked once keeps working.
+func TestCommandSurfaceIsBackwardsCompatible(t *testing.T) {
+	recorded := readCommandSurface(t)
+	for _, problem := range incompatibilities(recorded) {
+		t.Error(problem)
 	}
 	if t.Failed() {
 		return
@@ -137,5 +166,34 @@ func TestCommandSurfaceIsBackwardsCompatible(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Logf("recorded %d new commands and flags in %s", added, commandSurfaceFile)
+	}
+}
+
+func TestCommandSurfaceRecordsAliases(t *testing.T) {
+	surface := currentCommandSurface()
+	for _, path := range []string{"infisical av", "infisical av proxy", "infisical sm projects list", "infisical sm project list", "infisical secrets-manager project list"} {
+		if _, ok := surface[path]; !ok {
+			t.Errorf("alias path %q is not part of the surface", path)
+		}
+	}
+
+	agentVault, _, err := RootCmd.Find([]string{"agent-vault"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliases := agentVault.Aliases
+	agentVault.Aliases = nil
+	t.Cleanup(func() { agentVault.Aliases = aliases })
+	if problems := strings.Join(incompatibilities(readCommandSurface(t)), "\n"); !strings.Contains(problems, "`infisical av` no longer resolves") {
+		t.Errorf("removing the av alias should be reported, got:\n%s", problems)
+	}
+}
+
+// RootCmd.Execute (run by other tests in this package) adds cobra's default help command to the
+// shared root. The surface must not depend on whether that happened first.
+func TestCommandSurfaceIgnoresCobraHelp(t *testing.T) {
+	RootCmd.InitDefaultHelpCmd()
+	if _, ok := currentCommandSurface()["infisical help"]; ok {
+		t.Error("cobra's default help command is part of the surface")
 	}
 }

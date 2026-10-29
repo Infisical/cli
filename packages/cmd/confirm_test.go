@@ -154,6 +154,66 @@ func TestConfirmWithoutATerminalSuggestsTheRerun(t *testing.T) {
 	}
 }
 
+// When the project came from INFISICAL_PROJECT_ID or the workspace file, the suggestion pins it, so
+// running it somewhere else can't delete from another project.
+func TestConfirmRerunPinsAnImplicitProject(t *testing.T) {
+	fakeTerminal(t, false, "", nil)
+	cmd := &cobra.Command{Use: "delete"}
+	addConfirmFlags(cmd)
+	action := testDeleteAction
+	action.ProjectID = testProjectID
+	var cliErr *util.CLIError
+	if err := confirmDestructive(cmd, []string{"qa"}, action); !errors.As(err, &cliErr) {
+		t.Fatalf("want a CLIError, got %v", err)
+	}
+	if want := "delete qa --projectId " + testProjectID + " --yes"; cliErr.Next[0].Command != want {
+		t.Errorf("got %s, want %s", cliErr.Next[0].Command, want)
+	}
+}
+
+// requireConfirmation must stop before the wrapped delete whenever the confirmation fails, and run it
+// exactly once when it succeeds.
+func TestRequireConfirmationOnlyRunsTheDeleteWhenConfirmed(t *testing.T) {
+	captureStderr(t)
+	exits := 0
+	oldExit := exitProcess
+	exitProcess = func(int) { exits++ }
+	t.Cleanup(func() { exitProcess = oldExit })
+
+	cases := []struct {
+		name      string
+		terminal  bool
+		answer    string
+		promptErr error
+		flags     []string
+		described bool
+		wantRuns  int
+	}{
+		{"wrong name", true, "qb", nil, nil, true, 0},
+		{"cancelled", true, "qa", promptui.ErrInterrupt, nil, true, 0},
+		{"no terminal", false, "", nil, nil, true, 0},
+		{"--yes=false without a terminal", false, "", nil, []string{"--yes=false"}, true, 0},
+		{"typed the name", true, "qa", nil, nil, true, 1},
+		{"--yes", false, "", nil, []string{"--yes"}, true, 1},
+		{"-y", true, "", errors.New("must not prompt"), []string{"-y"}, true, 1},
+		{"missing input is left to the command", false, "", nil, nil, false, 1},
+	}
+	for _, c := range cases {
+		fakeTerminal(t, c.terminal, c.answer, c.promptErr)
+		exits = 0
+		runs := 0
+		cmd := &cobra.Command{Use: "delete", Run: func(*cobra.Command, []string) { runs++ }}
+		requireConfirmation(cmd, func(*cobra.Command, []string) (destructiveAction, bool) { return testDeleteAction, c.described })
+		if err := cmd.ParseFlags(c.flags); err != nil {
+			t.Fatal(err)
+		}
+		cmd.Run(cmd, []string{"qa"})
+		if runs != c.wantRuns || exits != 1-c.wantRuns {
+			t.Errorf("%s: delete ran %d times and exited %d times, want %d run(s)", c.name, runs, exits, c.wantRuns)
+		}
+	}
+}
+
 // A flag the CLI doesn't know to hold an identifier may hold a secret that looks like one (64 hex
 // characters is a slug). Its value must never be repeated.
 func TestConfirmRerunOnlyRepeatsIdentifierFlags(t *testing.T) {

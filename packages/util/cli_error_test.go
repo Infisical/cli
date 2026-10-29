@@ -52,6 +52,13 @@ func TestSuggestedDomain(t *testing.T) {
 		"https://example.com/$(id)":          "<domain>",
 		"https://example.com/#frag":          "<domain>",
 		"https://example.com/ ; rm -rf /tmp": "<domain>",
+		"https://example.com/;id;true":       "<domain>",
+		"https://example.com/a&&id":          "<domain>",
+		"https://example.com/a|sh":           "<domain>",
+		"https://example.com/a>out":          "<domain>",
+		"https://example.com/(id)":           "<domain>",
+		"https://example.com:8443/api/":      "https://example.com:8443/api/",
+		"https://example.com:99999999":       "<domain>",
 	}
 	for in, want := range cases {
 		if got := SuggestedDomain(in); got != want {

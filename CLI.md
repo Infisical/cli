@@ -52,6 +52,7 @@ With `-o json`, the same error is JSON on stderr:
 - `code` is stable snake_case. Codes are added, never renamed or removed.
 - A suggested command is complete and runnable, and uses the full product name.
 - A suggested command never contains a token or a secret value. Only interpolate values that are valid UUIDs or slugs, and write secret values as `<value>`.
+- The same goes for the message: name something the user typed with `quoted(value, kind)`, which prints `<kind>` for anything that isn't a safe identifier, so a credential pasted in the wrong place never reaches a log.
 - If no command can fix the error, the first sentence says what to do instead.
 - The exit code stays `1`.
 
@@ -84,10 +85,11 @@ With `-o json`, the same error is JSON on stderr:
 - `-y` / `--yes` skips the question, for scripts and agents.
 - Without a terminal and without `--yes`, delete nothing. Fail with code `confirmation_required`, and suggest the same command with `--yes`.
 - `--force` skips a safeguard, such as a soft-delete grace period. It never skips the question.
-- Never fall back to an implicit target (such as the project linked in `.infisical.yaml`) for a destructive command.
-- This applies to every delete under `secrets-manager`, including `secrets delete`, `secrets folders delete` and `dynamic-secrets lease delete`. The legacy top-level copies (`infisical secrets delete`, ...) keep deleting without asking, so existing scripts keep working.
+- A new destructive command never falls back to an implicit target (such as the project linked in `.infisical.yaml`).
+- The existing deletes under `secrets-manager` (`secrets delete`, `secrets folders delete` and `dynamic-secrets lease delete`) also ask, but keep their project fallbacks (`INFISICAL_PROJECT_ID`, then `.infisical.yaml`) for compatibility. Their question names the project and where it came from, and the suggested rerun pins it with `--projectId`. The legacy top-level copies (`infisical secrets delete`, ...) keep deleting without asking, so existing scripts keep working.
+- The question goes to stderr, so `-o json` output stays clean when it's piped.
 
-For a new command, add the flags with `addConfirmFlags(cmd)`, then call `confirmDestructive(cmd, args, destructiveAction{...})` before deleting (`packages/cmd/confirm.go`). For a delete whose builder is shared with a legacy top-level command, add it to `confirmedUnderSecretsManager` in `sm.go` with a function that describes what the arguments delete. The suggested rerun repeats the command under its full name, with the same arguments and flags. Only flags that hold identifiers (`--projectId`, `--env`, `--path`, ...) keep their values, and only when the value is a safe identifier. Any other flag's value becomes a `<placeholder>`, and credential flags are left out. To repeat a new identifier flag, add it to `rerunIdentifierFlags` in `confirm.go`.
+For a new command, add the flags with `addConfirmFlags(cmd)`, then call `confirmDestructive(cmd, args, destructiveAction{...})` before deleting (`packages/cmd/confirm.go`). For a delete whose builder is shared with a legacy top-level command, add it to `confirmedUnderSecretsManager` in `sm.go` with a function that describes what the arguments delete, in which project (`deleteProject`). The suggested rerun repeats the command under its full name, with the same arguments and flags. Only flags that hold identifiers (`--projectId`, `--env`, `--path`, ...) keep their values, and only when the value is a safe identifier. Any other flag's value becomes a `<placeholder>`, and credential flags are left out. To repeat a new identifier flag, add it to `rerunIdentifierFlags` in `confirm.go`.
 
 ## Backwards compatibility
 

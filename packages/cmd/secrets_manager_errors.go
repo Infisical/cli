@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/api"
@@ -50,7 +51,7 @@ func (s errorScope) projectLabel() string {
 		return s.ProjectName
 	}
 	if s.ProjectID != "" {
-		return s.ProjectID
+		return util.SuggestedValue(s.ProjectID, "project-id")
 	}
 	return "the selected project"
 }
@@ -88,12 +89,22 @@ func firstSecretName(names []string) string {
 	return util.SuggestedValue(names[0], "name")
 }
 
-func listOf(names []string) string {
-	quoted := make([]string, len(names))
-	for i, name := range names {
-		quoted[i] = fmt.Sprintf("%q", name)
+// quoted is how a message names something the user typed: quoted when it is a safe identifier, and
+// <kind> otherwise, so a credential pasted in the wrong place never reaches a message, a log, or an
+// agent's transcript.
+func quoted(value, kind string) string {
+	if shown := util.SuggestedValue(value, kind); shown != value {
+		return shown
 	}
-	return strings.Join(quoted, ", ")
+	return strconv.Quote(value)
+}
+
+func listOf(names []string) string {
+	shown := make([]string, len(names))
+	for i, name := range names {
+		shown[i] = quoted(name, "name")
+	}
+	return strings.Join(shown, ", ")
 }
 
 func errAuthRequired(cause error) *util.CLIError {
@@ -130,7 +141,7 @@ func errProjectTypeNotSupported(projectName, projectType string) *util.CLIError 
 
 func errEnvironmentNotFound(slug string, scope errorScope, cause error) *util.CLIError {
 	return &util.CLIError{Code: errCodeEnvironmentNotFound, Cause: cause,
-		Message: fmt.Sprintf("Environment %q doesn't exist in project %q.", slug, scope.projectLabel()),
+		Message: fmt.Sprintf("Environment %s doesn't exist in project %q.", quoted(slug, "env"), scope.projectLabel()),
 		Next: []util.NextStep{{Purpose: "To see the environments in this project",
 			Command: secretsManagerPrefix + " environments get" + scope.projectFlag()}}}
 }
@@ -167,7 +178,7 @@ func errFolderNotFound(name string, scope errorScope) *util.CLIError {
 		path = "/"
 	}
 	return &util.CLIError{Code: errCodeFolderNotFound,
-		Message: fmt.Sprintf("Folder %q doesn't exist in %q.", name, path),
+		Message: fmt.Sprintf("Folder %s doesn't exist in %s.", quoted(name, "name"), quoted(path, "path")),
 		Next: []util.NextStep{{Purpose: "To see the folders there",
 			Command: secretsManagerPrefix + " folders get --path " + util.SuggestedValue(path, "path") + scope.envFlag() + scope.projectFlag()}}}
 }
@@ -185,7 +196,7 @@ func errConfirmationRequired(action destructiveAction, rerun string) *util.CLIEr
 
 func errConfirmationDeclined(action destructiveAction) *util.CLIError {
 	return &util.CLIError{Code: errCodeConfirmationDeclined,
-		Message: fmt.Sprintf("Nothing was deleted: the confirmation didn't match %s %q.", action.Label, action.Expected)}
+		Message: fmt.Sprintf("Nothing was deleted: the confirmation didn't match %s %s.", action.Label, quoted(action.Expected, "value"))}
 }
 
 // classifyAPIError turns a backend error into a CLIError using only what is stable: the status code,
@@ -223,13 +234,17 @@ func errorOutputFormat(cmd *cobra.Command) string {
 	return ""
 }
 
+// Swapped out in tests, so a test can see a command stop without the test binary exiting.
+var exitProcess = os.Exit
+
 // exitWithError prints err and exits 1: a *util.CLIError in the CLI.md format, anything else the way
 // util.HandleError always has.
 func exitWithError(cmd *cobra.Command, err error) {
 	var cliErr *util.CLIError
 	if errors.As(err, &cliErr) {
 		util.WriteCLIError(util.GetStderrWriter(), cliErr, errorOutputFormat(cmd))
-		os.Exit(1)
+		exitProcess(1)
+		return
 	}
 	util.HandleError(err)
 }

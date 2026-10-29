@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"regexp"
 	"strings"
 
@@ -37,6 +36,9 @@ var (
 	suggestableSlug      = regexp.MustCompile(`^[a-z0-9]+(?:[_-][a-z0-9]+)*$`)
 	suggestableSecretKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
 	suggestablePath      = regexp.MustCompile(`^/(?:[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*)?$`)
+	// Scheme, host, optional port and plain path segments only: no user info, query or fragment, and
+	// nothing a shell would read as an operator (; & | $ ...).
+	suggestableDomain = regexp.MustCompile(`^https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~-]+)*/?$`)
 	// A credential pasted into a flag the CLI didn't expect still never reaches a suggestion.
 	credentialFlagValue = regexp.MustCompile(`(--(?:token|client-secret|client-id|password|passphrase)[= ])\S+`)
 	credentialLooking   = regexp.MustCompile(`\b(?:st\.[A-Za-z0-9._-]+|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9._-]+)`)
@@ -68,9 +70,7 @@ func isSuggestable(value string) bool {
 // SuggestedDomain returns domain when it is a plain http(s) URL, so a suggested command reaches the
 // same instance; otherwise <domain>.
 func SuggestedDomain(domain string) string {
-	parsed, err := url.Parse(domain)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" ||
-		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || strings.ContainsAny(domain, " \t\n'\"$`\\") {
+	if !suggestableDomain.MatchString(domain) {
 		return "<domain>"
 	}
 	return domain

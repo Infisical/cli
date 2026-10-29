@@ -1,9 +1,13 @@
 package cmd
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -307,11 +311,48 @@ func TestDeletesConfirmOnlyUnderSecretsManager(t *testing.T) {
 	}
 }
 
+// The real commands, not a stand-in: without a terminal and without --yes, each stops with
+// confirmation_required before its own Run, which would otherwise log in and call the API.
+func TestRegisteredDeletesStopWithoutConfirmation(t *testing.T) {
+	t.Setenv(util.INFISICAL_PROJECT_ID_NAME, testProjectID)
+	fakeTerminal(t, false, "", errors.New("must not prompt"))
+	stderr := captureStderr(t)
+	exits := 0
+	oldExit := exitProcess
+	exitProcess = func(int) { exits++ }
+	t.Cleanup(func() { exitProcess = oldExit })
+
+	folderDelete := findCommand(t, smPath([]string{"secrets", "folders", "delete"}))
+	_ = folderDelete.Flags().Set("name", "api")
+	t.Cleanup(func() { _ = folderDelete.Flags().Set("name", ""); folderDelete.Flags().Lookup("name").Changed = false })
+
+	for path := range confirmedUnderSecretsManager {
+		stderr.Reset()
+		exits = 0
+		cmd := findCommand(t, smPath(strings.Fields(path)))
+		cmd.Run(cmd, []string{"API_KEY"})
+		if exits != 1 || !strings.Contains(stderr.String(), "needs confirmation") || !strings.Contains(stderr.String(), "--projectId "+testProjectID+" --yes") {
+			t.Errorf("%s: exits=%d, stderr=%q", path, exits, stderr.String())
+		}
+	}
+}
+
 func TestDescribeDeletes(t *testing.T) {
+	t.Setenv(util.INFISICAL_PROJECT_ID_NAME, testProjectID)
 	secretsDelete := findCommand(t, smPath([]string{"secrets", "delete"}))
 	one, ok := describeSecretsDelete(secretsDelete, []string{"API_KEY"})
-	if !ok || one.Target != `secret "API_KEY"` || one.Expected != "API_KEY" || one.Label != "the secret name" {
+	if !ok || one.Target != `secret "API_KEY"` || one.Expected != "API_KEY" || one.Label != "the secret name" || one.ProjectID != testProjectID {
 		t.Errorf("one secret: %+v", one)
+	}
+	if want := "in project " + testProjectID + " (from INFISICAL_PROJECT_ID)"; !strings.Contains(one.Description, want) {
+		t.Errorf("the question should name the project and where it came from: %q", one.Description)
+	}
+	pasted := "API_KEY=st.abc.def.ghi"
+	for _, args := range [][]string{{pasted}, {"OK", pasted}} {
+		unsafe, _ := describeSecretsDelete(secretsDelete, args)
+		if strings.Contains(unsafe.Target+unsafe.Description, "st.abc") {
+			t.Errorf("a pasted value reached the question or the error: %+v", unsafe)
+		}
 	}
 	many, _ := describeSecretsDelete(secretsDelete, []string{"A", "B", "C"})
 	if many.Target != "3 secrets" || many.Expected != "3" || !strings.Contains(many.Description, "A, B, C") {
@@ -334,5 +375,43 @@ func TestDescribeDeletes(t *testing.T) {
 	lease, ok := describeLeaseDelete(findCommand(t, smPath([]string{"dynamic-secrets", "lease", "delete"})), []string{testProjectID})
 	if !ok || lease.Expected != testProjectID || lease.Label != "the lease ID" {
 		t.Errorf("lease: %+v", lease)
+	}
+}
+
+// A project chosen by flag is named, but not pinned again: the rerun already repeats the flag.
+func TestDescribeDeletesNamesAFlaggedProject(t *testing.T) {
+	t.Setenv(util.INFISICAL_PROJECT_ID_NAME, "")
+	secretsDelete := findCommand(t, smPath([]string{"secrets", "delete"}))
+	_ = secretsDelete.Flags().Set("projectId", testProjectID)
+	t.Cleanup(func() {
+		_ = secretsDelete.Flags().Set("projectId", "")
+		secretsDelete.Flags().Lookup("projectId").Changed = false
+	})
+	action, ok := describeSecretsDelete(secretsDelete, []string{"API_KEY"})
+	if !ok || action.ProjectID != "" || !strings.HasSuffix(action.Description, "in project "+testProjectID) {
+		t.Errorf("%+v", action)
+	}
+}
+
+// With no project anywhere, the command's own "run infisical init" error reports it, as before.
+func TestDescribeDeletesWithoutAProject(t *testing.T) {
+	t.Setenv(util.INFISICAL_PROJECT_ID_NAME, "")
+	t.Chdir(t.TempDir())
+	if _, ok := describeSecretsDelete(findCommand(t, smPath([]string{"secrets", "delete"})), []string{"API_KEY"}); ok {
+		t.Error("no project: the command should report it, not ask")
+	}
+}
+
+// From a linked directory, the question names the workspace file the project came from.
+func TestDescribeDeletesNamesTheWorkspaceFile(t *testing.T) {
+	t.Setenv(util.INFISICAL_PROJECT_ID_NAME, "")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME), []byte("secrets-management:\n  project-id: "+testProjectID+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	action, ok := describeSecretsDelete(findCommand(t, smPath([]string{"secrets", "delete"})), []string{"API_KEY"})
+	if !ok || action.ProjectID != testProjectID || !strings.Contains(action.Description, util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME+")") {
+		t.Errorf("%+v", action)
 	}
 }
