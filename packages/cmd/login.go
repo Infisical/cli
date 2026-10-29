@@ -596,7 +596,7 @@ func DomainOverridePrompt() (bool, error) {
 	//trim the '/' from the end of the domain url
 	config.INFISICAL_URL_MANUAL_OVERRIDE = strings.TrimRight(config.INFISICAL_URL_MANUAL_OVERRIDE, "/")
 	optionsPrompt := promptui.Select{
-		Label: fmt.Sprintf("Current Domain Override: %s", config.INFISICAL_URL_MANUAL_OVERRIDE),
+		Label: promptLabel(fmt.Sprintf("Current Domain Override: %s", config.INFISICAL_URL_MANUAL_OVERRIDE)),
 		Items: options,
 		Size:  2,
 	}
@@ -689,7 +689,7 @@ func askForDomain() error {
 
 	options := []string{INFISICAL_CLOUD_US, INFISICAL_CLOUD_EU, SELF_HOSTING}
 	optionsPrompt := promptui.Select{
-		Label: "Select your hosting option",
+		Label: promptLabel("Select your hosting option"),
 		Items: options,
 		Size:  3,
 	}
@@ -718,7 +718,7 @@ func askForDomain() error {
 		items := append(infisicalConfig.Domains, ADD_NEW_DOMAIN)
 
 		prompt := promptui.Select{
-			Label: "Which domain would you like to use?",
+			Label: promptLabel("Which domain would you like to use?"),
 			Items: items,
 			Size:  5,
 		}
@@ -975,7 +975,7 @@ func userLoginMenu(currentLoggedInUserEmail string) (bool, error) {
 	label := fmt.Sprintf("Current logged in user email: %s on domain: %s", currentLoggedInUserEmail, config.INFISICAL_URL)
 
 	prompt := promptui.Select{
-		Label: label,
+		Label: promptLabel(label),
 		Items: []string{ADD_USER, REPLACE_USER, EXIT_USER_MENU},
 	}
 	_, result, err := prompt.Run()

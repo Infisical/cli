@@ -56,7 +56,7 @@ var switchCmd = &cobra.Command{
 		}
 
 		prompt := promptui.Select{
-			Label: "Which of your Infisical profiles would you like to use",
+			Label: promptLabel("Which of your Infisical profiles would you like to use"),
 			Items: labels,
 			Size:  7,
 		}
@@ -197,7 +197,7 @@ cleared and you are asked to sign in again.`,
 			labels[idx] = fmt.Sprintf("%s (%s, org %s, %s)", profile.Name, profile.Email, orgLabel(profile), util.DisplayDomain(profile.Domain))
 		}
 		prompt := promptui.Select{
-			Label: "Which profile should point at a different instance",
+			Label: promptLabel("Which profile should point at a different instance"),
 			Items: labels,
 			Size:  7,
 		}
