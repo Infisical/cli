@@ -510,12 +510,19 @@ func TestTheSkillsClientGivesUpOnAConnectionEarly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// An HTTP_PROXY would answer for the address itself, so the dial under test would never happen.
+	transport, err := client.Transport()
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport.Proxy = nil
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	start := time.Now()
-	// A non-routable address, so the dial hangs until the connect timeout unless the network refuses it first.
-	_, err = client.R().SetContext(ctx).Get("http://10.255.255.1:81/")
+	// TEST-NET-1 (RFC 5737) is reserved for documentation, so no network answers it: the dial hangs until the
+	// connect timeout unless the network refuses it first.
+	_, err = client.R().SetContext(ctx).Get("http://192.0.2.1:81/")
 	if err == nil {
 		t.Fatal("want an error")
 	}
