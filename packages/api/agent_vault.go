@@ -397,25 +397,25 @@ func CallCreateAgentVaultSkill(httpClient *resty.Client, request AgentVaultSkill
 	return res, nil
 }
 
-type PublishAgentVaultSkillVersionResponse struct {
+type UpdateAgentVaultSkillResponse struct {
 	Version   AgentVaultSkillVersion `json:"version"`
 	Unchanged bool                   `json:"unchanged"`
 }
 
-func CallPublishAgentVaultSkillVersion(httpClient *resty.Client, skillID string, request AgentVaultSkillFilesRequest) (PublishAgentVaultSkillVersionResponse, error) {
-	var res PublishAgentVaultSkillVersionResponse
+func CallUpdateAgentVaultSkill(httpClient *resty.Client, skillID string, request AgentVaultSkillFilesRequest) (UpdateAgentVaultSkillResponse, error) {
+	var res UpdateAgentVaultSkillResponse
 	response, err := httpClient.
 		R().
 		SetResult(&res).
 		SetHeader("User-Agent", USER_AGENT).
 		SetBody(request).
-		Post(fmt.Sprintf("%v/v1/agent-vault/skills/%s/versions", config.INFISICAL_URL, url.PathEscape(skillID)))
+		Patch(fmt.Sprintf("%v/v1/agent-vault/skills/%s", config.INFISICAL_URL, url.PathEscape(skillID)))
 
 	if err != nil {
-		return PublishAgentVaultSkillVersionResponse{}, NewGenericRequestError("CallPublishAgentVaultSkillVersion", err)
+		return UpdateAgentVaultSkillResponse{}, NewGenericRequestError("CallUpdateAgentVaultSkill", err)
 	}
 	if response.IsError() {
-		return PublishAgentVaultSkillVersionResponse{}, NewAPIErrorWithResponse("CallPublishAgentVaultSkillVersion", response, nil)
+		return UpdateAgentVaultSkillResponse{}, NewAPIErrorWithResponse("CallUpdateAgentVaultSkill", response, nil)
 	}
 	return res, nil
 }

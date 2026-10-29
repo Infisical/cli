@@ -137,8 +137,8 @@ func newFakeSkillsAPI(t *testing.T, f *fakeSkillsAPI) *resty.Client {
 			f.existing = []api.AgentVaultSkill{{ID: "new", Name: "code-review"}}
 			f.lastBody, f.lastVersion = string(body), 1
 			_ = json.NewEncoder(w).Encode(map[string]any{"skill": map[string]any{"id": "new", "name": "code-review"}, "version": map[string]any{"version": 1}})
-		case r.Method == http.MethodPost && strings.HasSuffix(path, "/versions"):
-			f.calls = append(f.calls, "publish "+strings.Split(path, "/")[2])
+		case r.Method == http.MethodPatch && strings.Count(path, "/") == 2:
+			f.calls = append(f.calls, "update "+strings.Split(path, "/")[2])
 			if f.lastBody == string(body) {
 				_ = json.NewEncoder(w).Encode(map[string]any{"version": map[string]any{"version": f.lastVersion}, "unchanged": true})
 				return
@@ -166,9 +166,9 @@ func TestPushAgentVaultSkill(t *testing.T) {
 		wantErr   bool
 	}{
 		{"new name creates", &fakeSkillsAPI{}, "find code-review,create", "code-review: created v1", false},
-		{"known name publishes", &fakeSkillsAPI{existing: found}, "find code-review,publish sk1", "code-review: v4", false},
+		{"known name publishes", &fakeSkillsAPI{existing: found}, "find code-review,update sk1", "code-review: v4", false},
 		{"lost create race publishes", &fakeSkillsAPI{createStatus: http.StatusConflict, existingAfterConflict: found},
-			"find code-review,create,find code-review,publish sk1", "code-review: v4", false},
+			"find code-review,create,find code-review,update sk1", "code-review: v4", false},
 		{"409 with nothing to find fails", &fakeSkillsAPI{createStatus: http.StatusConflict},
 			"find code-review,create,find code-review", "", true},
 	}
@@ -210,7 +210,7 @@ func TestPushAgentVaultSkillTwiceIsUnchanged(t *testing.T) {
 	if got := strings.Join(outs, "|"); got != "code-review: created v1|code-review: unchanged (v1)" {
 		t.Fatalf("outputs %s", got)
 	}
-	if got := strings.Join(f.calls, ","); got != "find code-review,create,find code-review,publish new" {
+	if got := strings.Join(f.calls, ","); got != "find code-review,create,find code-review,update new" {
 		t.Fatalf("calls %s", got)
 	}
 }

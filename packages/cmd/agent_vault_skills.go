@@ -57,7 +57,7 @@ name creates it, and an existing one gets a new version unless nothing changed.`
 // race with another push of the same name gets 409, and publishes to the skill the other push made.
 func pushAgentVaultSkill(httpClient *resty.Client, name string, request api.AgentVaultSkillFilesRequest) (string, error) {
 	publish := func(skillID string) (string, error) {
-		published, err := api.CallPublishAgentVaultSkillVersion(httpClient, skillID, request)
+		published, err := api.CallUpdateAgentVaultSkill(httpClient, skillID, request)
 		if err != nil {
 			return "", fmt.Errorf("unable to publish a new version of %q: %w", name, err)
 		}
