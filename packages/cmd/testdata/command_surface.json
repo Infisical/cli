@@ -903,7 +903,8 @@
     "path": "p|string|/",
     "project-slug": "|string|",
     "projectId": "|string|",
-    "token": "|string|"
+    "token": "|string|",
+    "yes": "y|bool|false"
   },
   "infisical sm dynamic-secrets lease list": {
     "env": "|string|dev",
@@ -1049,7 +1050,8 @@
     "projectId": "|string|",
     "tags": "t|string|",
     "token": "|string|",
-    "type": "|string|personal"
+    "type": "|string|personal",
+    "yes": "y|bool|false"
   },
   "infisical sm secrets folders": {
     "env": "|string|dev",
@@ -1071,7 +1073,8 @@
     "path": "p|string|/",
     "projectId": "|string|",
     "tags": "t|string|",
-    "token": "|string|"
+    "token": "|string|",
+    "yes": "y|bool|false"
   },
   "infisical sm secrets folders get": {
     "env": "|string|dev",
