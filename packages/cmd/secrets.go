@@ -144,6 +144,34 @@ func validateSecretsSetArgs(cmd *cobra.Command, args []string) error {
 	return cobra.MinimumNArgs(1)(cmd, args)
 }
 
+func processSecretsSetArgs(args []string) ([]string, error) {
+	processedArgs := make([]string, 0, len(args))
+	for _, arg := range args {
+		splitKeyValue := strings.SplitN(arg, "=", 2)
+		if len(splitKeyValue) != 2 {
+			return nil, fmt.Errorf("invalid argument format: %s. Expected format: key=value or key=@filepath", arg)
+		}
+
+		key := splitKeyValue[0]
+		value := splitKeyValue[1]
+
+		if strings.HasPrefix(value, "\\@") {
+			value = "@" + value[2:]
+		} else if strings.HasPrefix(value, "@") {
+			filePath := strings.TrimPrefix(value, "@")
+			content, err := os.ReadFile(filePath)
+			if err != nil {
+				return nil, fmt.Errorf("unable to read file %s: %w", filePath, err)
+			}
+			value = string(content)
+		}
+
+		processedArgs = append(processedArgs, fmt.Sprintf("%s=%s", key, value))
+	}
+
+	return processedArgs, nil
+}
+
 func runSecretsSet(cmd *cobra.Command, args []string) {
 	token, err := util.GetInfisicalToken(cmd)
 	if err != nil {
@@ -186,28 +214,9 @@ func runSecretsSet(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 
-	processedArgs := []string{}
-	for _, arg := range args {
-		splitKeyValue := strings.SplitN(arg, "=", 2)
-		if len(splitKeyValue) != 2 {
-			util.HandleError(fmt.Errorf("invalid argument format: %s. Expected format: key=value or key=@filepath", arg), "")
-		}
-
-		key := splitKeyValue[0]
-		value := splitKeyValue[1]
-
-		if strings.HasPrefix(value, "\\@") {
-			value = "@" + value[2:]
-		} else if strings.HasPrefix(value, "@") {
-			filePath := strings.TrimPrefix(value, "@")
-			content, err := os.ReadFile(filePath)
-			if err != nil {
-				util.HandleError(err, fmt.Sprintf("Unable to read file %s", filePath))
-			}
-			value = string(content)
-		}
-
-		processedArgs = append(processedArgs, fmt.Sprintf("%s=%s", key, value))
+	processedArgs, err := processSecretsSetArgs(args)
+	if err != nil {
+		util.HandleError(err, "")
 	}
 
 	file, err := cmd.Flags().GetString("file")
@@ -221,7 +230,7 @@ func runSecretsSet(cmd *cobra.Command, args []string) {
 			util.PrintErrorMessageAndExit("When using service tokens or machine identities, you must set the --projectId flag")
 		}
 
-		secretOperations, err = util.SetRawSecrets(args, secretType, environmentName, secretsPath, projectId, token, file, tags)
+		secretOperations, err = util.SetRawSecrets(processedArgs, secretType, environmentName, secretsPath, projectId, token, file, tags)
 
 		if err != nil {
 			util.HandleError(err, "Unable to set secrets")
