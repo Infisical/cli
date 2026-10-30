@@ -16,11 +16,16 @@ const (
 	selectPromptEllipsis        = "…"
 )
 
+var getPromptTerminalWidth = func() (int, error) {
+	width, _, err := term.GetSize(int(os.Stdout.Fd()))
+	return width, err
+}
+
 // promptLabel keeps promptui select labels on one terminal row. promptui's
 // screen buffer counts each write as one row, while the terminal may wrap a
 // longer write onto multiple rows, which leaves stale rows during redraws.
 func promptLabel(label string) string {
-	width, _, err := term.GetSize(int(os.Stdout.Fd()))
+	width, err := getPromptTerminalWidth()
 	if err != nil {
 		return label
 	}
