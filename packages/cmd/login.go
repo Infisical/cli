@@ -1009,7 +1009,7 @@ func askToPasteJwtToken(success chan models.UserCredentials, failure chan error)
 	util.PrintlnStderr("\n\nOnce login is completed via browser, the CLI should be authenticated automatically.")
 	util.PrintlnStderr("However, if browser fails to communicate with the CLI, please paste the token from the browser below.")
 
-	util.PrintStderr("\n\nPaste your browser token here: ")
+	util.PrintStderr("\n\nPaste your browser token here and press Enter: ")
 	bytePassword, err := term.ReadPassword(int(os.Stdin.Fd()))
 	if err != nil {
 		failure <- err
@@ -1017,7 +1017,7 @@ func askToPasteJwtToken(success chan models.UserCredentials, failure chan error)
 		os.Exit(1)
 	}
 
-	infisicalPastedToken := strings.TrimSpace(string(bytePassword))
+	infisicalPastedToken := cleanPastedBrowserToken(string(bytePassword))
 
 	userCredentials, err := decodePastedBase64Token(infisicalPastedToken)
 	if err != nil {
@@ -1046,6 +1046,15 @@ func askToPasteJwtToken(success chan models.UserCredentials, failure chan error)
 	}
 
 	success <- *userCredentials
+}
+
+// cleanPastedBrowserToken removes terminal bracketed-paste delimiters before
+// decoding the browser token. Some terminals send these markers around pasted
+// text, and they are not part of the base64-encoded token.
+func cleanPastedBrowserToken(token string) string {
+	token = strings.ReplaceAll(token, "\x1b[200~", "")
+	token = strings.ReplaceAll(token, "\x1b[201~", "")
+	return strings.TrimSpace(token)
 }
 
 func decodePastedBase64Token(token string) (*models.UserCredentials, error) {
