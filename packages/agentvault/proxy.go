@@ -325,15 +325,18 @@ func (ps *proxyServer) serveIntercepted(conn net.Conn, t tunnel, leaf tls.Certif
 
 const tlsRecordTypeHandshake = 0x16
 
-var httpMethodPrefixes = []string{"GET ", "HEAD", "POST", "PUT ", "PATC", "DELE", "OPTI", "CONN", "TRAC"}
-
+// Any method in capitals passes, so WebDAV's PROPFIND or MKCOL reach the HTTP parser like GET does. Every
+// method is at least three letters, so a space can only come fourth. SSH ("SSH-") and binary protocols fail.
 func looksLikeHTTPRequest(head []byte) bool {
-	for _, prefix := range httpMethodPrefixes {
-		if string(head) == prefix {
-			return true
+	for i, c := range head {
+		if c == ' ' && i == 3 {
+			continue
+		}
+		if c < 'A' || c > 'Z' {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 const notWebTrafficWarnEvery = time.Minute

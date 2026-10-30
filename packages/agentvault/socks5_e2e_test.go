@@ -600,3 +600,49 @@ func TestSocks5WarnsAboutTrafficThatIsNotWeb(t *testing.T) {
 		t.Fatalf("the warning doesn't name the target: %s", out)
 	}
 }
+
+func TestLooksLikeHTTPRequest(t *testing.T) {
+	for _, tc := range []struct {
+		head string
+		want bool
+	}{
+		{"GET ", true}, {"PUT ", true}, {"POST", true}, {"PROP", true}, {"MKCO", true}, {"LOCK", true},
+		{"SSH-", false}, {"get ", false}, {"\x00\x00\x00\x08", false}, {"GE T", false},
+	} {
+		if got := looksLikeHTTPRequest([]byte(tc.head)); got != tc.want {
+			t.Errorf("looksLikeHTTPRequest(%q) = %v, want %v", tc.head, got, tc.want)
+		}
+	}
+}
+
+func TestSocks5ForwardsAPlainHTTPExtensionMethod(t *testing.T) {
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "method="+r.Method)
+	}))
+	t.Cleanup(plain.Close)
+	u, _ := url.Parse(plain.URL)
+	port, _ := strconv.Atoi(u.Port())
+
+	f := newSocks5Fixture(t, &stubResolver{result: &resolveResult{SessionID: "s1"}}, func(ps *proxyServer, _ *Socks5Options, _ *socks5Server) {
+		ps.socks5AllowPrivate = true
+	})
+	conn, auth, rep := dialSocks5(t, f.addr, f.outerTLS(), ProxyAuthUsername, testSocks5Token, "127.0.0.1", uint16(port))
+	if conn == nil {
+		t.Fatalf("tunnel refused: auth=%#x rep=%#x", auth, rep)
+	}
+	defer conn.Close()
+
+	req, _ := http.NewRequest("PROPFIND", "http://127.0.0.1/x", nil)
+	if err := req.Write(conn); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
+	if err != nil {
+		t.Fatalf("the PROPFIND request was dropped: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || string(body) != "method=PROPFIND" {
+		t.Fatalf("status=%d body=%q, want 200 method=PROPFIND", resp.StatusCode, body)
+	}
+}
