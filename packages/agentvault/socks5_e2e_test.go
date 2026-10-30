@@ -570,3 +570,33 @@ func selfSignedListenerCert(t *testing.T, name string, notAfter time.Time) (cert
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})),
 		string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})), pool
 }
+
+func TestSocks5WarnsAboutTrafficThatIsNotWeb(t *testing.T) {
+	var logs bytes.Buffer
+	restore := log.Logger
+	log.Logger = zerolog.New(&syncWriter{w: &logs})
+	t.Cleanup(func() { log.Logger = restore })
+
+	f := newSocks5Fixture(t, &stubResolver{result: &resolveResult{SessionID: "s1"}}, nil)
+	for i := 0; i < 2; i++ {
+		conn, auth, rep := dialSocks5(t, f.addr, f.outerTLS(), ProxyAuthUsername, testSocks5Token, "ssh.github.com", 443)
+		if conn == nil {
+			t.Fatalf("tunnel refused: auth=%#x rep=%#x", auth, rep)
+		}
+		_, _ = conn.Write([]byte("SSH-2.0-OpenSSH_9.6\r\n"))
+		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		if _, err := io.ReadAll(conn); err != nil && !errors.Is(err, io.EOF) {
+			t.Fatalf("the connection was not closed: %v", err)
+		}
+		conn.Close()
+	}
+	f.server.wait()
+
+	out := logs.String()
+	if n := strings.Count(out, "closed a SOCKS5 connection the proxy can't handle"); n != 1 {
+		t.Fatalf("warned %d times, want once (rate limited): %s", n, out)
+	}
+	if !strings.Contains(out, `"host":"ssh.github.com:443"`) {
+		t.Fatalf("the warning doesn't name the target: %s", out)
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -90,6 +91,7 @@ type proxyServer struct {
 	// when it dials. Its own pool, so it never reuses a connection the unchecked transport opened.
 	guardedTransport   http.RoundTripper
 	socks5AllowPrivate bool
+	lastNotWebWarn     atomic.Int64
 
 	configMu sync.RWMutex
 	config   ProxyConfig
@@ -283,9 +285,19 @@ func (ps *proxyServer) serveIntercepted(conn net.Conn, t tunnel, leaf tls.Certif
 	_ = conn.SetDeadline(time.Now().Add(tlsHandshakeTimeout))
 	first, err := buffered.reader.Peek(1)
 	if err != nil {
+		// Nothing arrived: a protocol where the server speaks first, such as SMTP or MySQL.
+		ps.warnNotWebTraffic(t, "the client sent nothing")
 		return
 	}
 	if first[0] != tlsRecordTypeHandshake {
+		// A SOCKS5 provider sends every TCP flow here, so SSH or a database driver would otherwise get an
+		// HTTP 400 and leave no trace above debug level.
+		if t.viaSocks5 {
+			if head, err := buffered.reader.Peek(4); err != nil || !looksLikeHTTPRequest(head) {
+				ps.warnNotWebTraffic(t, "the client didn't send TLS or an HTTP request")
+				return
+			}
+		}
 		_ = conn.SetDeadline(time.Time{})
 		t.scheme = "http"
 		ps.serveTunnel(buffered, t)
@@ -301,6 +313,8 @@ func (ps *proxyServer) serveIntercepted(conn net.Conn, t tunnel, leaf tls.Certif
 	})
 	if err := tlsConn.Handshake(); err != nil {
 		log.Debug().Err(err).Str("host", net.JoinHostPort(t.hostname, t.port)).Msg("agent-vault: tunnel TLS handshake failed")
+		// An HTTP/2-only client such as gRPC, or one that doesn't trust the proxy's CA, ends here.
+		ps.warnNotWebTraffic(t, "the TLS handshake failed: "+err.Error())
 		return
 	}
 	_ = tlsConn.SetDeadline(time.Time{})
@@ -310,6 +324,37 @@ func (ps *proxyServer) serveIntercepted(conn net.Conn, t tunnel, leaf tls.Certif
 }
 
 const tlsRecordTypeHandshake = 0x16
+
+var httpMethodPrefixes = []string{"GET ", "HEAD", "POST", "PUT ", "PATC", "DELE", "OPTI", "CONN", "TRAC"}
+
+func looksLikeHTTPRequest(head []byte) bool {
+	for _, prefix := range httpMethodPrefixes {
+		if string(head) == prefix {
+			return true
+		}
+	}
+	return false
+}
+
+const notWebTrafficWarnEvery = time.Minute
+
+// Only the SOCKS5 door warns: the HTTP door is reached by clients that chose to use a web proxy, and its
+// logs stay as they were. Rate limited, since a sandbox retrying a git push over SSH repeats it constantly.
+func (ps *proxyServer) warnNotWebTraffic(t tunnel, reason string) {
+	if !t.viaSocks5 {
+		return
+	}
+	now := time.Now().UnixNano()
+	last := ps.lastNotWebWarn.Load()
+	if now-last < int64(notWebTrafficWarnEvery) || !ps.lastNotWebWarn.CompareAndSwap(last, now) {
+		return
+	}
+	log.Warn().
+		Str("door", "socks5").
+		Str("host", net.JoinHostPort(t.hostname, t.port)).
+		Str("reason", reason).
+		Msg("agent-vault: closed a SOCKS5 connection the proxy can't handle; it handles only HTTP/1.1 web traffic from clients that trust its CA")
+}
 
 // bufferedConn lets the first byte be peeked and then handed on, to tls.Server or to the plain HTTP
 // server, without the byte being consumed.
@@ -507,8 +552,8 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, t tun
 }
 
 // The one place the block decision lives, so the test that covers exceptions runs what forward runs.
-func (ps *proxyServer) blocksOffBundle(matched *resolvedService, hostname, port string) bool {
-	return matched == nil && ps.currentConfig().TrafficPolicy == TrafficPolicyBundleHosts && !ps.isAllowedHost(hostname, port)
+func (cfg ProxyConfig) blocksOffBundle(matched *resolvedService, hostname, port string) bool {
+	return matched == nil && cfg.TrafficPolicy == TrafficPolicyBundleHosts && !cfg.isAllowedHost(hostname, port)
 }
 
 type forwardOutcome struct {
@@ -543,6 +588,10 @@ func (ps *proxyServer) forward(req *http.Request, t tunnel) (*http.Response, *re
 	}
 
 	matched := bestMatch(services, hostname, port)
+	// One copy for every decision this request makes. A poll can swap the settings at any moment, and a
+	// request judged by two different policies could pass the gate under one and skip the private-address
+	// check under the other.
+	cfg := ps.currentConfig()
 	// Set only when the proxy injected a credential Infisical can refresh, which is what decides whether an
 	// upstream 401 or 403 is handled here or passed to the agent.
 	var sent *credential
@@ -550,7 +599,7 @@ func (ps *proxyServer) forward(req *http.Request, t tunnel) (*http.Response, *re
 	// stored credential is wrong, which the agent cannot fix by logging in itself.
 	staticMCP := false
 
-	if ps.blocksOffBundle(matched, hostname, port) {
+	if cfg.blocksOffBundle(matched, hostname, port) {
 		return nil, nil, outcome, fmt.Errorf("no service covers host %q: %w", hostname, errHostBlocked)
 	}
 
@@ -644,7 +693,7 @@ func (ps *proxyServer) forward(req *http.Request, t tunnel) (*http.Response, *re
 		replay, replayable = replayableBody(req)
 	}
 
-	upstream, err := ps.upstreamFor(t, matched)
+	upstream, err := ps.upstreamFor(t, matched, cfg)
 	if err != nil {
 		return nil, matched, outcome, err
 	}
@@ -674,8 +723,8 @@ func (ps *proxyServer) forward(req *http.Request, t tunnel) (*http.Response, *re
 // under the any-host policy a destination no service names may not be private: only an admin naming a host
 // in a bundle makes an internal address reachable that way. Under bundle-hosts every reachable host is
 // already named. Exceptions do not count here, because the UI hides them once the policy is any-host.
-func (ps *proxyServer) upstreamFor(t tunnel, matched *resolvedService) (http.RoundTripper, error) {
-	if !t.viaSocks5 || ps.socks5AllowPrivate || matched != nil || ps.currentConfig().TrafficPolicy != TrafficPolicyAnyHost {
+func (ps *proxyServer) upstreamFor(t tunnel, matched *resolvedService, cfg ProxyConfig) (http.RoundTripper, error) {
+	if !t.viaSocks5 || ps.socks5AllowPrivate || matched != nil || cfg.TrafficPolicy != TrafficPolicyAnyHost {
 		return ps.transport, nil
 	}
 	if ps.guardedTransport == nil {
@@ -693,8 +742,8 @@ func containsSurface(surfaces []string, target string) bool {
 	return false
 }
 
-func (ps *proxyServer) isAllowedHost(hostname, port string) bool {
-	raw := ps.currentConfig().AllowedHosts
+func (cfg ProxyConfig) isAllowedHost(hostname, port string) bool {
+	raw := cfg.AllowedHosts
 	if raw == "" {
 		return false
 	}
