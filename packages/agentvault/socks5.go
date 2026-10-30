@@ -192,13 +192,19 @@ type socks5Server struct {
 	// own timeout, so a slow Infisical does not cut off an agent that did nothing wrong.
 	stepTimeout time.Duration
 
-	conns sync.WaitGroup
+	// A count under a lock rather than a WaitGroup: a test waits for the connections so far and then opens
+	// more, and a WaitGroup may not be added to again once a Wait has seen it reach zero.
+	connsMu sync.Mutex
+	connsN  int
+	idle    *sync.Cond
 
 	lastMismatchWarn atomic.Int64
 }
 
 func newSocks5Server(ps *proxyServer, tlsConfig *tls.Config) *socks5Server {
-	return &socks5Server{ps: ps, tlsConfig: tlsConfig, stepTimeout: socks5StepTimeout}
+	s := &socks5Server{ps: ps, tlsConfig: tlsConfig, stepTimeout: socks5StepTimeout}
+	s.idle = sync.NewCond(&s.connsMu)
+	return s
 }
 
 // serve returns nil once the listener is closed. A temporary accept error, such as running out of file
@@ -225,16 +231,31 @@ func (s *socks5Server) serve(l net.Listener) error {
 			return err
 		}
 		backoff = 0
-		s.conns.Add(1)
+		s.connsMu.Lock()
+		s.connsN++
+		s.connsMu.Unlock()
 		go func() {
-			defer s.conns.Done()
+			defer func() {
+				s.connsMu.Lock()
+				s.connsN--
+				if s.connsN == 0 {
+					s.idle.Broadcast()
+				}
+				s.connsMu.Unlock()
+			}()
 			s.handle(conn)
 		}()
 	}
 }
 
-// wait blocks until every connection handled so far has returned.
-func (s *socks5Server) wait() { s.conns.Wait() }
+// wait blocks until no connection is being handled.
+func (s *socks5Server) wait() {
+	s.connsMu.Lock()
+	defer s.connsMu.Unlock()
+	for s.connsN > 0 {
+		s.idle.Wait()
+	}
+}
 
 func (s *socks5Server) handle(raw net.Conn) {
 	remote := raw.RemoteAddr().String()
