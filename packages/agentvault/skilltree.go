@@ -227,11 +227,11 @@ func installSkillFolder(dir string, skill api.AgentVaultSessionSkill) error {
 	if owned && skillFolderIsCurrent(dest, skill) {
 		return nil
 	}
-	if err := os.RemoveAll(dest); err != nil {
+	if err := removeSkillFolder(dest); err != nil {
 		return fmt.Errorf("failed to replace %s: %w", dest, err)
 	}
 	if err := writeSkillFolder(dest, skill); err != nil {
-		_ = os.RemoveAll(dest)
+		_ = removeSkillFolder(dest)
 		return err
 	}
 	return nil
@@ -265,7 +265,7 @@ func linkSkill(symlink func(oldname, newname string) error, installDir, agentSki
 	default:
 		return notInstalledByInfisical(agentSkillsDir, skill.Name, info)
 	}
-	if err := os.RemoveAll(dest); err != nil {
+	if err := removeSkillFolder(dest); err != nil {
 		return fmt.Errorf("failed to replace %s: %w", dest, err)
 	}
 	if err := symlink(src, dest); err == nil {
@@ -273,10 +273,36 @@ func linkSkill(symlink func(oldname, newname string) error, installDir, agentSki
 	}
 	_ = os.RemoveAll(dest)
 	if err := writeSkillFolder(dest, skill); err != nil {
-		_ = os.RemoveAll(dest)
+		_ = removeSkillFolder(dest)
 		return err
 	}
 	return nil
+}
+
+// removeSkillFolder deletes the marker last, so a folder that can't be fully deleted (a file held open, a
+// read-only subfolder, a crash) still reads as the CLI's and the next run replaces it. A link is removed
+// itself, never what it points to.
+func removeSkillFolder(folder string) error {
+	info, err := os.Lstat(folder)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil || !info.IsDir() {
+		return os.RemoveAll(folder)
+	}
+	entries, err := os.ReadDir(folder)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.Name() == SkillMarkerFile {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(folder, entry.Name())); err != nil {
+			return err
+		}
+	}
+	return os.RemoveAll(folder)
 }
 
 // ownedSkillEntry reports whether name exists in dir as a folder the CLI wrote. A missing entry is free to
@@ -319,7 +345,8 @@ func hasSkillMarker(folder string) bool {
 
 // A folder already holding this version is left alone, so an agent reading it is not disturbed. The marker's
 // checksum is only written once every file is, so a folder cut short is rewritten, and each file is compared
-// too, so one an agent deleted or changed is put back. Files an agent added are not the skill's and stay.
+// too, so one an agent deleted or changed is put back. Files an agent added stay until the folder is
+// next rewritten.
 func skillFolderIsCurrent(folder string, skill api.AgentVaultSessionSkill) bool {
 	data, err := os.ReadFile(filepath.Join(folder, SkillMarkerFile))
 	if err != nil {

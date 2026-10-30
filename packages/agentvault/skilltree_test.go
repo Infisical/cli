@@ -776,3 +776,34 @@ func TestConcurrentInstallsLeaveEverySkillWhole(t *testing.T) {
 		assertLinked(t, filepath.Join(home, ".claude", "skills", name), folder)
 	}
 }
+
+func TestInstallSkillsRepairsAReplaceThatFailedPartway(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("a read-only folder does not stop this user from deleting")
+	}
+	dir := t.TempDir()
+	install(t, InstallOptions{Dir: dir}, sessionSkill("code-review", skillFile("SKILL.md", "0644", "x"), skillFile("scripts/run.sh", "0755", "y")))
+	scripts := filepath.Join(dir, "code-review", "scripts")
+	if err := os.Chmod(scripts, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(scripts, 0o700) })
+
+	next := sessionSkill("code-review", skillFile("SKILL.md", "0644", "x2"), skillFile("scripts/run.sh", "0755", "y2"))
+	if result := install(t, InstallOptions{Dir: dir}, next); result.Installed != 0 {
+		t.Fatalf("a folder that could not be deleted installed: %+v", result)
+	}
+	if !hasSkillMarker(filepath.Join(dir, "code-review")) {
+		t.Fatal("the marker went before the rest of the folder")
+	}
+
+	if err := os.Chmod(scripts, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if result := install(t, InstallOptions{Dir: dir}, next); result.Installed != 1 {
+		t.Fatalf("the folder was not repaired: %+v", result)
+	}
+	if got := readFile(t, filepath.Join(dir, "code-review", "scripts", "run.sh")); got != "y2" {
+		t.Fatalf("run.sh %q", got)
+	}
+}
