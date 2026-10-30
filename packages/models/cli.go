@@ -250,6 +250,7 @@ type GetAllSecretsParameters struct {
 
 type InjectableEnvironmentResult struct {
 	Variables    []string
+	SecretNames  []string
 	ETag         string
 	SecretsCount int
 }
