@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/pflag"
 )
 
-// smTree lists every command that must exist both at the top level and under `sm`.
+// smTree lists every command that must exist both at the top level and under `secrets-manager`.
 var smTree = [][]string{
 	{"run"},
 	{"export"},
@@ -33,14 +33,14 @@ var smTree = [][]string{
 	{"dynamic-secrets", "lease", "delete"},
 }
 
-// findCommand walks the tree by name, without parsing flags or running anything.
+// findCommand walks the tree by name or alias, without parsing flags or running anything.
 func findCommand(t *testing.T, path []string) *cobra.Command {
 	t.Helper()
 	current := RootCmd
 	for _, name := range path {
 		var next *cobra.Command
 		for _, child := range current.Commands() {
-			if child.Name() == name {
+			if child.Name() == name || child.HasAlias(name) {
 				next = child
 				break
 			}
@@ -54,7 +54,7 @@ func findCommand(t *testing.T, path []string) *cobra.Command {
 }
 
 func smPath(path []string) []string {
-	return append([]string{smCommandName}, path...)
+	return append([]string{secretsManagerCommandName}, path...)
 }
 
 // flagSignature describes a flag the way a user sees it, so two independently built
@@ -79,7 +79,7 @@ func TestSmRegistersEveryCommandAtBothLevels(t *testing.T) {
 		if got, want := top.CommandPath(), "infisical "+name; got != want {
 			t.Errorf("%s: top-level command path is %q, want %q (re-parented?)", name, got, want)
 		}
-		if got, want := sm.CommandPath(), "infisical sm "+name; got != want {
+		if got, want := sm.CommandPath(), "infisical secrets-manager "+name; got != want {
 			t.Errorf("%s: sm command path is %q, want %q", name, got, want)
 		}
 	}
@@ -140,13 +140,13 @@ func TestSmFlagStateIsSeparate(t *testing.T) {
 }
 
 func TestSmRejectsUnknownSubcommand(t *testing.T) {
-	sm := findCommand(t, []string{smCommandName})
+	sm := findCommand(t, []string{secretsManagerCommandName})
 	err := sm.ValidateArgs([]string{"rnu"})
 	if err == nil || !strings.Contains(err.Error(), "unknown command") {
-		t.Errorf("`sm rnu` should fail as an unknown command, got %v", err)
+		t.Errorf("`secrets-manager rnu` should fail as an unknown command, got %v", err)
 	}
 	if err := sm.ValidateArgs(nil); err != nil {
-		t.Errorf("bare `sm` should be accepted (prints help), got %v", err)
+		t.Errorf("bare `secrets-manager` should be accepted (prints help), got %v", err)
 	}
 }
 
@@ -156,13 +156,13 @@ func TestSmRejectsUnknownSubcommand(t *testing.T) {
 func TestSmAgentProxyShortcut(t *testing.T) {
 	for _, sub := range [][]string{{}, {"connect"}, {"start"}, {"run"}} {
 		viaSecrets := findCommand(t, append([]string{"secrets", "agent-proxy"}, sub...))
-		shortcut := findCommand(t, append([]string{smCommandName, "agent-proxy"}, sub...))
+		shortcut := findCommand(t, append([]string{secretsManagerCommandName, "agent-proxy"}, sub...))
 		name := strings.TrimSpace("agent-proxy " + strings.Join(sub, " "))
 
 		if viaSecrets == shortcut {
 			t.Errorf("%s: shortcut shares its instance with `secrets agent-proxy`", name)
 		}
-		if got, want := shortcut.CommandPath(), "infisical sm "+name; got != want {
+		if got, want := shortcut.CommandPath(), "infisical secrets-manager "+name; got != want {
 			t.Errorf("%s: shortcut path is %q, want %q", name, got, want)
 		}
 
@@ -197,7 +197,8 @@ func TestTopLevelCommandNameSeesThroughSm(t *testing.T) {
 		"sm secrets get":                  "secrets",
 		"sm secrets folders get":          "secrets",
 		"sm run":                          "run",
-		"sm":                              "sm",
+		"sm":                              "secrets-manager",
+		"secrets-manager run":             "run",
 		"secrets agent-proxy run":         "secrets",
 		"sm secrets agent-proxy run":      "secrets",
 		"sm dynamic-secrets lease create": "dynamic-secrets",
@@ -211,14 +212,69 @@ func TestTopLevelCommandNameSeesThroughSm(t *testing.T) {
 	}
 }
 
-// Projects are typed per product, so `projects` lives only under `sm`, not at the top level.
+// Projects are typed per product, so `projects` lives only under `secrets-manager`, not at the top level.
 func TestProjectsIsRegisteredOnlyUnderSm(t *testing.T) {
 	for _, path := range [][]string{{"projects", "list"}, {"projects", "get"}, {"projects", "create"}} {
 		findCommand(t, smPath(path))
 	}
 	for _, child := range RootCmd.Commands() {
 		if child.Name() == "projects" {
-			t.Fatal("projects is registered at the top level; it should only be under sm")
+			t.Fatal("projects is registered at the top level; it should only be under secrets-manager")
 		}
+	}
+}
+
+// `sm` is an alias, not a second tree: both names must resolve to the same command instances.
+func TestSmIsAnAliasOfSecretsManager(t *testing.T) {
+	for _, path := range append(smTree, []string{"projects", "list"}, []string{"agent-proxy", "run"}) {
+		viaAlias, _, err := RootCmd.Find(append([]string{secretsManagerAlias}, path...))
+		if err != nil {
+			t.Fatalf("sm %s: %v", strings.Join(path, " "), err)
+		}
+		viaName, _, err := RootCmd.Find(smPath(path))
+		if err != nil {
+			t.Fatalf("secrets-manager %s: %v", strings.Join(path, " "), err)
+		}
+		if viaAlias != viaName {
+			t.Errorf("`sm %s` and `secrets-manager %s` resolve to different commands", strings.Join(path, " "), strings.Join(path, " "))
+		}
+	}
+}
+
+// Hidden commands keep working under secrets-manager; only their help listing goes away, and the
+// top-level copies are untouched.
+func TestSecretsManagerHidesLegacyCommands(t *testing.T) {
+	for _, path := range hiddenUnderSecretsManager {
+		cmd := findCommand(t, smPath(path))
+		if !cmd.Hidden {
+			t.Errorf("secrets-manager %s should be hidden from help", strings.Join(path, " "))
+		}
+	}
+	for _, path := range [][]string{{"secrets", "generate-example-env"}, {"secrets", "agent-proxy"}} {
+		if findCommand(t, path).Hidden {
+			t.Errorf("top-level `%s` should stay visible", strings.Join(path, " "))
+		}
+	}
+	for _, path := range [][]string{{"secrets"}, {"secrets", "get"}, {"projects"}, {"run"}, {"export"}, {"dynamic-secrets"}} {
+		if findCommand(t, smPath(path)).Hidden {
+			t.Errorf("secrets-manager %s should be visible", strings.Join(path, " "))
+		}
+	}
+}
+
+func TestServiceTokenAnnotationHoldsUnderEveryName(t *testing.T) {
+	for _, path := range [][]string{{"projects", "list"}, {"projects", "create"}} {
+		for _, prefix := range []string{secretsManagerCommandName, secretsManagerAlias} {
+			cmd, _, err := RootCmd.Find(append([]string{prefix}, path...))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !rejectsServiceTokens(cmd) {
+				t.Errorf("%s %s should reject service tokens", prefix, strings.Join(path, " "))
+			}
+		}
+	}
+	if rejectsServiceTokens(findCommand(t, smPath([]string{"projects", "get"}))) {
+		t.Error("projects get accepts service tokens")
 	}
 }

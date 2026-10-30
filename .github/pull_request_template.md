@@ -20,6 +20,8 @@
 
 ---
 
+- [ ] New or changed commands follow [CLI.md](../CLI.md), and new commands and flags are recorded in `packages/cmd/testdata/command_surface.json`
+- [ ] Updated AGENTS.md files (if needed)
 - [ ] I have read the [contributing guide](https://infisical.com/docs/contributing/getting-started/overview), agreed and acknowledged the [code of conduct](https://infisical.com/docs/contributing/getting-started/code-of-conduct). 📝
 
 <!-- If you have any questions regarding contribution, here's the FAQ : https://infisical.com/docs/contributing/getting-started/faq -->
