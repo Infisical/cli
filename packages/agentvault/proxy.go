@@ -13,8 +13,10 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -65,12 +67,16 @@ const (
 )
 
 type Options struct {
-	Port       int
+	Port int
+	// Empty binds every interface.
+	ListenHost string
 	DataDir    string
 	ProxyToken func() string
 	ProxyID    string
 	ProxyName  string
 	OwnCa      *OwnCa
+	// Nil leaves the SOCKS5 listener off.
+	Socks5 *Socks5Options
 
 	OnReady func()
 }
@@ -81,6 +87,11 @@ type proxyServer struct {
 	cache       *sessionCache
 	sessionLogs *sessionLogRecorder
 	transport   http.RoundTripper
+	// SOCKS5 traffic that no service names goes out through this one, which refuses private destinations
+	// when it dials. Its own pool, so it never reuses a connection the unchecked transport opened.
+	guardedTransport   http.RoundTripper
+	socks5AllowPrivate bool
+	lastNotWebWarn     atomic.Int64
 
 	configMu sync.RWMutex
 	config   ProxyConfig
@@ -174,35 +185,36 @@ func (ps *proxyServer) dispatch(w http.ResponseWriter, r *http.Request) {
 const proxyRevokedBody = "this proxy's access has been revoked"
 
 func (ps *proxyServer) denyAtGate(w http.ResponseWriter, sessionToken, hostname, port string, err error) {
-	if isProxyTokenRejected(err) {
-		log.Error().
-			Err(err).
-			Str("host", net.JoinHostPort(hostname, port)).
-			Str("sessionKey", sessionKey(sessionToken)).
-			Str("decision", decisionError).
-			Int("status", http.StatusServiceUnavailable).
-			Msg("agent-vault: refused, Infisical rejected this proxy's token")
-		http.Error(w, proxyRevokedBody, http.StatusServiceUnavailable)
-		return
-	}
-	if isSessionGone(err) {
-		log.Warn().
-			Str("host", net.JoinHostPort(hostname, port)).
-			Str("sessionKey", sessionKey(sessionToken)).
-			Str("decision", decisionBlocked).
-			Int("status", http.StatusForbidden).
-			Msg("agent-vault: refused, the session is no longer valid")
-		http.Error(w, "the session is no longer valid", http.StatusForbidden)
-		return
-	}
-	log.Error().
-		Err(err).
+	refusal := classifyGateRefusal(err)
+	refusal.event.
 		Str("host", net.JoinHostPort(hostname, port)).
 		Str("sessionKey", sessionKey(sessionToken)).
-		Str("decision", decisionError).
-		Int("status", http.StatusBadGateway).
-		Msg("agent-vault: refused, the session could not be resolved")
-	http.Error(w, "failed to resolve the session", http.StatusBadGateway)
+		Str("decision", refusal.decision).
+		Int("status", refusal.status).
+		Msg(refusal.msg)
+	http.Error(w, refusal.body, refusal.status)
+}
+
+type gateRefusal struct {
+	event    *zerolog.Event
+	decision string
+	status   int
+	body     string
+	msg      string
+}
+
+// Shared by both doors so a refused session reads the same in the log whichever way it arrived.
+func classifyGateRefusal(err error) gateRefusal {
+	if isProxyTokenRejected(err) {
+		return gateRefusal{log.Error().Err(err), decisionError, http.StatusServiceUnavailable, proxyRevokedBody,
+			"agent-vault: refused, Infisical rejected this proxy's token"}
+	}
+	if isSessionGone(err) {
+		return gateRefusal{log.Warn(), decisionBlocked, http.StatusForbidden, "the session is no longer valid",
+			"agent-vault: refused, the session is no longer valid"}
+	}
+	return gateRefusal{log.Error().Err(err), decisionError, http.StatusBadGateway, "failed to resolve the session",
+		"agent-vault: refused, the session could not be resolved"}
 }
 
 func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
@@ -219,8 +231,8 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve before the DNS lookup below and the leaf minting further down, so an unauthenticated caller
-	// cannot make the proxy work on their behalf.
+	// Resolve before the leaf minting further down, so an unauthenticated caller cannot make the proxy work
+	// on their behalf.
 	if _, err := ps.cache.get(sessionToken); err != nil {
 		ps.denyAtGate(w, sessionToken, hostname, port, err)
 		return
@@ -250,20 +262,45 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Node's fetch tunnels http:// targets too and speaks plaintext inside, where every other client sends
-	// absolute-form. A tunnel is opaque bytes to an ordinary proxy, so that works everywhere else; here the
-	// first byte decides: a TLS record starts with 0x16, anything else is plain HTTP and takes the same path
-	// as absolute-form. The port stays the one the CONNECT line named, so a service still only matches if
-	// its pattern covers that port.
-	buffered := newBufferedConn(clientConn)
-	_ = clientConn.SetDeadline(time.Now().Add(tlsHandshakeTimeout))
+	ps.serveIntercepted(clientConn, tunnel{hostname: hostname, port: port, sessionToken: sessionToken}, leaf)
+}
+
+// tunnel is what a connection was opened for, fixed before any byte of the agent's request is read.
+type tunnel struct {
+	scheme       string
+	hostname     string
+	port         string
+	sessionToken string
+	viaSocks5    bool
+}
+
+// serveIntercepted takes over a connection the agent has been told is open to the target, from either door.
+// Node's fetch tunnels http:// targets too and speaks plaintext inside, where every other client sends
+// absolute-form. A tunnel is opaque bytes to an ordinary proxy, so that works everywhere else; here the
+// first byte decides: a TLS record starts with 0x16, anything else is plain HTTP and takes the same path
+// as absolute-form. The port stays the one the tunnel named, so a service still only matches if its
+// pattern covers that port.
+func (ps *proxyServer) serveIntercepted(conn net.Conn, t tunnel, leaf tls.Certificate) {
+	buffered := newBufferedConn(conn)
+	_ = conn.SetDeadline(time.Now().Add(tlsHandshakeTimeout))
 	first, err := buffered.reader.Peek(1)
 	if err != nil {
+		// Nothing arrived: a protocol where the server speaks first, such as SMTP or MySQL.
+		ps.warnNotWebTraffic(t, "the client sent nothing")
 		return
 	}
 	if first[0] != tlsRecordTypeHandshake {
-		_ = clientConn.SetDeadline(time.Time{})
-		ps.serveTunnel(buffered, "http", hostname, port, sessionToken)
+		// A SOCKS5 provider sends every TCP flow here, so SSH or a database driver would otherwise get an
+		// HTTP 400 and leave no trace above debug level.
+		if t.viaSocks5 {
+			if head, err := buffered.reader.Peek(4); err != nil || !looksLikeHTTPRequest(head) {
+				ps.warnNotWebTraffic(t, "the client didn't send TLS or an HTTP request")
+				return
+			}
+		}
+		_ = conn.SetDeadline(time.Time{})
+		t.scheme = "http"
+		ps.serveTunnel(buffered, t)
 		return
 	}
 
@@ -275,15 +312,52 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 		NextProtos: []string{"http/1.1"},
 	})
 	if err := tlsConn.Handshake(); err != nil {
-		log.Debug().Err(err).Str("host", net.JoinHostPort(hostname, port)).Msg("agent-vault: tunnel TLS handshake failed")
+		log.Debug().Err(err).Str("host", net.JoinHostPort(t.hostname, t.port)).Msg("agent-vault: tunnel TLS handshake failed")
+		// An HTTP/2-only client such as gRPC, or one that doesn't trust the proxy's CA, ends here.
+		ps.warnNotWebTraffic(t, "the TLS handshake failed: "+err.Error())
 		return
 	}
 	_ = tlsConn.SetDeadline(time.Time{})
 
-	ps.serveTunnel(tlsConn, "https", hostname, port, sessionToken)
+	t.scheme = "https"
+	ps.serveTunnel(tlsConn, t)
 }
 
 const tlsRecordTypeHandshake = 0x16
+
+// Any method in capitals passes, so WebDAV's PROPFIND or MKCOL reach the HTTP parser like GET does. Every
+// method is at least three letters, so a space can only come fourth. SSH ("SSH-") and binary protocols fail.
+func looksLikeHTTPRequest(head []byte) bool {
+	for i, c := range head {
+		if c == ' ' && i == 3 {
+			continue
+		}
+		if c < 'A' || c > 'Z' {
+			return false
+		}
+	}
+	return true
+}
+
+const notWebTrafficWarnEvery = time.Minute
+
+// Only the SOCKS5 door warns: the HTTP door is reached by clients that chose to use a web proxy, and its
+// logs stay as they were. Rate limited, since a sandbox retrying a git push over SSH repeats it constantly.
+func (ps *proxyServer) warnNotWebTraffic(t tunnel, reason string) {
+	if !t.viaSocks5 {
+		return
+	}
+	now := time.Now().UnixNano()
+	last := ps.lastNotWebWarn.Load()
+	if now-last < int64(notWebTrafficWarnEvery) || !ps.lastNotWebWarn.CompareAndSwap(last, now) {
+		return
+	}
+	log.Warn().
+		Str("door", "socks5").
+		Str("host", net.JoinHostPort(t.hostname, t.port)).
+		Str("reason", reason).
+		Msg("agent-vault: closed a SOCKS5 connection the proxy can't handle; it handles only HTTP/1.1 web traffic from clients that trust its CA")
+}
 
 // bufferedConn lets the first byte be peeked and then handed on, to tls.Server or to the plain HTTP
 // server, without the byte being consumed.
@@ -300,11 +374,11 @@ func (b *bufferedConn) Read(p []byte) (int, error) { return b.reader.Read(p) }
 
 // The scheme is the tunnel's, not the inner request's, and the target host comes from the CONNECT line so
 // an agent cannot address one host through a tunnel to another.
-func (ps *proxyServer) serveTunnel(conn net.Conn, scheme, hostname, port, sessionToken string) {
+func (ps *proxyServer) serveTunnel(conn net.Conn, t tunnel) {
 	listener := newOneShotListener(conn)
 	srv := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ps.forwardHTTP(w, r, scheme, hostname, port, sessionToken)
+			ps.forwardHTTP(w, r, t)
 		}),
 		ReadHeaderTimeout: tunnelReadHeaderTimeout,
 		ReadTimeout:       tunnelReadTimeout,
@@ -349,10 +423,11 @@ func (ps *proxyServer) handlePlainForward(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	ps.forwardHTTP(w, r, "http", hostname, port, sessionToken)
+	ps.forwardHTTP(w, r, tunnel{scheme: "http", hostname: hostname, port: port, sessionToken: sessionToken})
 }
 
-func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, scheme, hostname, port, sessionToken string) {
+func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, t tunnel) {
+	scheme, hostname, port := t.scheme, t.hostname, t.port
 	// Before anything reads the path: the policy check, the substitutions and the forward all have to see
 	// the bytes the agent sent, not the ones Go rebuilds.
 	normalizeRequestTarget(r.URL)
@@ -361,7 +436,7 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 	reqPath := truncatePath(requestPath(r))
 	reqMethod := truncateLogged(r.Method, maxLoggedMethodLen)
 
-	resp, matched, outcome, err := ps.forward(r, scheme, hostname, port, sessionToken)
+	resp, matched, outcome, err := ps.forward(r, t)
 
 	// The body is fixed text per outcome, never err.Error(): an APIError carries the control-plane URL and
 	// request id, and a dial error names the upstream address. The detail goes on the log line below.
@@ -377,6 +452,9 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 		decision, status, body = decisionBlocked, http.StatusBadRequest, err.Error()
 	case errors.Is(err, errOpaqueTarget):
 		decision, status, body = decisionBlocked, http.StatusBadRequest, errOpaqueTarget.Error()
+	case errors.Is(err, errPrivateDestination):
+		// The dial error names the address it refused, which would tell the agent about the internal network.
+		decision, status, body = decisionBlocked, http.StatusForbidden, errPrivateDestination.Error()
 	case isProxyTokenRejected(err):
 		decision, status, body = decisionError, http.StatusServiceUnavailable, proxyRevokedBody
 	case isSessionGone(err):
@@ -405,6 +483,9 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 		Str("path", reqPath).
 		Str("decision", decision).
 		Int("status", status)
+	if t.viaSocks5 {
+		event = event.Str("door", "socks5")
+	}
 	if matched != nil {
 		event = event.Str("service", matched.name).Str("accessBundle", matched.accessBundleName)
 	}
@@ -474,8 +555,8 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, schem
 }
 
 // The one place the block decision lives, so the test that covers exceptions runs what forward runs.
-func (ps *proxyServer) blocksOffBundle(matched *resolvedService, hostname, port string) bool {
-	return matched == nil && ps.currentConfig().TrafficPolicy == TrafficPolicyBundleHosts && !ps.isAllowedHost(hostname, port)
+func (cfg ProxyConfig) blocksOffBundle(matched *resolvedService, hostname, port string) bool {
+	return matched == nil && cfg.TrafficPolicy == TrafficPolicyBundleHosts && !cfg.isAllowedHost(hostname, port)
 }
 
 type forwardOutcome struct {
@@ -485,7 +566,8 @@ type forwardOutcome struct {
 	mcp         *mcpDetail
 }
 
-func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessionToken string) (*http.Response, *resolvedService, forwardOutcome, error) {
+func (ps *proxyServer) forward(req *http.Request, t tunnel) (*http.Response, *resolvedService, forwardOutcome, error) {
+	scheme, hostname, port, sessionToken := t.scheme, t.hostname, t.port, t.sessionToken
 	var outcome forwardOutcome
 
 	services, grant, err := ps.cache.lookup(sessionToken)
@@ -509,6 +591,10 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 	}
 
 	matched := bestMatch(services, hostname, port)
+	// One copy for every decision this request makes. A poll can swap the settings at any moment, and a
+	// request judged by two different policies could pass the gate under one and skip the private-address
+	// check under the other.
+	cfg := ps.currentConfig()
 	// Set only when the proxy injected a credential Infisical can refresh, which is what decides whether an
 	// upstream 401 or 403 is handled here or passed to the agent.
 	var sent *credential
@@ -516,7 +602,7 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 	// stored credential is wrong, which the agent cannot fix by logging in itself.
 	staticMCP := false
 
-	if ps.blocksOffBundle(matched, hostname, port) {
+	if cfg.blocksOffBundle(matched, hostname, port) {
 		return nil, nil, outcome, fmt.Errorf("no service covers host %q: %w", hostname, errHostBlocked)
 	}
 
@@ -610,7 +696,11 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 		replay, replayable = replayableBody(req)
 	}
 
-	resp, err := ps.transport.RoundTrip(req)
+	upstream, err := ps.upstreamFor(t, matched, cfg)
+	if err != nil {
+		return nil, matched, outcome, err
+	}
+	resp, err := upstream.RoundTrip(req)
 	if err != nil {
 		return nil, matched, outcome, err
 	}
@@ -624,12 +714,26 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 		return upstreamAuthFailed(req, staticCredentialRejectedBody(matched.name)), matched, outcome, nil
 	}
 	if sent != nil {
-		resp, err = ps.handleUpstreamAuth(req, resp, matched, sessionToken, sent, replay, replayable)
+		resp, err = ps.handleUpstreamAuth(upstream, req, resp, matched, sessionToken, sent, replay, replayable)
 		if err != nil {
 			return nil, matched, outcome, err
 		}
 	}
 	return resp, matched, outcome, nil
+}
+
+// upstreamFor picks the transport a request leaves through. A SOCKS5 port is meant to face the internet, so
+// under the any-host policy a destination no service names may not be private: only an admin naming a host
+// in a bundle makes an internal address reachable that way. Under bundle-hosts every reachable host is
+// already named. Exceptions do not count here, because the UI hides them once the policy is any-host.
+func (ps *proxyServer) upstreamFor(t tunnel, matched *resolvedService, cfg ProxyConfig) (http.RoundTripper, error) {
+	if !t.viaSocks5 || ps.socks5AllowPrivate || matched != nil || cfg.TrafficPolicy != TrafficPolicyAnyHost {
+		return ps.transport, nil
+	}
+	if ps.guardedTransport == nil {
+		return nil, errPrivateDestination
+	}
+	return ps.guardedTransport, nil
 }
 
 func containsSurface(surfaces []string, target string) bool {
@@ -641,8 +745,8 @@ func containsSurface(surfaces []string, target string) bool {
 	return false
 }
 
-func (ps *proxyServer) isAllowedHost(hostname, port string) bool {
-	raw := ps.currentConfig().AllowedHosts
+func (cfg ProxyConfig) isAllowedHost(hostname, port string) bool {
+	raw := cfg.AllowedHosts
 	if raw == "" {
 		return false
 	}
