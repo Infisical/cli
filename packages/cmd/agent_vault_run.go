@@ -128,9 +128,8 @@ The skills in the session's access bundle are installed when the agent starts, i
 ~/.hermes (or $HERMES_HOME) exists, each skill is also linked into its skills folder for Claude Code or
 Hermes, and for Claude Code whenever the agent is claude. Pass --skills-dir to install them into another
 folder instead, with no links, or --no-skills to start without them. Installed skills stay after the agent
-exits. A folder with the same name as a skill is replaced in the install folder, but in an agent's skills
-folder only a link or an earlier copy of that skill is. Restart the agent to pick up changes to them. If they
-cannot be installed, the agent starts without them.
+exits, and folders of your own with a skill's name are left alone. Restart the agent to pick up changes to
+them. If they cannot be installed, the agent starts without them.
 
 Unlike 'secrets agent-proxy run', this command does not sandbox the agent: it sets environment variables
 and starts the process.`,
@@ -446,6 +445,9 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 
 	if exitCode, interrupted := runAgentVaultRunSkillsStep(noSkills,
 		func(ctx context.Context) {
+			if minted == nil {
+				useAgentVaultSessionTokenDomain()
+			}
 			skillsHTTPClient, clientErr := newAgentVaultSkillsHTTPClient()
 			if clientErr != nil {
 				util.PrintWarning(fmt.Sprintf("Starting without skills: %v.", clientErr))

@@ -624,3 +624,9 @@ func TestIsIdempotentMethod(t *testing.T) {
 		assert.False(t, isIdempotentMethod(method), method)
 	}
 }
+
+func TestStatusOnlyPolicyNeverRetriesATransportError(t *testing.T) {
+	dialFailure := &url.Error{Op: "Get", URL: "http://x", Err: &net.OpError{Op: "dial", Err: syscall.ETIMEDOUT}}
+	assert.False(t, shouldRetryRequest(RetryPolicy{MaxRetries: 3, StatusOnly: true}, nil, dialFailure))
+	assert.True(t, shouldRetryRequest(RetryPolicy{MaxRetries: 3}, nil, dialFailure))
+}

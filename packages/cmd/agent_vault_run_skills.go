@@ -29,7 +29,11 @@ var (
 const agentVaultSkillsUnreachableHint = " Pass --no-skills if this host can't reach Infisical."
 
 func newAgentVaultSkillsHTTPClient() (*resty.Client, error) {
-	httpClient, err := util.GetRestyClientWithCustomHeaders()
+	// A busy Infisical (429 or 5xx) is asked again, but a connection that never opens is not, since each
+	// attempt would wait out the connect timeout again.
+	policy := util.DefaultRetryPolicy()
+	policy.StatusOnly = true
+	httpClient, err := util.GetRestyClientWithPolicy(policy)
 	if err != nil {
 		return nil, err
 	}
@@ -38,9 +42,27 @@ func newAgentVaultSkillsHTTPClient() (*resty.Client, error) {
 		return nil, err
 	}
 	transport.DialContext = (&net.Dialer{Timeout: agentVaultSkillsConnectTimeout, KeepAlive: 30 * time.Second}).DialContext
-	// The client's own retries would wait out the connect timeout again for each attempt.
-	httpClient.SetRetryCount(0)
 	return httpClient, nil
+}
+
+// A session token goes only to a domain the user chose: --domain, the domain variables, or the logged-in
+// profile. A .infisical.json can arrive with a cloned repo, so the domain it names never receives the token.
+func useAgentVaultSessionTokenDomain() {
+	if !config.INFISICAL_DOMAIN_EXPLICITLY_SET {
+		config.INFISICAL_URL = agentVaultSessionTokenAPIURL()
+	}
+}
+
+func agentVaultSessionTokenAPIURL() string {
+	domain := util.ActiveProfileDomain()
+	if domain == "" {
+		domain = util.INFISICAL_DEFAULT_US_URL
+	}
+	apiURL := util.AppendAPIEndpoint(domain)
+	if fileDomain, valid := util.GetDomainFromFile(); valid && util.AppendAPIEndpoint(fileDomain) != apiURL {
+		util.PrintWarning(fmt.Sprintf("Ignoring the domain in .infisical.yaml (or .infisical.json) for this session token, and getting skills from %s. Pass --domain to choose another.", strings.TrimSuffix(apiURL, "/api")))
+	}
+	return apiURL
 }
 
 // The waits before each retry of a list that answered 401 on a minted run.

@@ -582,3 +582,60 @@ func TestASecondSignalCutsTheRevokeShortWithItsWarning(t *testing.T) {
 		t.Fatalf("warned %q", warnings.String())
 	}
 }
+
+func TestASessionTokenIsNotSentToTheDomainInARepoFile(t *testing.T) {
+	isolateSkillsHome(t)
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, ".infisical.json"), []byte(`{"domain":"https://evil.example"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(repo)
+	useInfisicalURL(t, "https://evil.example/api")
+	old := config.INFISICAL_DOMAIN_EXPLICITLY_SET
+	config.INFISICAL_DOMAIN_EXPLICITLY_SET = false
+	t.Cleanup(func() { config.INFISICAL_DOMAIN_EXPLICITLY_SET = old })
+
+	useAgentVaultSessionTokenDomain()
+	if config.INFISICAL_URL != "https://app.infisical.com/api" {
+		t.Fatalf("the token would go to %s", config.INFISICAL_URL)
+	}
+}
+
+func TestASessionTokenGoesToAnExplicitDomain(t *testing.T) {
+	isolateSkillsHome(t)
+	useInfisicalURL(t, "https://eu.infisical.com/api")
+	old := config.INFISICAL_DOMAIN_EXPLICITLY_SET
+	config.INFISICAL_DOMAIN_EXPLICITLY_SET = true
+	t.Cleanup(func() { config.INFISICAL_DOMAIN_EXPLICITLY_SET = old })
+
+	useAgentVaultSessionTokenDomain()
+	if config.INFISICAL_URL != "https://eu.infisical.com/api" {
+		t.Fatalf("the token would go to %s", config.INFISICAL_URL)
+	}
+}
+
+func TestTheSkillsClientAsksABusyInfisicalAgain(t *testing.T) {
+	var requests atomic.Int32
+	skill := testSessionSkill("code-review", "x")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if requests.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]any{})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(api.ListAgentVaultSessionSkillsResponse{Skills: []api.AgentVaultSessionSkill{skill}})
+	}))
+	defer srv.Close()
+	useInfisicalURL(t, srv.URL+"/api")
+	t.Setenv(util.INFISICAL_RETRY_BASE_DELAY_NAME, "10ms")
+	httpClient, err := newAgentVaultSkillsHTTPClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	listed, err := (&agentVaultSkillsClient{httpClient: httpClient, sessionToken: "agv_tok"}).list(context.Background())
+	if err != nil || len(listed.Skills) != 1 || requests.Load() != 2 {
+		t.Fatalf("err %v, skills %d, requests %d", err, len(listed.Skills), requests.Load())
+	}
+}
