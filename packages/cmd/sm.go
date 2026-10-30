@@ -1,6 +1,13 @@
 package cmd
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/spf13/cobra"
 )
 
@@ -25,6 +32,86 @@ var hiddenUnderSecretsManager = [][]string{
 	{"secrets", "generate-example-env"},
 	{"secrets", "agent-proxy"},
 	{"agent-proxy"},
+}
+
+// Deletes under `secrets-manager` ask for confirmation (see CLI.md). The legacy top-level copies keep
+// deleting without asking, so existing scripts that use them are unaffected.
+var confirmedUnderSecretsManager = map[string]func(cmd *cobra.Command, args []string) (destructiveAction, bool){
+	"secrets delete":               describeSecretsDelete,
+	"secrets folders delete":       describeFolderDelete,
+	"dynamic-secrets lease delete": describeLeaseDelete,
+}
+
+// deleteProject resolves the project a delete acts on, in the order the deletes themselves use
+// (--project-slug, --projectId, INFISICAL_PROJECT_ID, then the workspace file), so the question can
+// name it. id is empty when --project-slug chose it. ok is false when nothing resolves; the command
+// then reports that itself.
+func deleteProject(cmd *cobra.Command) (phrase, id string, ok bool) {
+	if slug, _ := cmd.Flags().GetString("project-slug"); slug != "" {
+		return "in project " + util.SuggestedValue(slug, "project-slug"), "", true
+	}
+	if id, _ := cmd.Flags().GetString("projectId"); id != "" {
+		return "in project " + util.SuggestedValue(id, "project-id"), id, true
+	}
+	if id := strings.TrimSpace(os.Getenv(util.INFISICAL_PROJECT_ID_NAME)); id != "" {
+		return fmt.Sprintf("in project %s (from %s)", util.SuggestedValue(id, "project-id"), util.INFISICAL_PROJECT_ID_NAME), id, true
+	}
+	file, err := util.FindWorkspaceConfigFile()
+	if err != nil {
+		return "", "", false
+	}
+	workspace, err := util.GetWorkSpaceFromFilePath(filepath.Dir(file))
+	if err != nil || workspace.WorkspaceId == "" {
+		return "", "", false
+	}
+	return fmt.Sprintf("in project %s (from %s)", util.SuggestedValue(workspace.WorkspaceId, "project-id"), file), workspace.WorkspaceId, true
+}
+
+func describeSecretsDelete(cmd *cobra.Command, args []string) (destructiveAction, bool) {
+	project, projectID, ok := deleteProject(cmd)
+	if len(args) == 0 || !ok {
+		return destructiveAction{}, false
+	}
+	env, path := util.ResolveEnvironmentName(cmd), util.ResolveSecretPath(cmd)
+	scope := []scopeFlag{{"env", env}, {"path", path}, {"projectId", projectID}}
+	where := fmt.Sprintf("from the %s environment at %s %s", util.SuggestedValue(env, "env"), util.SuggestedValue(path, "path"), project)
+	names := make([]string, len(args))
+	for i, arg := range args {
+		names[i] = util.SuggestedValue(arg, "name")
+	}
+	if len(args) == 1 {
+		return destructiveAction{Target: "secret " + quoted(args[0], "name"), Expected: args[0], Label: "the secret name",
+			Description: fmt.Sprintf("secret %s %s", names[0], where), Scope: scope}, true
+	}
+	return destructiveAction{Target: fmt.Sprintf("%d secrets", len(args)), Expected: strconv.Itoa(len(args)), Label: "the number of secrets",
+		Description: fmt.Sprintf("%d secrets (%s) %s", len(args), strings.Join(names, ", "), where), Scope: scope}, true
+}
+
+func describeFolderDelete(cmd *cobra.Command, args []string) (destructiveAction, bool) {
+	project, projectID, ok := deleteProject(cmd)
+	name, _ := cmd.Flags().GetString("name")
+	if name == "" || !ok {
+		return destructiveAction{}, false
+	}
+	// Unlike the other deletes, folder delete reads --path only from the flag.
+	path, _ := cmd.Flags().GetString("path")
+	env := util.ResolveEnvironmentName(cmd)
+	return destructiveAction{Target: "folder " + quoted(name, "name"), Expected: name, Label: "the folder name",
+		Description: fmt.Sprintf("folder %s at %s in the %s environment %s, with every secret and folder inside it",
+			util.SuggestedValue(name, "name"), util.SuggestedValue(path, "path"), util.SuggestedValue(env, "env"), project),
+		Scope: []scopeFlag{{"env", env}, {"path", path}, {"projectId", projectID}}}, true
+}
+
+func describeLeaseDelete(cmd *cobra.Command, args []string) (destructiveAction, bool) {
+	project, projectID, ok := deleteProject(cmd)
+	if len(args) != 1 || !ok {
+		return destructiveAction{}, false
+	}
+	env, path := util.ResolveEnvironmentName(cmd), util.ResolveSecretPath(cmd)
+	return destructiveAction{Target: "lease " + quoted(args[0], "lease-id"), Expected: args[0], Label: "the lease ID",
+		Description: fmt.Sprintf("dynamic secret lease %s in the %s environment at %s %s, which revokes its credentials",
+			util.SuggestedValue(args[0], "lease-id"), util.SuggestedValue(env, "env"), util.SuggestedValue(path, "path"), project),
+		Scope: []scopeFlag{{"env", env}, {"path", path}, {"projectId", projectID}}}, true
 }
 
 func init() {
@@ -55,6 +142,14 @@ func init() {
 
 	secretsManagerCmd.AddCommand(buildAgentProxyCmd())
 	secretsManagerCmd.AddCommand(buildProjectsCmd())
+
+	for path, describe := range confirmedUnderSecretsManager {
+		cmd, rest, err := secretsManagerCmd.Find(strings.Fields(path))
+		if err != nil || len(rest) != 0 {
+			panic(fmt.Sprintf("secrets-manager %s is not registered", path))
+		}
+		requireConfirmation(cmd, describe)
+	}
 
 	for _, path := range hiddenUnderSecretsManager {
 		if cmd, rest, err := secretsManagerCmd.Find(path); err == nil && len(rest) == 0 {

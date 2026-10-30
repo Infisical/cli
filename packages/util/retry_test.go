@@ -388,10 +388,33 @@ func TestClientsAreBuiltThroughTheSharedConstructor(t *testing.T) {
 	agentClient, err := GetRestyClientWithPolicy(AgentRetryPolicy())
 	require.NoError(t, err)
 	assert.Equal(t, agentRetryMaxRetries, agentClient.RetryCount)
+
+	externalClient := GetRestyClientWithoutCustomHeaders(DefaultRetryPolicy())
+	assert.Equal(t, defaultRetryMaxRetries, externalClient.RetryCount)
+}
+
+func TestClientWithoutCustomHeadersNeverSendsThem(t *testing.T) {
+	t.Setenv("INFISICAL_CUSTOM_HEADERS", "cf-access-token=secret-value")
+
+	var received http.Header
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received = r.Header.Clone()
+	}))
+	defer server.Close()
+
+	_, err := GetRestyClientWithoutCustomHeaders(DefaultRetryPolicy()).R().Get(server.URL)
+	require.NoError(t, err)
+	assert.Empty(t, received.Get("cf-access-token"))
+
+	apiClient, err := GetRestyClientWithPolicy(DefaultRetryPolicy())
+	require.NoError(t, err)
+	_, err = apiClient.R().Get(server.URL)
+	require.NoError(t, err)
+	assert.Equal(t, "secret-value", received.Get("cf-access-token"))
 }
 
 // A direct resty.New() compiles and works but silently has no retry policy; add new clients via
-// GetRestyClientWithCustomHeaders or GetRestyClientWithPolicy instead.
+// GetRestyClientWithCustomHeaders, GetRestyClientWithPolicy, or GetRestyClientWithoutCustomHeaders.
 func TestNoDirectRestyConstruction(t *testing.T) {
 	allowed := map[string]bool{
 		filepath.Join("packages", "util", "common.go"): true,
@@ -438,7 +461,8 @@ func TestNoDirectRestyConstruction(t *testing.T) {
 
 	assert.Empty(t, offenders,
 		"these sites construct a resty client directly and so have no retry policy; "+
-			"use util.GetRestyClientWithCustomHeaders or util.GetRestyClientWithPolicy instead")
+			"use util.GetRestyClientWithCustomHeaders or util.GetRestyClientWithPolicy instead, "+
+			"or util.GetRestyClientWithoutCustomHeaders for hosts other than the Infisical API")
 }
 
 // Resty's default logger writes unstructured lines straight to stderr on each failed attempt and
