@@ -730,7 +730,7 @@ func sshConnect(cmd *cobra.Command, args []string) {
 		}
 
 		hostPrompt := promptui.Select{
-			Label: "Select an SSH Host",
+			Label: promptLabel("Select an SSH Host"),
 			Items: hostNames,
 			Size:  10,
 		}
@@ -765,7 +765,7 @@ func sshConnect(cmd *cobra.Command, args []string) {
 			loginUsers[i] = m.LoginUser
 		}
 		loginPrompt := promptui.Select{
-			Label: "Select Login User",
+			Label: promptLabel("Select Login User"),
 			Items: loginUsers,
 			Size:  5,
 		}
