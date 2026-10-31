@@ -118,9 +118,10 @@ func init() {
 	secretsManagerCmd := &cobra.Command{
 		Use:     secretsManagerCommandName,
 		Aliases: []string{secretsManagerAlias},
-		Short:   "Secrets Management commands (secrets, projects, dynamic-secrets, run, export)",
+		Short:   "Secrets Management commands (secrets, projects, environments, dynamic-secrets, run, export)",
 		Example: `  infisical secrets-manager secrets get DB_PASSWORD
   infisical secrets-manager projects create --name my-app
+  infisical secrets-manager environments create qa --projectId <project-id>
   infisical secrets-manager dynamic-secrets lease create my-db-credentials
   infisical secrets-manager run --env=dev -- npm run dev
   infisical secrets-manager export --env=prod --format=json`,
@@ -142,6 +143,7 @@ func init() {
 
 	secretsManagerCmd.AddCommand(buildAgentProxyCmd())
 	secretsManagerCmd.AddCommand(buildProjectsCmd())
+	secretsManagerCmd.AddCommand(buildEnvironmentsCmd())
 
 	for path, describe := range confirmedUnderSecretsManager {
 		cmd, rest, err := secretsManagerCmd.Find(strings.Fields(path))

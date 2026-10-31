@@ -36,6 +36,11 @@ const (
 	operationCallListProjects                      = "CallListProjects"
 	operationCallGetProject                        = "CallGetProject"
 	operationCallCreateProject                     = "CallCreateProject"
+	operationCallGetProjectEnvironments            = "CallGetProjectEnvironments"
+	operationCallGetEnvironmentBySlug              = "CallGetEnvironmentBySlug"
+	operationCallCreateEnvironment                 = "CallCreateEnvironment"
+	operationCallUpdateEnvironment                 = "CallUpdateEnvironment"
+	operationCallDeleteEnvironment                 = "CallDeleteEnvironment"
 	operationCallIsAuthenticated                   = "CallIsAuthenticated"
 	operationCallGetNewAccessTokenWithRefreshToken = "CallGetNewAccessTokenWithRefreshToken"
 	operationCallGetFoldersV1                      = "CallGetFoldersV1"
@@ -419,6 +424,109 @@ func CallCreateProject(httpClient *resty.Client, request CreateProjectRequest) (
 	}
 
 	return createResponse.Project, nil
+}
+
+func CallGetProjectEnvironments(httpClient *resty.Client, projectID string) (ProjectEnvironments, error) {
+	var projectResponse GetProjectEnvironmentsResponse
+	response, err := httpClient.
+		R().
+		SetResult(&projectResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/projects/%s", config.INFISICAL_URL, url.PathEscape(projectID)))
+
+	if err != nil {
+		return ProjectEnvironments{}, NewGenericRequestError(operationCallGetProjectEnvironments, err)
+	}
+
+	if response.IsError() {
+		return ProjectEnvironments{}, NewAPIErrorWithResponse(operationCallGetProjectEnvironments, response, nil)
+	}
+
+	return projectResponse.Project, nil
+}
+
+// CallGetEnvironmentBySlug finds an active environment; one pending deletion is a 404.
+func CallGetEnvironmentBySlug(httpClient *resty.Client, projectID, slug string) (Environment, error) {
+	var environmentResponse EnvironmentResponse
+	response, err := httpClient.
+		R().
+		SetResult(&environmentResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/projects/%s/environments/slug/%s", config.INFISICAL_URL, url.PathEscape(projectID), url.PathEscape(slug)))
+
+	if err != nil {
+		return Environment{}, NewGenericRequestError(operationCallGetEnvironmentBySlug, err)
+	}
+
+	if response.IsError() {
+		return Environment{}, NewAPIErrorWithResponse(operationCallGetEnvironmentBySlug, response, nil)
+	}
+
+	return environmentResponse.Environment, nil
+}
+
+func CallCreateEnvironment(httpClient *resty.Client, projectID string, request CreateEnvironmentRequest) (Environment, error) {
+	var environmentResponse EnvironmentResponse
+	response, err := httpClient.
+		R().
+		SetBody(request).
+		SetResult(&environmentResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Post(fmt.Sprintf("%v/v1/projects/%s/environments", config.INFISICAL_URL, url.PathEscape(projectID)))
+
+	if err != nil {
+		return Environment{}, NewGenericRequestError(operationCallCreateEnvironment, err)
+	}
+
+	if response.IsError() {
+		return Environment{}, NewAPIErrorWithResponse(operationCallCreateEnvironment, response, nil)
+	}
+
+	return environmentResponse.Environment, nil
+}
+
+func CallUpdateEnvironment(httpClient *resty.Client, projectID, environmentID string, request UpdateEnvironmentRequest) (Environment, error) {
+	var environmentResponse EnvironmentResponse
+	response, err := httpClient.
+		R().
+		SetBody(request).
+		SetResult(&environmentResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Patch(fmt.Sprintf("%v/v1/projects/%s/environments/%s", config.INFISICAL_URL, url.PathEscape(projectID), url.PathEscape(environmentID)))
+
+	if err != nil {
+		return Environment{}, NewGenericRequestError(operationCallUpdateEnvironment, err)
+	}
+
+	if response.IsError() {
+		return Environment{}, NewAPIErrorWithResponse(operationCallUpdateEnvironment, response, nil)
+	}
+
+	return environmentResponse.Environment, nil
+}
+
+// CallDeleteEnvironment soft-deletes the environment, or deletes it for good with hardDelete. Backends
+// without soft delete ignore hardDelete and always delete for good; their response has no deleteAfter.
+func CallDeleteEnvironment(httpClient *resty.Client, projectID, environmentID string, hardDelete bool) (Environment, error) {
+	var environmentResponse EnvironmentResponse
+	request := httpClient.
+		R().
+		SetResult(&environmentResponse).
+		SetHeader("User-Agent", USER_AGENT)
+	if hardDelete {
+		request.SetQueryParam("hardDelete", "true")
+	}
+	response, err := request.Delete(fmt.Sprintf("%v/v1/projects/%s/environments/%s", config.INFISICAL_URL, url.PathEscape(projectID), url.PathEscape(environmentID)))
+
+	if err != nil {
+		return Environment{}, NewGenericRequestError(operationCallDeleteEnvironment, err)
+	}
+
+	if response.IsError() {
+		return Environment{}, NewAPIErrorWithResponse(operationCallDeleteEnvironment, response, nil)
+	}
+
+	return environmentResponse.Environment, nil
 }
 
 func CallGetProjectBySlug(httpClient *resty.Client, slug string) (Project, error) {

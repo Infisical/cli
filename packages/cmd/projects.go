@@ -116,9 +116,14 @@ func ignoresEnvServiceToken(cmd *cobra.Command, token *models.TokenDetails) bool
 	return token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER && !cmd.Flags().Changed("token") && rejectsServiceTokens(cmd)
 }
 
-// projectsHTTPClient authenticates with the machine identity token from --token or the
-// environment when there is one, and with the logged-in user's session otherwise.
 func projectsHTTPClient(cmd *cobra.Command) *resty.Client {
+	return secretsManagerHTTPClient(cmd, "list or create projects")
+}
+
+// secretsManagerHTTPClient authenticates with the machine identity token from --token or the
+// environment when there is one, and with the logged-in user's session otherwise. what names what a
+// service token can't do, for a command marked serviceTokenUnsupported.
+func secretsManagerHTTPClient(cmd *cobra.Command, what string) *resty.Client {
 	token, err := util.GetInfisicalToken(cmd)
 	if err != nil {
 		util.HandleError(err, "Unable to parse flag")
@@ -130,11 +135,11 @@ func projectsHTTPClient(cmd *cobra.Command) *resty.Client {
 	}
 
 	if ignoresEnvServiceToken(cmd, token) {
-		log.Debug().Msgf("Ignoring the service token from %s, which can't list or create projects", token.Source)
+		log.Debug().Msgf("Ignoring the service token from %s, which can't %s", token.Source, what)
 		token = nil
 	}
 	if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER && rejectsServiceTokens(cmd) {
-		util.PrintErrorMessageAndExit("Service tokens can't list or create projects. Pass a machine identity access token with --token, or log in with [infisical login].")
+		util.PrintErrorMessageAndExit(fmt.Sprintf("Service tokens can't %s. Pass a machine identity access token with --token, or log in with [infisical login].", what))
 	}
 
 	if token != nil {
@@ -149,6 +154,11 @@ func projectsHTTPClient(cmd *cobra.Command) *resty.Client {
 }
 
 func projectsOutputFormat(cmd *cobra.Command) string {
+	return crudOutputFormat(cmd, "projects")
+}
+
+// crudOutputFormat is -o for a command whose output is structured data: json, yaml, or "" for a table.
+func crudOutputFormat(cmd *cobra.Command, noun string) string {
 	outputFormat, err := cmd.Flags().GetString("output")
 	if err != nil {
 		util.HandleError(err, "Unable to parse flag")
@@ -158,7 +168,7 @@ func projectsOutputFormat(cmd *cobra.Command) string {
 		util.HandleError(err, "Unable to format output")
 	}
 	if outputFormat == util.OUTPUT_FORMAT_DOTENV {
-		util.HandleError(fmt.Errorf("projects can't be output as dotenv; use json or yaml"))
+		util.HandleError(fmt.Errorf("%s can't be output as dotenv; use json or yaml", noun))
 	}
 	return outputFormat
 }
@@ -204,24 +214,9 @@ func runProjectsList(cmd *cobra.Command, args []string) {
 func runProjectsGet(cmd *cobra.Command, args []string) {
 	outputFormat := projectsOutputFormat(cmd)
 
-	projectID, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
-	}
+	projectID := resolveProjectID(cmd)
 	if projectID == "" {
-		notLinked := "Please either run infisical init to connect to a project, or pass in project id with --projectId flag (see [infisical secrets-manager projects list])"
-		configFile, err := util.FindWorkspaceConfigFile()
-		if err != nil {
-			util.PrintErrorMessageAndExit(notLinked)
-		}
-		workspaceFile, err := util.GetWorkSpaceFromFilePath(filepath.Dir(configFile))
-		if err != nil {
-			util.HandleError(err, fmt.Sprintf("Unable to read the project config at %s", configFile))
-		}
-		if workspaceFile.WorkspaceId == "" {
-			util.PrintErrorMessageAndExit(notLinked)
-		}
-		projectID = workspaceFile.WorkspaceId
+		util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project, or pass in project id with --projectId flag (see [infisical secrets-manager projects list])")
 	}
 
 	project, err := api.CallGetProject(projectsHTTPClient(cmd), projectID)
@@ -239,6 +234,27 @@ func runProjectsGet(cmd *cobra.Command, args []string) {
 	}
 
 	Telemetry.CaptureEvent("cli-command:projects get", posthog.NewProperties().Set("version", util.CLI_VERSION))
+}
+
+// resolveProjectID is the project a command works on: --projectId, then INFISICAL_PROJECT_ID, then
+// .infisical.yaml (or a legacy .infisical.json). It is "" when none is set.
+func resolveProjectID(cmd *cobra.Command) string {
+	projectID, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
+	if err != nil {
+		util.HandleError(err, "Unable to parse flag")
+	}
+	if projectID != "" {
+		return projectID
+	}
+	configFile, err := util.FindWorkspaceConfigFile()
+	if err != nil {
+		return ""
+	}
+	workspaceFile, err := util.GetWorkSpaceFromFilePath(filepath.Dir(configFile))
+	if err != nil {
+		util.HandleError(err, fmt.Sprintf("Unable to read the project config at %s", configFile))
+	}
+	return workspaceFile.WorkspaceId
 }
 
 func runProjectsCreate(cmd *cobra.Command, args []string) {

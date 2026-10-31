@@ -72,6 +72,9 @@ With `-o json`, the same error is JSON on stderr:
 | `project_not_found` | The project doesn't exist or isn't visible (404) |
 | `project_type_not_supported` | A project of another product was passed to a `secrets-manager` command |
 | `environment_not_found` | The environment slug doesn't exist in the project (404) |
+| `environment_exists` | `environments create` (or `update --slug`) with a slug an active environment has. Nothing is written |
+| `environment_pending_deletion` | The slug belongs to an environment pending deletion, which keeps it until the grace period ends. Suggests `delete --force` |
+| `project_required` | A delete ran without `--projectId`. Deletes never use `INFISICAL_PROJECT_ID` or `.infisical.yaml` |
 | `secret_exists` | `secrets create` on a key that exists. Nothing is written |
 | `secret_not_found` | `secrets update` on a key that doesn't exist. Nothing is written |
 | `folder_not_found` | `folders get <name>` for a folder that doesn't exist |

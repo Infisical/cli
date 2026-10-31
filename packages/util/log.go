@@ -2,6 +2,7 @@ package util
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -69,6 +70,13 @@ func HandleError(err error, messages ...string) {
 }
 
 func PrintErrorAndExit(exitCode int, err error, messages ...string) {
+	// A CLIError that reaches here instead of exitWithError still prints its next step.
+	var cliErr *CLIError
+	if errors.As(err, &cliErr) {
+		WriteCLIError(GetStderrWriter(), cliErr, "")
+		os.Exit(exitCode)
+	}
+
 	// Check if it's an API error for special formatting
 	if apiErr, ok := err.(*api.APIError); ok {
 		if len(messages) > 0 {

@@ -265,6 +265,50 @@ type CreateProjectResponse struct {
 	Project ProjectDetails `json:"project"`
 }
 
+// Environment is a project environment as the /v1/projects/:projectId/environments endpoints return
+// it. DeleteAfter is set once it is soft-deleted, and is when it will be deleted for good.
+type Environment struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Slug        string `json:"slug"`
+	Position    int    `json:"position"`
+	ProjectID   string `json:"projectId"`
+	DeleteAfter string `json:"deleteAfter,omitempty"`
+}
+
+type EnvironmentResponse struct {
+	Environment Environment `json:"environment"`
+}
+
+type DeletedEnvironment struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Slug        string `json:"slug"`
+	DeleteAfter string `json:"deleteAfter"`
+}
+
+// ProjectEnvironments is a project with its active environments, in position order, and the ones
+// pending deletion. It is decoded from the same response as ProjectDetails, which leaves out
+// deletedEnvironments so `projects get -o json` keeps its shape.
+type ProjectEnvironments struct {
+	ProjectDetails
+	DeletedEnvironments []DeletedEnvironment `json:"deletedEnvironments"`
+}
+
+type GetProjectEnvironmentsResponse struct {
+	Project ProjectEnvironments `json:"project"`
+}
+
+type CreateEnvironmentRequest struct {
+	Name string `json:"name"`
+	Slug string `json:"slug"`
+}
+
+type UpdateEnvironmentRequest struct {
+	Name *string `json:"name,omitempty"`
+	Slug *string `json:"slug,omitempty"`
+}
+
 type RawSecret struct {
 	SecretKey     string   `json:"secretKey,omitempty"`
 	SecretValue   string   `json:"secretValue,omitempty"`

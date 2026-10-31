@@ -632,6 +632,58 @@
     "token": "|string|",
     "ttl": "|string|"
   },
+  "infisical secrets-manager environment": {},
+  "infisical secrets-manager environment create": {
+    "name": "|string|",
+    "output": "o|string|",
+    "projectId": "|string|",
+    "token": "|string|"
+  },
+  "infisical secrets-manager environment delete": {
+    "force": "|bool|false",
+    "output": "o|string|",
+    "projectId": "|string|",
+    "token": "|string|",
+    "yes": "y|bool|false"
+  },
+  "infisical secrets-manager environment get": {
+    "output": "o|string|",
+    "projectId": "|string|",
+    "token": "|string|"
+  },
+  "infisical secrets-manager environment update": {
+    "name": "|string|",
+    "output": "o|string|",
+    "projectId": "|string|",
+    "slug": "|string|",
+    "token": "|string|"
+  },
+  "infisical secrets-manager environments": {},
+  "infisical secrets-manager environments create": {
+    "name": "|string|",
+    "output": "o|string|",
+    "projectId": "|string|",
+    "token": "|string|"
+  },
+  "infisical secrets-manager environments delete": {
+    "force": "|bool|false",
+    "output": "o|string|",
+    "projectId": "|string|",
+    "token": "|string|",
+    "yes": "y|bool|false"
+  },
+  "infisical secrets-manager environments get": {
+    "output": "o|string|",
+    "projectId": "|string|",
+    "token": "|string|"
+  },
+  "infisical secrets-manager environments update": {
+    "name": "|string|",
+    "output": "o|string|",
+    "projectId": "|string|",
+    "slug": "|string|",
+    "token": "|string|"
+  },
   "infisical secrets-manager export": {
     "env": "e|string|dev",
     "expand": "|bool|true",
@@ -922,6 +974,58 @@
     "projectId": "|string|",
     "token": "|string|",
     "ttl": "|string|"
+  },
+  "infisical sm environment": {},
+  "infisical sm environment create": {
+    "name": "|string|",
+    "output": "o|string|",
+    "projectId": "|string|",
+    "token": "|string|"
+  },
+  "infisical sm environment delete": {
+    "force": "|bool|false",
+    "output": "o|string|",
+    "projectId": "|string|",
+    "token": "|string|",
+    "yes": "y|bool|false"
+  },
+  "infisical sm environment get": {
+    "output": "o|string|",
+    "projectId": "|string|",
+    "token": "|string|"
+  },
+  "infisical sm environment update": {
+    "name": "|string|",
+    "output": "o|string|",
+    "projectId": "|string|",
+    "slug": "|string|",
+    "token": "|string|"
+  },
+  "infisical sm environments": {},
+  "infisical sm environments create": {
+    "name": "|string|",
+    "output": "o|string|",
+    "projectId": "|string|",
+    "token": "|string|"
+  },
+  "infisical sm environments delete": {
+    "force": "|bool|false",
+    "output": "o|string|",
+    "projectId": "|string|",
+    "token": "|string|",
+    "yes": "y|bool|false"
+  },
+  "infisical sm environments get": {
+    "output": "o|string|",
+    "projectId": "|string|",
+    "token": "|string|"
+  },
+  "infisical sm environments update": {
+    "name": "|string|",
+    "output": "o|string|",
+    "projectId": "|string|",
+    "slug": "|string|",
+    "token": "|string|"
   },
   "infisical sm export": {
     "env": "e|string|dev",
