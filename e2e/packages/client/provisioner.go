@@ -54,7 +54,7 @@ func WithCookies(cookies ...*http.Cookie) RequestEditorFn {
 func (p *Provisioner) Bootstrap(ctx context.Context) (*ProvisionResult, error) {
 	slog.Info("Signing up Admin account ...")
 	email := faker.Email()
-	password := faker.Password()
+	password := "Infisical-E2E-Test1!"
 	signUpResp, err := p.Client.AdminSignUpWithResponse(ctx, AdminSignUpJSONRequestBody{
 		Email:     types.Email(email),
 		FirstName: faker.FirstName(),

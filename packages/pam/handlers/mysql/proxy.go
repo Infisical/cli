@@ -4,12 +4,13 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"net"
+
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/server"
 	"github.com/rs/zerolog/log"
-	"net"
 )
 
 // TODO: DRY with psql?
@@ -103,6 +104,8 @@ func (p *MysqlProxy) connectToServer() (*client.Conn, error) {
 		p.config.InjectPassword,
 		p.config.InjectDatabase,
 		func(conn *client.Conn) error {
+			conn.UnsetCapability(mysql.CLIENT_LOCAL_FILES)
+
 			if p.config.EnableTLS {
 				if p.config.TLSConfig == nil {
 					return fmt.Errorf("TLS configuration is required when TLS is enabled")
@@ -115,5 +118,6 @@ func (p *MysqlProxy) connectToServer() (*client.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to MySQL server: %w", err)
 	}
+
 	return conn, nil
 }

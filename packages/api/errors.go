@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/go-resty/resty/v2"
 	"github.com/infisical/go-sdk/packages/util"
@@ -34,6 +35,8 @@ type APIError struct {
 	StatusCode        int      `json:"statusCode"`
 	ErrorMessage      string   `json:"message,omitempty"`
 	ReqId             string   `json:"reqId,omitempty"`
+	// Infisical sets it only on its route-not-found body, which tells a missing route from a missing resource.
+	DocumentationURL string `json:"documentationUrl,omitempty"`
 }
 
 func (e APIError) Error() string {
@@ -108,6 +111,13 @@ func NewAPIErrorWithResponse(operation string, res *resty.Response, additionalCo
 		apiError.Details = details
 	}
 
+	var documented struct {
+		DocumentationURL string `json:"documentationUrl"`
+	}
+	if json.Unmarshal(res.Body(), &documented) == nil {
+		apiError.DocumentationURL = documented.DocumentationURL
+	}
+
 	if res.StatusCode() == 403 || res.StatusCode() == 401 {
 		if apiError.AdditionalContext == "" {
 			domainHint := extractDomainHint(res.Request.URL)
@@ -154,8 +164,12 @@ func TryParseErrorBody(res *resty.Response) (string, any, string) {
 		return "", details, ""
 	}
 
-	// stringify zod body entirely
+	// A 422 carries either zod's issue list or a plain message under the same key. Both are rendered as
+	// the human text the server wrote; anything else falls back to the raw body, as before.
 	if res.StatusCode() == 422 {
+		if msg, name, ok := parseValidationBody(body); ok {
+			return msg, details, name
+		}
 		return body, details, ""
 	}
 
@@ -191,4 +205,60 @@ func TryParseErrorBody(res *resty.Response) (string, any, string) {
 	}
 
 	return errorResponse.Message, errorResponse.Details, errorResponse.Name
+}
+
+type validationIssue struct {
+	Message string `json:"message"`
+	Path    []any  `json:"path"`
+}
+
+// parseValidationBody turns a 422 body into one line per issue, "field: message". The message field is
+// an array of zod issues from schema validation and a string from the other 422 producers, so both are
+// tried. ok is false when neither shape matches, and the caller keeps the raw body.
+func parseValidationBody(body string) (message string, name string, ok bool) {
+	var envelope struct {
+		Message json.RawMessage `json:"message"`
+		Name    string          `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(body), &envelope); err != nil || len(envelope.Message) == 0 {
+		return "", "", false
+	}
+
+	var issues []validationIssue
+	if err := json.Unmarshal(envelope.Message, &issues); err == nil && len(issues) > 0 {
+		lines := make([]string, 0, len(issues))
+		for _, issue := range issues {
+			if issue.Message == "" {
+				continue
+			}
+			if field := joinIssuePath(issue.Path); field != "" {
+				lines = append(lines, field+": "+issue.Message)
+			} else {
+				lines = append(lines, issue.Message)
+			}
+		}
+		if len(lines) > 0 {
+			return strings.Join(lines, "; "), envelope.Name, true
+		}
+		return "", "", false
+	}
+
+	var plain string
+	if err := json.Unmarshal(envelope.Message, &plain); err == nil && plain != "" {
+		return plain, envelope.Name, true
+	}
+	return "", "", false
+}
+
+func joinIssuePath(path []any) string {
+	parts := make([]string, 0, len(path))
+	for _, p := range path {
+		switch v := p.(type) {
+		case string:
+			parts = append(parts, v)
+		case float64:
+			parts = append(parts, fmt.Sprintf("[%d]", int(v)))
+		}
+	}
+	return strings.Join(parts, ".")
 }

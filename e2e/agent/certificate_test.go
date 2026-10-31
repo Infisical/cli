@@ -2,6 +2,8 @@ package agent_test
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -55,6 +57,7 @@ func setupCertAgentTest(t *testing.T, ctx context.Context, policyOpts ...agentHe
 	helper := &agentHelpers.CertAgentTestHelper{
 		T:              t,
 		AdminToken:     infisical.ProvisionResult().Token,
+		IdentityToken:  identityToken,
 		InfisicalURL:   infisical.ApiUrl(t),
 		TempDir:        t.TempDir(),
 		IdentityClient: identityClient,
@@ -76,6 +79,8 @@ func setupCertAgentTest(t *testing.T, ctx context.Context, policyOpts ...agentHe
 	helper.ProjectSlug = projectResp.JSON200.Project.Slug
 	slog.Info("Created cert-manager project", "id", helper.ProjectID, "slug", helper.ProjectSlug)
 
+	helper.SetActiveCertManagerProject()
+
 	helper.CreateInternalCA()
 	slog.Info("Created internal CA", "id", helper.CaID)
 
@@ -84,6 +89,9 @@ func setupCertAgentTest(t *testing.T, ctx context.Context, policyOpts ...agentHe
 
 	helper.CreateCertificateProfile("test-profile-" + helpers.RandomSlug(2))
 	slog.Info("Created certificate profile", "id", helper.ProfileID, "name", helper.ProfileSlug)
+
+	helper.CreateApplicationWithProfile("test-app-" + helpers.RandomSlug(2))
+	slog.Info("Created application with API enrollment", "id", helper.ApplicationID, "name", helper.ApplicationName)
 
 	return helper
 }
@@ -105,7 +113,7 @@ func certAgent_BasicCertificateIssuance(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "test.example.com",
 				TTL:                 "1h",
@@ -176,7 +184,7 @@ func certAgent_CertificateRenewal(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "renew.example.com",
 				TTL:                 "2m",
@@ -261,7 +269,7 @@ func certAgent_PostHookExecution(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "hook.example.com",
 				TTL:                 "1h",
@@ -314,6 +322,7 @@ func certAgent_MultipleCertificates(t *testing.T) {
 
 	helper.CreateCertificateProfile("second-profile-" + helpers.RandomSlug(2))
 	secondProfileName := helper.ProfileSlug
+	helper.AttachProfileWithApiEnrollment(helper.ProfileID)
 	slog.Info("Created second certificate profile", "name", secondProfileName)
 
 	certDir1 := filepath.Join(helper.TempDir, "cert1")
@@ -331,7 +340,7 @@ func certAgent_MultipleCertificates(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         firstProfileName,
 				CommonName:          "multi1.example.com",
 				TTL:                 "1h",
@@ -342,7 +351,7 @@ func certAgent_MultipleCertificates(t *testing.T) {
 				ChainPath:           chainPath1,
 			},
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         secondProfileName,
 				CommonName:          "multi2.example.com",
 				TTL:                 "1h",
@@ -417,7 +426,7 @@ func certAgent_FilePermissions(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "perms.example.com",
 				TTL:                 "1h",
@@ -484,7 +493,7 @@ func certAgent_AltNames(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "altnames.example.com",
 				TTL:                 "1h",
@@ -552,7 +561,7 @@ func certAgent_CSRBasedIssuance(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "csr-test.example.com",
 				TTL:                 "1h",
@@ -629,7 +638,7 @@ func certAgent_CSRPathBasedIssuance(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "csrpath-test.example.com",
 				TTL:                 "1h",
@@ -696,7 +705,7 @@ func certAgent_AcmeCA_CertificateIssuance(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "acme-test.example.com",
 				TTL:                 "1h",
@@ -784,6 +793,7 @@ func setupAcmeCertAgentTestWithOpts(t *testing.T, ctx context.Context, policyOpt
 	helper := &agentHelpers.CertAgentTestHelper{
 		T:              t,
 		AdminToken:     infisical.ProvisionResult().Token,
+		IdentityToken:  identityToken,
 		InfisicalURL:   infisical.ApiUrl(t),
 		TempDir:        t.TempDir(),
 		IdentityClient: identityClient,
@@ -807,6 +817,8 @@ func setupAcmeCertAgentTestWithOpts(t *testing.T, ctx context.Context, policyOpt
 		t.Skip("BDD nock API not available — backend was not built with Dockerfile.dev")
 	}
 
+	helper.SetActiveCertManagerProject()
+
 	nockCertCount := 1
 	if len(certCount) > 0 && certCount[0] > 1 {
 		nockCertCount = certCount[0]
@@ -819,6 +831,8 @@ func setupAcmeCertAgentTestWithOpts(t *testing.T, ctx context.Context, policyOpt
 
 	helper.CreateCertificatePolicy("acme-policy-"+helpers.RandomSlug(2), policyOpts...)
 	helper.CreateCertificateProfile("acme-profile-" + helpers.RandomSlug(2))
+
+	helper.CreateApplicationWithProfile("acme-app-" + helpers.RandomSlug(2))
 
 	return helper, connectionID
 }
@@ -945,7 +959,7 @@ func certAgent_AcmeCA_DisabledCA(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "disabled-ca.example.com",
 				TTL:                 "1h",
@@ -1004,6 +1018,7 @@ func certAgent_AcmeCA_MultipleCertificates(t *testing.T) {
 
 	helper.CreateCertificateProfile("acme-profile2-" + helpers.RandomSlug(2))
 	secondProfileSlug := helper.ProfileSlug
+	helper.AttachProfileWithApiEnrollment(helper.ProfileID)
 
 	certDir1 := filepath.Join(helper.TempDir, "cert1")
 	certDir2 := filepath.Join(helper.TempDir, "cert2")
@@ -1020,7 +1035,7 @@ func certAgent_AcmeCA_MultipleCertificates(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         firstProfileSlug,
 				CommonName:          "acme-multi1.example.com",
 				TTL:                 "1h",
@@ -1031,7 +1046,7 @@ func certAgent_AcmeCA_MultipleCertificates(t *testing.T) {
 				ChainPath:           chainPath1,
 			},
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         secondProfileSlug,
 				CommonName:          "acme-multi2.example.com",
 				TTL:                 "1h",
@@ -1106,7 +1121,7 @@ func certAgent_AcmeCA_PostHookExecution(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "acme-hook.example.com",
 				TTL:                 "1h",
@@ -1184,7 +1199,7 @@ func certAgent_AcmeCA_CSRBasedIssuance(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "acme-csr.example.com",
 				TTL:                 "1h",
@@ -1256,7 +1271,7 @@ func certAgent_IssuanceFailureReporting(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         "nonexistent-profile-" + helpers.RandomSlug(2),
 				CommonName:          "failure.example.com",
 				TTL:                 "1h",
@@ -1336,7 +1351,7 @@ func certAgent_CertificateWithFullAttributes(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "fullattrs.example.com",
 				TTL:                 "1h",
@@ -1412,7 +1427,7 @@ func certAgent_Validation_RenewBeforeExpiryExceedsTTL(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "invalid-renew.example.com",
 				TTL:                 "1h",
@@ -1484,7 +1499,7 @@ func certAgent_Validation_BothCSRAndCSRPath(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "both-csr.example.com",
 				TTL:                 "1h",
@@ -1557,7 +1572,7 @@ func certAgent_Validation_InvalidAuthCredentials(t *testing.T) {
 		ClientSecretPath: fakeClientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "badauth.example.com",
 				TTL:                 "1h",
@@ -1620,7 +1635,7 @@ func certAgent_Validation_MissingCertificatePath(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "nopath.example.com",
 				TTL:                 "1h",
@@ -1673,7 +1688,7 @@ func certAgent_Validation_MissingCertificatePath(t *testing.T) {
 		"Stderr should report a path-related validation error, got:\n%s", stderr)
 }
 
-func certAgent_Validation_NonexistentProjectSlug(t *testing.T) {
+func certAgent_Validation_NonexistentApplicationName(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
@@ -1690,9 +1705,9 @@ func certAgent_Validation_NonexistentProjectSlug(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         "nonexistent-project-slug",
+				ApplicationName:     "nonexistent-application",
 				ProfileSlug:         helper.ProfileSlug,
-				CommonName:          "bad-project.example.com",
+				CommonName:          "bad-app.example.com",
 				TTL:                 "1h",
 				RenewBeforeExpiry:   "10m",
 				StatusCheckInterval: "5s",
@@ -1733,14 +1748,13 @@ func certAgent_Validation_NonexistentProjectSlug(t *testing.T) {
 	})
 
 	require.True(t, waitResult == helpers.WaitSuccess || waitResult == helpers.WaitBreakEarly,
-		"Agent should fail with nonexistent project slug")
+		"Agent should fail with nonexistent application name")
 
 	stderr := cmd.Stderr()
 	require.Contains(t, stderr, "failed to resolve",
 		"Agent should report resolution failure for nonexistent project slug")
 
 }
-
 
 func certAgent_OnRenewalPostHook(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1766,7 +1780,7 @@ func certAgent_OnRenewalPostHook(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "renewal-hook.example.com",
 				TTL:                 "2m",
@@ -1850,7 +1864,7 @@ func certAgent_SignatureAlgorithm(t *testing.T) {
 		ClientSecretPath: clientSecretPath,
 		Certificates: []agentHelpers.CertificateConfigEntry{
 			{
-				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
 				ProfileSlug:         helper.ProfileSlug,
 				CommonName:          "sigalg.example.com",
 				TTL:                 "1h",
@@ -1903,6 +1917,624 @@ func certAgent_SignatureAlgorithm(t *testing.T) {
 	agentHelpers.VerifyCertificateCommonName(t, certPath, "sigalg.example.com")
 }
 
+func certAgent_V1LegacyIssuance(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	helper := setupCertAgentTest(t, ctx)
+
+	certDir := filepath.Join(helper.TempDir, "certs")
+	require.NoError(t, os.MkdirAll(certDir, 0755))
+	certPath, keyPath, chainPath := agentHelpers.CertFilePaths(certDir)
+
+	clientIDPath, clientSecretPath := helper.WriteCredentialFiles()
+
+	configPath := helper.GenerateAgentConfig(agentHelpers.AgentConfigOptions{
+		Version:          "v1",
+		ClientIDPath:     clientIDPath,
+		ClientSecretPath: clientSecretPath,
+		Certificates: []agentHelpers.CertificateConfigEntry{
+			{
+				ProjectSlug:         helper.ProjectSlug,
+				ProfileSlug:         helper.ProfileSlug,
+				CommonName:          "v1-legacy.example.com",
+				TTL:                 "1h",
+				RenewBeforeExpiry:   "10m",
+				StatusCheckInterval: "5s",
+				CertPath:            certPath,
+				KeyPath:             keyPath,
+				ChainPath:           chainPath,
+			},
+		},
+	})
+
+	cmd := helpers.Command{
+		Test: t,
+		Args: []string{"cert-manager", "agent", "--config", configPath, "--verbose"},
+		Env:  map[string]string{},
+	}
+	cmd.Start(ctx)
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("Agent stderr:\n%s", cmd.Stderr())
+			t.Logf("Agent stdout:\n%s", cmd.Stdout())
+		}
+		cmd.Stop()
+	})
+
+	result := helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: &cmd,
+		ExpectedString:   "certificate management engine starting",
+		Timeout:          60 * time.Second,
+		Interval:         2 * time.Second,
+	})
+	require.Equal(t, helpers.WaitSuccess, result, "Agent failed to start cert management engine (v1)")
+
+	result = helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: &cmd,
+		ExpectedString:   "certificate issued successfully",
+		Timeout:          120 * time.Second,
+		Interval:         2 * time.Second,
+	})
+	require.Equal(t, helpers.WaitSuccess, result, "v1 legacy certificate was not issued successfully")
+
+	agentHelpers.VerifyCertificateFile(t, certPath)
+	agentHelpers.VerifyPrivateKeyFile(t, keyPath)
+	agentHelpers.VerifyChainFile(t, chainPath)
+	agentHelpers.VerifyCertificateCommonName(t, certPath, "v1-legacy.example.com")
+}
+
+func certAgent_V1ValidationRejectsAppOnly(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	helper := setupCertAgentTest(t, ctx)
+
+	certDir := filepath.Join(helper.TempDir, "certs")
+	require.NoError(t, os.MkdirAll(certDir, 0755))
+	certPath, keyPath, chainPath := agentHelpers.CertFilePaths(certDir)
+
+	clientIDPath, clientSecretPath := helper.WriteCredentialFiles()
+
+	configPath := helper.GenerateAgentConfig(agentHelpers.AgentConfigOptions{
+		Version:          "v1",
+		ClientIDPath:     clientIDPath,
+		ClientSecretPath: clientSecretPath,
+		Certificates: []agentHelpers.CertificateConfigEntry{
+			{
+				ApplicationName:     helper.ApplicationName,
+				ProfileSlug:         helper.ProfileSlug,
+				CommonName:          "v1-bad.example.com",
+				TTL:                 "1h",
+				RenewBeforeExpiry:   "10m",
+				StatusCheckInterval: "5s",
+				CertPath:            certPath,
+				KeyPath:             keyPath,
+				ChainPath:           chainPath,
+			},
+		},
+	})
+
+	cmd := helpers.Command{
+		Test: t,
+		Args: []string{"cert-manager", "agent", "--config", configPath, "--verbose"},
+		Env:  map[string]string{},
+	}
+	cmd.Start(ctx)
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("Agent stderr:\n%s", cmd.Stderr())
+			t.Logf("Agent stdout:\n%s", cmd.Stdout())
+		}
+		cmd.Stop()
+	})
+
+	waitResult := helpers.WaitFor(t, helpers.WaitForOptions{
+		Timeout:  30 * time.Second,
+		Interval: 2 * time.Second,
+		Condition: func() helpers.ConditionResult {
+			stderr := cmd.Stderr()
+			if strings.Contains(stderr, "(version v1): must specify either 'certificate-id' or both 'project-slug' and 'profile-name'") {
+				return helpers.ConditionSuccess
+			}
+			if !cmd.IsRunning() {
+				return helpers.ConditionBreakEarly
+			}
+			return helpers.ConditionWait
+		},
+	})
+
+	require.True(t, waitResult == helpers.WaitSuccess || waitResult == helpers.WaitBreakEarly,
+		"Agent should reject v1 config that's missing project-slug. stderr:\n%s", cmd.Stderr())
+	require.Contains(t, cmd.Stderr(), "(version v1)",
+		"Stderr should carry the v1-specific validation error")
+}
+
+func certAgent_V2ValidationRejectsProjectSlug(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	helper := setupCertAgentTest(t, ctx)
+
+	certDir := filepath.Join(helper.TempDir, "certs")
+	require.NoError(t, os.MkdirAll(certDir, 0755))
+	certPath, keyPath, chainPath := agentHelpers.CertFilePaths(certDir)
+
+	clientIDPath, clientSecretPath := helper.WriteCredentialFiles()
+
+	configPath := helper.GenerateAgentConfig(agentHelpers.AgentConfigOptions{
+		Version:          "v2",
+		ClientIDPath:     clientIDPath,
+		ClientSecretPath: clientSecretPath,
+		Certificates: []agentHelpers.CertificateConfigEntry{
+			{
+				ProjectSlug:         helper.ProjectSlug,
+				ApplicationName:     helper.ApplicationName,
+				ProfileSlug:         helper.ProfileSlug,
+				CommonName:          "v2-bad.example.com",
+				TTL:                 "1h",
+				RenewBeforeExpiry:   "10m",
+				StatusCheckInterval: "5s",
+				CertPath:            certPath,
+				KeyPath:             keyPath,
+				ChainPath:           chainPath,
+			},
+		},
+	})
+
+	cmd := helpers.Command{
+		Test: t,
+		Args: []string{"cert-manager", "agent", "--config", configPath, "--verbose"},
+		Env:  map[string]string{},
+	}
+	cmd.Start(ctx)
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("Agent stderr:\n%s", cmd.Stderr())
+			t.Logf("Agent stdout:\n%s", cmd.Stdout())
+		}
+		cmd.Stop()
+	})
+
+	waitResult := helpers.WaitFor(t, helpers.WaitForOptions{
+		Timeout:  30 * time.Second,
+		Interval: 2 * time.Second,
+		Condition: func() helpers.ConditionResult {
+			stderr := cmd.Stderr()
+			if strings.Contains(stderr, "(version v2): 'project-slug' is not supported") {
+				return helpers.ConditionSuccess
+			}
+			if !cmd.IsRunning() {
+				return helpers.ConditionBreakEarly
+			}
+			return helpers.ConditionWait
+		},
+	})
+
+	require.True(t, waitResult == helpers.WaitSuccess || waitResult == helpers.WaitBreakEarly,
+		"Agent should reject v2 config that carries project-slug. stderr:\n%s", cmd.Stderr())
+}
+
+func certAgent_Distribution_FetchesExistingCertificate(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	helper := setupCertAgentTest(t, ctx,
+		agentHelpers.WithAllowKeyAlgorithms("RSA_2048"),
+		agentHelpers.WithAllowSignatureAlgorithms("SHA256-RSA"),
+	)
+
+	certificateID := helper.IssueCertificateDirectly("shared.example.com")
+	serialNumber := normalizeSerial(helper.CertificateSerialNumber(certificateID))
+
+	certDir := filepath.Join(helper.TempDir, "certs")
+	require.NoError(t, os.MkdirAll(certDir, 0755))
+	certPath, keyPath, chainPath := agentHelpers.CertFilePaths(certDir)
+
+	clientIDPath, clientSecretPath := helper.WriteCredentialFiles()
+
+	configPath := helper.GenerateAgentConfig(agentHelpers.AgentConfigOptions{
+		ClientIDPath:     clientIDPath,
+		ClientSecretPath: clientSecretPath,
+		Certificates: []agentHelpers.CertificateConfigEntry{
+			{
+				CertificateID:       certificateID,
+				StatusCheckInterval: "5s",
+				CertPath:            certPath,
+				KeyPath:             keyPath,
+				ChainPath:           chainPath,
+			},
+		},
+	})
+
+	cmd := helpers.Command{
+		Test: t,
+		Args: []string{"cert-manager", "agent", "--config", configPath, "--verbose"},
+		Env:  map[string]string{},
+	}
+	cmd.Start(ctx)
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("Agent stderr:\n%s", cmd.Stderr())
+		}
+		cmd.Stop()
+	})
+
+	result := helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: &cmd,
+		ExpectedString:   "certificate fetched successfully",
+		Timeout:          120 * time.Second,
+		Interval:         2 * time.Second,
+	})
+	require.Equal(t, helpers.WaitSuccess, result, "Certificate was not fetched. stderr:\n%s", cmd.Stderr())
+
+	require.NotContains(t, cmd.Stderr(), "certificate issued successfully", "Distribution mode must not issue a new certificate")
+
+	agentHelpers.VerifyCertificateFile(t, certPath)
+	agentHelpers.VerifyPrivateKeyFile(t, keyPath)
+	agentHelpers.VerifyChainFile(t, chainPath)
+	agentHelpers.VerifyCertificateCommonName(t, certPath, "shared.example.com")
+	require.Equal(t, serialNumber, readCertificateSerial(t, certPath), "Agent wrote a different certificate than the one it was pointed at")
+}
+
+func certAgent_Distribution_FollowsServerSideRenewal(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	helper := setupCertAgentTest(t, ctx,
+		agentHelpers.WithAllowKeyAlgorithms("RSA_2048"),
+		agentHelpers.WithAllowSignatureAlgorithms("SHA256-RSA"),
+	)
+
+	certificateID := helper.IssueCertificateDirectly("followed.example.com")
+
+	certDir := filepath.Join(helper.TempDir, "certs")
+	require.NoError(t, os.MkdirAll(certDir, 0755))
+	certPath, keyPath, chainPath := agentHelpers.CertFilePaths(certDir)
+
+	renewalMarker := filepath.Join(helper.TempDir, "renewal-hook.txt")
+	clientIDPath, clientSecretPath := helper.WriteCredentialFiles()
+
+	configPath := helper.GenerateAgentConfig(agentHelpers.AgentConfigOptions{
+		ClientIDPath:     clientIDPath,
+		ClientSecretPath: clientSecretPath,
+		Certificates: []agentHelpers.CertificateConfigEntry{
+			{
+				CertificateID:       certificateID,
+				ReplaceOnRenewals:   true,
+				StatusCheckInterval: "5s",
+				CertPath:            certPath,
+				KeyPath:             keyPath,
+				ChainPath:           chainPath,
+				PostHookOnRenewal:   fmt.Sprintf("touch %s", renewalMarker),
+			},
+		},
+	})
+
+	cmd := helpers.Command{
+		Test: t,
+		Args: []string{"cert-manager", "agent", "--config", configPath, "--verbose"},
+		Env: map[string]string{
+			"PATH": os.Getenv("PATH"),
+		},
+	}
+	cmd.Start(ctx)
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("Agent stderr:\n%s", cmd.Stderr())
+		}
+		cmd.Stop()
+	})
+
+	result := helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: &cmd,
+		ExpectedString:   "certificate fetched successfully",
+		Timeout:          120 * time.Second,
+		Interval:         2 * time.Second,
+	})
+	require.Equal(t, helpers.WaitSuccess, result, "Initial fetch did not complete. stderr:\n%s", cmd.Stderr())
+
+	initialSerial := readCertificateSerial(t, certPath)
+
+	renewedID := helper.RenewCertificateDirectly(certificateID)
+	require.NotEqual(t, certificateID, renewedID)
+	renewedSerial := normalizeSerial(helper.CertificateSerialNumber(renewedID))
+
+	waitResult := helpers.WaitFor(t, helpers.WaitForOptions{
+		EnsureCmdRunning: &cmd,
+		Timeout:          120 * time.Second,
+		Interval:         3 * time.Second,
+		Condition: func() helpers.ConditionResult {
+			if readCertificateSerial(t, certPath) == renewedSerial {
+				return helpers.ConditionSuccess
+			}
+			return helpers.ConditionWait
+		},
+	})
+	require.Equal(t, helpers.WaitSuccess, waitResult, "Agent did not pick up the server-side renewal. stderr:\n%s", cmd.Stderr())
+
+	require.NotEqual(t, initialSerial, renewedSerial)
+	require.FileExists(t, renewalMarker, "on-renewal post-hook should run when a renewal is picked up")
+	agentHelpers.VerifyCertificateFile(t, certPath)
+	agentHelpers.VerifyPrivateKeyFile(t, keyPath)
+}
+
+func certAgent_Distribution_StaysPinnedWithoutReplaceOnRenewals(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	helper := setupCertAgentTest(t, ctx,
+		agentHelpers.WithAllowKeyAlgorithms("RSA_2048"),
+		agentHelpers.WithAllowSignatureAlgorithms("SHA256-RSA"),
+	)
+
+	certificateID := helper.IssueCertificateDirectly("pinned.example.com")
+	pinnedSerial := normalizeSerial(helper.CertificateSerialNumber(certificateID))
+
+	certDir := filepath.Join(helper.TempDir, "certs")
+	require.NoError(t, os.MkdirAll(certDir, 0755))
+	certPath, keyPath, chainPath := agentHelpers.CertFilePaths(certDir)
+
+	clientIDPath, clientSecretPath := helper.WriteCredentialFiles()
+
+	configPath := helper.GenerateAgentConfig(agentHelpers.AgentConfigOptions{
+		ClientIDPath:     clientIDPath,
+		ClientSecretPath: clientSecretPath,
+		Certificates: []agentHelpers.CertificateConfigEntry{
+			{
+				CertificateID:       certificateID,
+				StatusCheckInterval: "5s",
+				CertPath:            certPath,
+				KeyPath:             keyPath,
+				ChainPath:           chainPath,
+			},
+		},
+	})
+
+	cmd := helpers.Command{
+		Test: t,
+		Args: []string{"cert-manager", "agent", "--config", configPath, "--verbose"},
+		Env:  map[string]string{},
+	}
+	cmd.Start(ctx)
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("Agent stderr:\n%s", cmd.Stderr())
+		}
+		cmd.Stop()
+	})
+
+	result := helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: &cmd,
+		ExpectedString:   "certificate fetched successfully",
+		Timeout:          120 * time.Second,
+		Interval:         2 * time.Second,
+	})
+	require.Equal(t, helpers.WaitSuccess, result, "Initial fetch did not complete. stderr:\n%s", cmd.Stderr())
+
+	helper.RenewCertificateDirectly(certificateID)
+
+	time.Sleep(20 * time.Second)
+
+	require.Equal(t, pinnedSerial, readCertificateSerial(t, certPath),
+		"Without replace-on-renewals the agent must keep serving the pinned certificate")
+}
+
+func certAgent_Distribution_ReportsRevokedCertificate(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	helper := setupCertAgentTest(t, ctx,
+		agentHelpers.WithAllowKeyAlgorithms("RSA_2048"),
+		agentHelpers.WithAllowSignatureAlgorithms("SHA256-RSA"),
+	)
+
+	certificateID := helper.IssueCertificateDirectly("revoked.example.com")
+	helper.RevokeCertificateDirectly(certificateID)
+
+	certDir := filepath.Join(helper.TempDir, "certs")
+	require.NoError(t, os.MkdirAll(certDir, 0755))
+	certPath, keyPath, chainPath := agentHelpers.CertFilePaths(certDir)
+
+	clientIDPath, clientSecretPath := helper.WriteCredentialFiles()
+
+	configPath := helper.GenerateAgentConfig(agentHelpers.AgentConfigOptions{
+		ClientIDPath:     clientIDPath,
+		ClientSecretPath: clientSecretPath,
+		Certificates: []agentHelpers.CertificateConfigEntry{
+			{
+				CertificateID:       certificateID,
+				ReplaceOnRenewals:   true,
+				StatusCheckInterval: "5s",
+				CertPath:            certPath,
+				KeyPath:             keyPath,
+				ChainPath:           chainPath,
+			},
+		},
+	})
+
+	cmd := helpers.Command{
+		Test: t,
+		Args: []string{"cert-manager", "agent", "--config", configPath, "--verbose"},
+		Env:  map[string]string{},
+	}
+	cmd.Start(ctx)
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("Agent stderr:\n%s", cmd.Stderr())
+		}
+		cmd.Stop()
+	})
+
+	result := helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: &cmd,
+		ExpectedString:   "certificate is not active",
+		Timeout:          120 * time.Second,
+		Interval:         2 * time.Second,
+	})
+	require.Equal(t, helpers.WaitSuccess, result, "Agent should report the revoked certificate. stderr:\n%s", cmd.Stderr())
+
+	require.NoFileExists(t, certPath, "A revoked certificate must not be written to disk")
+}
+
+func certAgent_Distribution_RejectsReplaceOnRenewalsWithoutCertificateID(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	helper := setupCertAgentTest(t, ctx)
+
+	certDir := filepath.Join(helper.TempDir, "certs")
+	require.NoError(t, os.MkdirAll(certDir, 0755))
+	certPath, keyPath, chainPath := agentHelpers.CertFilePaths(certDir)
+
+	clientIDPath, clientSecretPath := helper.WriteCredentialFiles()
+
+	configPath := helper.GenerateAgentConfig(agentHelpers.AgentConfigOptions{
+		ClientIDPath:     clientIDPath,
+		ClientSecretPath: clientSecretPath,
+		Certificates: []agentHelpers.CertificateConfigEntry{
+			{
+				ApplicationName:     helper.ApplicationName,
+				ProfileSlug:         helper.ProfileSlug,
+				CommonName:          "invalid.example.com",
+				TTL:                 "1h",
+				ReplaceOnRenewals:   true,
+				StatusCheckInterval: "5s",
+				CertPath:            certPath,
+				KeyPath:             keyPath,
+				ChainPath:           chainPath,
+			},
+		},
+	})
+
+	cmd := helpers.Command{
+		Test: t,
+		Args: []string{"cert-manager", "agent", "--config", configPath, "--verbose"},
+		Env:  map[string]string{},
+	}
+	cmd.Start(ctx)
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("Agent stderr:\n%s", cmd.Stderr())
+			t.Logf("Agent stdout:\n%s", cmd.Stdout())
+		}
+		cmd.Stop()
+	})
+
+	waitResult := helpers.WaitFor(t, helpers.WaitForOptions{
+		Timeout:  30 * time.Second,
+		Interval: 2 * time.Second,
+		Condition: func() helpers.ConditionResult {
+			if strings.Contains(cmd.Stderr(), "'lifecycle.replace-on-renewals' is only supported together with 'certificate-id'") {
+				return helpers.ConditionSuccess
+			}
+			if !cmd.IsRunning() {
+				return helpers.ConditionBreakEarly
+			}
+			return helpers.ConditionWait
+		},
+	})
+
+	require.True(t, waitResult == helpers.WaitSuccess || waitResult == helpers.WaitBreakEarly,
+		"Agent should reject replace-on-renewals without certificate-id. stderr:\n%s", cmd.Stderr())
+	require.Contains(t, cmd.Stderr(), "'lifecycle.replace-on-renewals' is only supported together with 'certificate-id'")
+}
+
+func certAgent_Distribution_WarnsOnRenewBeforeExpiryWithCertificateID(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	helper := setupCertAgentTest(t, ctx,
+		agentHelpers.WithAllowKeyAlgorithms("RSA_2048"),
+		agentHelpers.WithAllowSignatureAlgorithms("SHA256-RSA"),
+	)
+
+	certificateID := helper.IssueCertificateDirectly("norenew.example.com")
+
+	certDir := filepath.Join(helper.TempDir, "certs")
+	require.NoError(t, os.MkdirAll(certDir, 0755))
+	certPath, keyPath, chainPath := agentHelpers.CertFilePaths(certDir)
+
+	clientIDPath, clientSecretPath := helper.WriteCredentialFiles()
+
+	configPath := helper.GenerateAgentConfig(agentHelpers.AgentConfigOptions{
+		ClientIDPath:     clientIDPath,
+		ClientSecretPath: clientSecretPath,
+		Certificates: []agentHelpers.CertificateConfigEntry{
+			{
+				CertificateID:       certificateID,
+				RenewBeforeExpiry:   "10d",
+				StatusCheckInterval: "5s",
+				CertPath:            certPath,
+				KeyPath:             keyPath,
+				ChainPath:           chainPath,
+			},
+		},
+	})
+
+	cmd := helpers.Command{
+		Test: t,
+		Args: []string{"cert-manager", "agent", "--config", configPath, "--verbose"},
+		Env:  map[string]string{},
+	}
+	cmd.Start(ctx)
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("Agent stderr:\n%s", cmd.Stderr())
+			t.Logf("Agent stdout:\n%s", cmd.Stdout())
+		}
+		cmd.Stop()
+	})
+
+	waitResult := helpers.WaitFor(t, helpers.WaitForOptions{
+		Timeout:  30 * time.Second,
+		Interval: 2 * time.Second,
+		Condition: func() helpers.ConditionResult {
+			if strings.Contains(cmd.Stderr(), "'lifecycle.renew-before-expiry' is ignored when using 'certificate-id'") {
+				return helpers.ConditionSuccess
+			}
+			if !cmd.IsRunning() {
+				return helpers.ConditionBreakEarly
+			}
+			return helpers.ConditionWait
+		},
+	})
+
+	require.Equal(t, helpers.WaitSuccess, waitResult,
+		"Agent should warn about renew-before-expiry and keep running. stderr:\n%s", cmd.Stderr())
+	require.Contains(t, cmd.Stderr(), "replace-on-renewals", "The warning should point at the setting that does what they wanted")
+	require.FileExists(t, certPath, "The agent must keep working, since released versions accepted this field")
+}
+
+func readCertificateSerial(t *testing.T, certPath string) string {
+	t.Helper()
+
+	data, err := os.ReadFile(certPath)
+	if err != nil {
+		return ""
+	}
+
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return ""
+	}
+
+	parsed, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return ""
+	}
+
+	return normalizeSerial(fmt.Sprintf("%x", parsed.SerialNumber))
+}
+
+func normalizeSerial(serial string) string {
+	trimmed := strings.TrimLeft(strings.ToLower(serial), "0")
+	if trimmed == "" {
+		return "0"
+	}
+	return trimmed
+}
+
 func TestCertAgent_InternalCA(t *testing.T) {
 	t.Run("BasicCertificateIssuance", certAgent_BasicCertificateIssuance)
 	t.Run("CertificateRenewal", certAgent_CertificateRenewal)
@@ -1918,9 +2550,21 @@ func TestCertAgent_InternalCA(t *testing.T) {
 	t.Run("Validation_BothCSRAndCSRPath", certAgent_Validation_BothCSRAndCSRPath)
 	t.Run("Validation_InvalidAuthCredentials", certAgent_Validation_InvalidAuthCredentials)
 	t.Run("Validation_MissingCertificatePath", certAgent_Validation_MissingCertificatePath)
-	t.Run("Validation_NonexistentProjectSlug", certAgent_Validation_NonexistentProjectSlug)
+	t.Run("Validation_NonexistentApplicationName", certAgent_Validation_NonexistentApplicationName)
+	t.Run("V1LegacyIssuance", certAgent_V1LegacyIssuance)
+	t.Run("V1ValidationRejectsAppOnly", certAgent_V1ValidationRejectsAppOnly)
+	t.Run("V2ValidationRejectsProjectSlug", certAgent_V2ValidationRejectsProjectSlug)
 	t.Run("OnRenewalPostHook", certAgent_OnRenewalPostHook)
 	t.Run("SignatureAlgorithm", certAgent_SignatureAlgorithm)
+	t.Run("Distribution_FetchesExistingCertificate", certAgent_Distribution_FetchesExistingCertificate)
+	t.Run("Distribution_FollowsServerSideRenewal", certAgent_Distribution_FollowsServerSideRenewal)
+	t.Run("Distribution_StaysPinnedWithoutReplaceOnRenewals", certAgent_Distribution_StaysPinnedWithoutReplaceOnRenewals)
+	t.Run("Distribution_ReportsRevokedCertificate", certAgent_Distribution_ReportsRevokedCertificate)
+	t.Run("Distribution_RejectsReplaceOnRenewalsWithoutCertificateID", certAgent_Distribution_RejectsReplaceOnRenewalsWithoutCertificateID)
+	t.Run("Distribution_WarnsOnRenewBeforeExpiryWithCertificateID", certAgent_Distribution_WarnsOnRenewBeforeExpiryWithCertificateID)
+	t.Run("Distribution_RestartAfterRenewalRunsRenewalHook", certAgent_Distribution_RestartAfterRenewalRunsRenewalHook)
+	t.Run("Distribution_RestartWithoutChangeIsQuiet", certAgent_Distribution_RestartWithoutChangeIsQuiet)
+	t.Run("Distribution_RevokedLatestKeepsCurrentCertificate", certAgent_Distribution_RevokedLatestKeepsCurrentCertificate)
 }
 
 func TestCertAgent_AcmeCA(t *testing.T) {
@@ -1934,4 +2578,264 @@ func TestCertAgent_AcmeCA(t *testing.T) {
 	t.Run("MultipleCertificates", certAgent_AcmeCA_MultipleCertificates)
 	t.Run("PostHookExecution", certAgent_AcmeCA_PostHookExecution)
 	t.Run("CSRBasedIssuance", certAgent_AcmeCA_CSRBasedIssuance)
+}
+
+func certAgent_Distribution_RestartAfterRenewalRunsRenewalHook(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	helper := setupCertAgentTest(t, ctx,
+		agentHelpers.WithAllowKeyAlgorithms("RSA_2048"),
+		agentHelpers.WithAllowSignatureAlgorithms("SHA256-RSA"),
+	)
+
+	certificateID := helper.IssueCertificateDirectly("restart-renewal.example.com")
+
+	certDir := filepath.Join(helper.TempDir, "certs")
+	require.NoError(t, os.MkdirAll(certDir, 0755))
+	certPath, keyPath, chainPath := agentHelpers.CertFilePaths(certDir)
+
+	renewalMarker := filepath.Join(helper.TempDir, "renewal-hook.txt")
+	issuanceMarker := filepath.Join(helper.TempDir, "issuance-hook.txt")
+	clientIDPath, clientSecretPath := helper.WriteCredentialFiles()
+
+	configPath := helper.GenerateAgentConfig(agentHelpers.AgentConfigOptions{
+		ClientIDPath:     clientIDPath,
+		ClientSecretPath: clientSecretPath,
+		Certificates: []agentHelpers.CertificateConfigEntry{
+			{
+				CertificateID:       certificateID,
+				ReplaceOnRenewals:   true,
+				StatusCheckInterval: "5s",
+				CertPath:            certPath,
+				KeyPath:             keyPath,
+				ChainPath:           chainPath,
+				PostHookOnIssuance:  fmt.Sprintf("echo fired >> %s", issuanceMarker),
+				PostHookOnRenewal:   fmt.Sprintf("echo fired >> %s", renewalMarker),
+			},
+		},
+	})
+
+	runAgent := func() *helpers.Command {
+		cmd := &helpers.Command{
+			Test: t,
+			Args: []string{"cert-manager", "agent", "--config", configPath, "--verbose"},
+			Env:  map[string]string{"PATH": os.Getenv("PATH")},
+		}
+		cmd.Start(ctx)
+		return cmd
+	}
+
+	first := runAgent()
+	result := helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: first,
+		ExpectedString:   "certificate fetched successfully",
+		Timeout:          120 * time.Second,
+		Interval:         2 * time.Second,
+	})
+	require.Equal(t, helpers.WaitSuccess, result, "Initial fetch did not complete. stderr:\n%s", first.Stderr())
+	initialSerial := readCertificateSerial(t, certPath)
+	first.Stop()
+
+	renewedID := helper.RenewCertificateDirectly(certificateID)
+	require.NotEmpty(t, renewedID)
+
+	second := runAgent()
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("Agent stderr:\n%s", second.Stderr())
+		}
+		second.Stop()
+	})
+
+	require.Eventually(t, func() bool {
+		return readCertificateSerial(t, certPath) != initialSerial
+	}, 120*time.Second, 2*time.Second, "restarted agent never delivered the renewal. stderr:\n%s", second.Stderr())
+
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(renewalMarker)
+		return err == nil
+	}, 60*time.Second, 2*time.Second,
+		"a renewal picked up after a restart must run the on-renewal hook, which is where reload commands live. stderr:\n%s", second.Stderr())
+
+	issuanceContents, err := os.ReadFile(issuanceMarker)
+	require.NoError(t, err)
+	require.Equal(t, 1, strings.Count(string(issuanceContents), "fired"),
+		"on-issuance must fire only for the very first delivery, not again after a restart")
+}
+
+func certAgent_Distribution_RestartWithoutChangeIsQuiet(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	helper := setupCertAgentTest(t, ctx,
+		agentHelpers.WithAllowKeyAlgorithms("RSA_2048"),
+		agentHelpers.WithAllowSignatureAlgorithms("SHA256-RSA"),
+	)
+
+	certificateID := helper.IssueCertificateDirectly("restart-quiet.example.com")
+
+	certDir := filepath.Join(helper.TempDir, "certs")
+	require.NoError(t, os.MkdirAll(certDir, 0755))
+	certPath, keyPath, chainPath := agentHelpers.CertFilePaths(certDir)
+
+	issuanceMarker := filepath.Join(helper.TempDir, "issuance-hook.txt")
+	clientIDPath, clientSecretPath := helper.WriteCredentialFiles()
+
+	configPath := helper.GenerateAgentConfig(agentHelpers.AgentConfigOptions{
+		ClientIDPath:     clientIDPath,
+		ClientSecretPath: clientSecretPath,
+		Certificates: []agentHelpers.CertificateConfigEntry{
+			{
+				CertificateID:       certificateID,
+				StatusCheckInterval: "5s",
+				CertPath:            certPath,
+				KeyPath:             keyPath,
+				ChainPath:           chainPath,
+				PostHookOnIssuance:  fmt.Sprintf("echo fired >> %s", issuanceMarker),
+			},
+		},
+	})
+
+	runAgent := func() *helpers.Command {
+		cmd := &helpers.Command{
+			Test: t,
+			Args: []string{"cert-manager", "agent", "--config", configPath, "--verbose"},
+			Env:  map[string]string{"PATH": os.Getenv("PATH")},
+		}
+		cmd.Start(ctx)
+		return cmd
+	}
+
+	first := runAgent()
+	result := helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: first,
+		ExpectedString:   "certificate fetched successfully",
+		Timeout:          120 * time.Second,
+		Interval:         2 * time.Second,
+	})
+	require.Equal(t, helpers.WaitSuccess, result, "Initial fetch did not complete. stderr:\n%s", first.Stderr())
+
+	writtenAt := fileModTime(t, certPath)
+	first.Stop()
+
+	second := runAgent()
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("Agent stderr:\n%s", second.Stderr())
+		}
+		second.Stop()
+	})
+
+	result = helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: second,
+		ExpectedString:   "certificate",
+		Timeout:          120 * time.Second,
+		Interval:         2 * time.Second,
+	})
+	require.Equal(t, helpers.WaitSuccess, result, "restarted agent produced no output. stderr:\n%s", second.Stderr())
+	time.Sleep(15 * time.Second)
+
+	require.Equal(t, writtenAt, fileModTime(t, certPath),
+		"nothing changed, so a restart must not rewrite the certificate file")
+
+	issuanceContents, err := os.ReadFile(issuanceMarker)
+	require.NoError(t, err)
+	require.Equal(t, 1, strings.Count(string(issuanceContents), "fired"),
+		"nothing changed, so a restart must not run any hook again")
+}
+
+func certAgent_Distribution_RevokedLatestKeepsCurrentCertificate(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	helper := setupCertAgentTest(t, ctx,
+		agentHelpers.WithAllowKeyAlgorithms("RSA_2048"),
+		agentHelpers.WithAllowSignatureAlgorithms("SHA256-RSA"),
+	)
+
+	certificateID := helper.IssueCertificateDirectly("revoked-latest.example.com")
+
+	certDir := filepath.Join(helper.TempDir, "certs")
+	require.NoError(t, os.MkdirAll(certDir, 0755))
+	certPath, keyPath, chainPath := agentHelpers.CertFilePaths(certDir)
+
+	renewalMarker := filepath.Join(helper.TempDir, "renewal-hook.txt")
+	failureMarker := filepath.Join(helper.TempDir, "failure-hook.txt")
+	clientIDPath, clientSecretPath := helper.WriteCredentialFiles()
+
+	configPath := helper.GenerateAgentConfig(agentHelpers.AgentConfigOptions{
+		ClientIDPath:     clientIDPath,
+		ClientSecretPath: clientSecretPath,
+		Certificates: []agentHelpers.CertificateConfigEntry{
+			{
+				CertificateID:       certificateID,
+				ReplaceOnRenewals:   true,
+				StatusCheckInterval: "5s",
+				CertPath:            certPath,
+				KeyPath:             keyPath,
+				ChainPath:           chainPath,
+				PostHookOnRenewal:   fmt.Sprintf("echo fired >> %s", renewalMarker),
+				PostHookOnFailure:   fmt.Sprintf("echo fired >> %s", failureMarker),
+			},
+		},
+	})
+
+	cmd := helpers.Command{
+		Test: t,
+		Args: []string{"cert-manager", "agent", "--config", configPath, "--verbose"},
+		Env:  map[string]string{"PATH": os.Getenv("PATH")},
+	}
+	cmd.Start(ctx)
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("Agent stderr:\n%s", cmd.Stderr())
+		}
+		cmd.Stop()
+	})
+
+	result := helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: &cmd,
+		ExpectedString:   "certificate fetched successfully",
+		Timeout:          120 * time.Second,
+		Interval:         2 * time.Second,
+	})
+	require.Equal(t, helpers.WaitSuccess, result, "Initial fetch did not complete. stderr:\n%s", cmd.Stderr())
+
+	originalSerial := readCertificateSerial(t, certPath)
+	require.NotEmpty(t, originalSerial)
+
+	renewedID := helper.RenewCertificateDirectly(certificateID)
+	require.NotEmpty(t, renewedID)
+
+	require.Eventually(t, func() bool {
+		return readCertificateSerial(t, certPath) != originalSerial
+	}, 120*time.Second, 2*time.Second, "agent never picked up the renewal. stderr:\n%s", cmd.Stderr())
+
+	servingSerial := readCertificateSerial(t, certPath)
+	_ = os.Remove(renewalMarker)
+
+	helper.RevokeCertificateDirectly(renewedID)
+
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(failureMarker)
+		return err == nil
+	}, 90*time.Second, 2*time.Second,
+		"revoking the certificate being served must run the on-failure hook. stderr:\n%s", cmd.Stderr())
+
+	current := readCertificateSerial(t, certPath)
+	require.NotEqual(t, originalSerial, current,
+		"revocation must not roll the machine back onto the certificate the revoked one replaced")
+	require.Equal(t, servingSerial, current, "the delivered certificate must not change on revocation")
+
+	_, err := os.Stat(renewalMarker)
+	require.True(t, os.IsNotExist(err),
+		"moving backwards onto an older certificate is not a renewal and must not run the on-renewal hook")
+}
+
+func fileModTime(t *testing.T, path string) time.Time {
+	t.Helper()
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	return info.ModTime()
 }

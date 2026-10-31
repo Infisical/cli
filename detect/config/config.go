@@ -1,96 +1,119 @@
-// MIT License
-
-// Copyright (c) 2019 Zachary Rice
-
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
-
 package config
 
 import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
-	"github.com/spf13/viper"
+	gv "github.com/hashicorp/go-version"
+	"github.com/pelletier/go-toml/v2"
+	tiktoken "github.com/pkoukk/tiktoken-go"
 
+	"github.com/Infisical/infisical-merge/detect/internal/exprruntime"
 	"github.com/Infisical/infisical-merge/detect/logging"
 	"github.com/Infisical/infisical-merge/detect/regexp"
+	"github.com/Infisical/infisical-merge/detect/version"
 )
 
+var (
+	//go:embed betterleaks.toml
+	DefaultConfig string
+)
+
+// Infisical-specific defaults. These replace the upstream .betterleaks.toml /
+// BETTERLEAKS_CONFIG / .betterleaksignore names with Infisical-branded ones.
+// Consumed by packages/cmd/scan.go.
 const DefaultScanConfigFileName = ".infisical-scan.toml"
 const DefaultScanConfigEnvName = "INFISICAL_SCAN_CONFIG"
 const DefaultInfisicalIgnoreFineName = ".infisicalignore"
 
-var (
-	//go:embed gitleaks.toml
-	DefaultConfig string
-
-	// use to keep track of how many configs we can extend
-	// yea I know, globals bad
-	extendDepth int
-)
-
 const maxExtendDepth = 2
+const DefaultRuleSpecificity = 100
 
-// ViperConfig is the config struct used by the Viper config package
-// to parse the config file. This struct does not include regular expressions.
-// It is used as an intermediary to convert the Viper config to the Config struct.
-type ViperConfig struct {
-	Title       string
-	Description string
-	Extend      Extend
-	Rules       []struct {
-		ID          string
-		Description string
-		Path        string
-		Regex       string
-		SecretGroup int
-		Entropy     float64
-		Keywords    []string
-		Tags        []string
+type rawConfig struct {
+	Title       string    `toml:"title"`
+	Description string    `toml:"description"`
+	Extend      Extend    `toml:"extend"`
+	Rules       []rawRule `toml:"rules"`
 
-		// Deprecated: this is a shim for backwards-compatibility.
-		// TODO: Remove this in 9.x.
-		AllowList  *viperRuleAllowlist
-		Allowlists []*viperRuleAllowlist
-	}
 	// Deprecated: this is a shim for backwards-compatibility.
 	// TODO: Remove this in 9.x.
-	AllowList  *viperGlobalAllowlist
-	Allowlists []*viperGlobalAllowlist
+	AllowList *rawGlobalAllowlist `toml:"allowlist"`
+
+	Allowlists []*rawGlobalAllowlist `toml:"allowlists"`
+
+	MinVersion            string `toml:"minVersion"`
+	BetterleaksMinVersion string `toml:"betterleaksMinVersion"`
+
+	// Global filter expressions.
+	Prefilter string `toml:"prefilter"`
+	Filter    string `toml:"filter"`
+
+	path string
 }
 
-type viperRuleAllowlist struct {
-	Description string
-	Condition   string
-	Commits     []string
-	Paths       []string
-	RegexTarget string
-	Regexes     []string
-	StopWords   []string
+type rawRule struct {
+	ID          string   `toml:"id"`
+	Description string   `toml:"description"`
+	Path        string   `toml:"path"`
+	Regex       string   `toml:"regex"`
+	SecretGroup int      `toml:"secretGroup"`
+	Entropy     float64  `toml:"entropy"`
+	Keywords    []string `toml:"keywords"`
+	Tags        []string `toml:"tags"`
+	Specificity *int     `toml:"specificity"`
+	Confidence  string   `toml:"confidence"`
+
+	// Deprecated: this is a shim for backwards-compatibility.
+	// TODO: Remove this in 9.x.
+	AllowList *rawRuleAllowlist `toml:"allowlist"`
+
+	Allowlists []*rawRuleAllowlist `toml:"allowlists"`
+
+	// Components is a pointer so config extension can distinguish omission
+	// from an explicit empty list.
+	Components *[]*rawComponent `toml:"components"`
+
+	// Deprecated: translated to required components when Components is absent.
+	Required []*rawRequired `toml:"required"`
+
+	Validate        string `toml:"validate"`
+	SkipReport      bool   `toml:"skipReport"`
+	TokenEfficiency bool   `toml:"tokenEfficiency"`
+
+	// Filter is an Expr expression evaluated per match (attributes + finding).
+	// Returns true = skip (discard this finding); false = keep.
+	Filter string `toml:"filter"`
 }
 
-type viperGlobalAllowlist struct {
-	TargetRules        []string
-	viperRuleAllowlist `mapstructure:",squash"`
+type rawRequired struct {
+	ID            string `toml:"id"`
+	WithinLines   *int   `toml:"withinLines"`
+	WithinColumns *int   `toml:"withinColumns"`
+}
+
+type rawComponent struct {
+	ID       string `toml:"id"`
+	Optional bool   `toml:"optional"`
+	Within   string `toml:"within"`
+}
+
+type rawRuleAllowlist struct {
+	Description string   `toml:"description"`
+	Condition   string   `toml:"condition"`
+	Commits     []string `toml:"commits"`
+	Paths       []string `toml:"paths"`
+	RegexTarget string   `toml:"regexTarget"`
+	Regexes     []string `toml:"regexes"`
+	StopWords   []string `toml:"stopwords"`
+}
+
+type rawGlobalAllowlist struct {
+	TargetRules      []string `toml:"targetRules"`
+	rawRuleAllowlist `toml:",inline"`
 }
 
 // Config is a configuration struct that contains rules and an allowlist if present.
@@ -101,21 +124,71 @@ type Config struct {
 	Description string
 	Rules       map[string]Rule
 	Keywords    map[string]struct{}
+	// KeywordToRules maps each lowercase keyword to the rule IDs that use it.
+	// This allows O(1) lookup from Aho-Corasick keyword matches to the rules
+	// that need to be checked, instead of iterating all rules.
+	KeywordToRules map[string][]string
+	// NoKeywordRules contains rule IDs that have no keywords and must always be checked.
+	NoKeywordRules []string
 	// used to keep sarif results consistent
 	OrderedRules []string
-	Allowlists   []*Allowlist
+
+	// Deprecated: use filter/prefilter Expr expressions instead. This is a shim for backwards-compatibility.
+	Allowlists []*Allowlist
+
+	MinVersion            string
+	BetterleaksMinVersion string
+
+	// Prefilter is a global expression (attributes only) evaluated before any
+	// per-match work. Returns true = skip this fragment entirely; false = keep.
+	// Translated from global Allowlists path/commit checks.
+	Prefilter string
+	// Filter is a global expression (attributes + finding) evaluated per match.
+	// Returns true = skip (discard) this finding; false = keep.
+	// Translated from global Allowlists regex/stopword checks.
+	Filter string
+
+	// prefilterProgram and filterProgram hold global programs compiled by
+	// CompileFilters. Per-rule filter and validation compilation is lazy.
+	prefilterProgram exprruntime.Program
+	filterProgram    exprruntime.Program
 }
 
 // Extend is a struct that allows users to define how they want their
 // configuration extended by other configuration files.
 type Extend struct {
-	Path          string
-	URL           string
-	UseDefault    bool
-	DisabledRules []string
+	Path          string   `toml:"path"`
+	URL           string   `toml:"url"`
+	UseDefault    bool     `toml:"useDefault"`
+	DisabledRules []string `toml:"disabledRules"`
 }
 
-func (vc *ViperConfig) Translate() (Config, error) {
+func ParseTOML(data []byte, path string) (*Config, error) {
+	var rc rawConfig
+	if err := toml.Unmarshal(data, &rc); err != nil {
+		return nil, err
+	}
+	rc.path = path
+	return rc.translate(0)
+}
+
+func ParseTOMLString(content, path string) (*Config, error) {
+	return ParseTOML([]byte(content), path)
+}
+
+func LoadFile(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return ParseTOML(data, path)
+}
+
+func Default() (*Config, error) {
+	return ParseTOMLString(DefaultConfig, "")
+}
+
+func (rc *rawConfig) translate(depth int) (*Config, error) {
 	var (
 		keywords       = make(map[string]struct{})
 		orderedRules   []string
@@ -124,16 +197,24 @@ func (vc *ViperConfig) Translate() (Config, error) {
 	)
 
 	// Validate individual rules.
-	for _, vr := range vc.Rules {
+	for _, vr := range rc.Rules {
 		var (
 			pathPat  *regexp.Regexp
 			regexPat *regexp.Regexp
 		)
 		if vr.Path != "" {
-			pathPat = regexp.MustCompile(vr.Path)
+			pat, err := regexp.Compile(vr.Path)
+			if err != nil {
+				return nil, fmt.Errorf("%s: invalid path regex %q: %w", vr.ID, vr.Path, err)
+			}
+			pathPat = pat
 		}
 		if vr.Regex != "" {
-			regexPat = regexp.MustCompile(vr.Regex)
+			pat, err := regexp.Compile(vr.Regex)
+			if err != nil {
+				return nil, fmt.Errorf("%s: invalid regex %q: %w", vr.ID, vr.Regex, err)
+			}
+			regexPat = pat
 		}
 		if vr.Keywords == nil {
 			vr.Keywords = []string{}
@@ -147,57 +228,117 @@ func (vc *ViperConfig) Translate() (Config, error) {
 		if vr.Tags == nil {
 			vr.Tags = []string{}
 		}
+		specificity := DefaultRuleSpecificity
+		if vr.Specificity != nil {
+			specificity = *vr.Specificity
+		}
 		cr := Rule{
-			RuleID:      vr.ID,
-			Description: vr.Description,
-			Regex:       regexPat,
-			SecretGroup: vr.SecretGroup,
-			Entropy:     vr.Entropy,
-			Path:        pathPat,
-			Keywords:    vr.Keywords,
-			Tags:        vr.Tags,
+			RuleID:          vr.ID,
+			Description:     vr.Description,
+			Regex:           regexPat,
+			SecretGroup:     vr.SecretGroup,
+			Entropy:         vr.Entropy,
+			Path:            pathPat,
+			Keywords:        vr.Keywords,
+			Tags:            vr.Tags,
+			Specificity:     specificity,
+			Confidence:      vr.Confidence,
+			SkipReport:      vr.SkipReport,
+			TokenEfficiency: vr.TokenEfficiency,
 		}
 
 		// Parse the rule allowlists, including the older format for backwards compatibility.
 		if vr.AllowList != nil {
 			// TODO: Remove this in v9.
 			if len(vr.Allowlists) > 0 {
-				return Config{}, fmt.Errorf("%s: [rules.allowlist] is deprecated, it cannot be used alongside [[rules.allowlist]]", cr.RuleID)
+				return nil, fmt.Errorf("%s: [rules.allowlist] is deprecated, it cannot be used alongside [[rules.allowlist]]", cr.RuleID)
 			}
 			vr.Allowlists = append(vr.Allowlists, vr.AllowList)
 		}
 		for _, a := range vr.Allowlists {
-			allowlist, err := parseAllowlist(a)
+			if a == nil {
+				a = &rawRuleAllowlist{}
+			}
+			allowlist, err := rc.parseAllowlist(a)
 			if err != nil {
-				return Config{}, fmt.Errorf("%s: [[rules.allowlists]] %w", cr.RuleID, err)
+				return nil, fmt.Errorf("%s: [[rules.allowlists]] %w", cr.RuleID, err)
 			}
 			cr.Allowlists = append(cr.Allowlists, allowlist)
 		}
+
+		if vr.Components != nil {
+			cr.componentsSet = true
+			for _, component := range *vr.Components {
+				if component == nil {
+					component = &rawComponent{}
+				}
+				cr.Components = append(cr.Components, &Component{
+					RuleID:   component.ID,
+					Optional: component.Optional,
+					Within:   component.Within,
+				})
+			}
+		} else if vr.Required != nil {
+			cr.componentsSet = true
+			for _, required := range vr.Required {
+				if required == nil {
+					required = &rawRequired{}
+				}
+				if required.WithinLines != nil && *required.WithinLines < 0 {
+					return nil, fmt.Errorf("%s: [[rules.required]] withinLines must be non-negative", cr.RuleID)
+				}
+				if required.WithinColumns != nil && *required.WithinColumns < 0 {
+					return nil, fmt.Errorf("%s: [[rules.required]] withinColumns must be non-negative", cr.RuleID)
+				}
+				cr.Components = append(cr.Components, &Component{
+					RuleID: required.ID,
+					Within: legacyComponentWithin(required.WithinLines, required.WithinColumns),
+				})
+			}
+		}
+
+		cr.ValidateExpr = vr.Validate
+		cr.Filter = vr.Filter
+
 		orderedRules = append(orderedRules, cr.RuleID)
 		rulesMap[cr.RuleID] = cr
 	}
 
 	// Assemble the config.
-	c := Config{
-		Title:        vc.Title,
-		Description:  vc.Description,
-		Extend:       vc.Extend,
-		Rules:        rulesMap,
-		Keywords:     keywords,
-		OrderedRules: orderedRules,
+	c := &Config{
+		Title:                 rc.Title,
+		Description:           rc.Description,
+		Extend:                rc.Extend,
+		Rules:                 rulesMap,
+		Keywords:              keywords,
+		OrderedRules:          orderedRules,
+		MinVersion:            rc.MinVersion,
+		BetterleaksMinVersion: rc.BetterleaksMinVersion,
+		Prefilter:             rc.Prefilter,
+		Filter:                rc.Filter,
 	}
+
+	c.Path = rc.path
+
+	if err := validateMinVersion(c.MinVersion, c.BetterleaksMinVersion, c.Path); err != nil {
+		return nil, err
+	}
+
 	// Parse the config allowlists, including the older format for backwards compatibility.
-	if vc.AllowList != nil {
+	if rc.AllowList != nil {
 		// TODO: Remove this in v9.
-		if len(vc.Allowlists) > 0 {
-			return Config{}, errors.New("[allowlist] is deprecated, it cannot be used alongside [[allowlists]]")
+		if len(rc.Allowlists) > 0 {
+			return nil, errors.New("[allowlist] is deprecated, it cannot be used alongside [[allowlists]]")
 		}
-		vc.Allowlists = append(vc.Allowlists, vc.AllowList)
+		rc.Allowlists = append(rc.Allowlists, rc.AllowList)
 	}
-	for _, a := range vc.Allowlists {
-		allowlist, err := parseAllowlist(&a.viperRuleAllowlist)
+	for _, a := range rc.Allowlists {
+		if a == nil {
+			a = &rawGlobalAllowlist{}
+		}
+		allowlist, err := rc.parseAllowlist(&a.rawRuleAllowlist)
 		if err != nil {
-			return Config{}, fmt.Errorf("[[allowlists]] %w", err)
+			return nil, fmt.Errorf("[[allowlists]] %w", err)
 		}
 		// Allowlists with |targetRules| aren't added to the global list.
 		if len(a.TargetRules) > 0 {
@@ -210,27 +351,32 @@ func (vc *ViperConfig) Translate() (Config, error) {
 		}
 	}
 
-	if maxExtendDepth != extendDepth {
+	if maxExtendDepth != depth {
 		// disallow both usedefault and path from being set
 		if c.Extend.Path != "" && c.Extend.UseDefault {
-			return Config{}, errors.New("unable to load config due to extend.path and extend.useDefault being set")
+			return nil, errors.New("unable to load config due to extend.path and extend.useDefault being set")
 		}
 		if c.Extend.UseDefault {
-			if err := c.extendDefault(); err != nil {
-				return Config{}, err
+			if err := c.extendDefault(depth); err != nil {
+				return nil, err
 			}
 		} else if c.Extend.Path != "" {
-			if err := c.extendPath(); err != nil {
-				return Config{}, err
+			if err := c.extendPath(depth); err != nil {
+				return nil, err
 			}
 		}
 	}
 
 	// Validate the rules after everything has been assembled (including extended configs).
-	if extendDepth == 0 {
+	if depth == 0 {
 		for _, rule := range c.Rules {
 			if err := rule.Validate(); err != nil {
-				return Config{}, err
+				return nil, err
+			}
+			for _, component := range rule.Components {
+				if _, ok := c.Rules[component.RuleID]; !ok {
+					return nil, fmt.Errorf("%s: component rule ID %q does not exist", rule.RuleID, component.RuleID)
+				}
 			}
 		}
 
@@ -238,17 +384,112 @@ func (vc *ViperConfig) Translate() (Config, error) {
 		for ruleID, allowlists := range ruleAllowlists {
 			rule, ok := c.Rules[ruleID]
 			if !ok {
-				return Config{}, fmt.Errorf("[[allowlists]] target rule ID '%s' does not exist", ruleID)
+				return nil, fmt.Errorf("[[allowlists]] target rule ID '%s' does not exist", ruleID)
 			}
 			rule.Allowlists = append(rule.Allowlists, allowlists...)
 			c.Rules[ruleID] = rule
+		}
+
+	}
+
+	// Build keyword-to-rules lookup for efficient rule dispatch.
+	// This must be done after extends are resolved so all rules are present.
+	c.KeywordToRules = make(map[string][]string)
+	c.NoKeywordRules = nil
+	for ruleID, rule := range c.Rules {
+		if len(rule.Keywords) == 0 {
+			c.NoKeywordRules = append(c.NoKeywordRules, ruleID)
+		} else {
+			for _, k := range rule.Keywords {
+				c.KeywordToRules[k] = append(c.KeywordToRules[k], ruleID)
+			}
+		}
+	}
+
+	// Translate legacy allowlists / entropy / token-efficiency into CEL strings.
+	// Must run after all extends and targeted allowlist population are complete.
+	if depth == 0 {
+		if err := c.translateLegacyFilters(); err != nil {
+			return nil, err
 		}
 	}
 
 	return c, nil
 }
 
-func parseAllowlist(a *viperRuleAllowlist) (*Allowlist, error) {
+func legacyComponentWithin(lines, columns *int) string {
+	var parts []string
+	if lines != nil {
+		parts = append(parts, fmt.Sprintf("%dL", *lines))
+	}
+	if columns != nil {
+		parts = append(parts, fmt.Sprintf("%dC", *columns))
+	}
+	return strings.Join(parts, ",")
+}
+
+func validateMinVersion(gitleaksMinVer, betterleaksMinVer, configPath string) error {
+	isDev := version.Version == version.DefaultMsg
+
+	// Check gitleaks config format compatibility (minVersion field).
+	if gitleaksMinVer != "" {
+		if isDev {
+			logging.Debug().
+				Str("required", gitleaksMinVer).
+				Msg("dev build, skipping gitleaks minVersion check.")
+		} else {
+			minSemVer, err := gv.NewSemver(gitleaksMinVer)
+			if err != nil {
+				return fmt.Errorf("invalid minVersion '%s': %w", gitleaksMinVer, err)
+			}
+			compatSemVer, err := gv.NewSemver(version.GitleaksCompat)
+			if err != nil {
+				return fmt.Errorf("unable to parse gitleaks compat version: %w", err)
+			}
+			if compatSemVer.LessThan(minSemVer) {
+				logging.Warn().
+					Str("required", gitleaksMinVer).
+					Str("current", version.GitleaksCompat).
+					Str("config path", configPath).
+					Msg("config minVersion exceeds this build's gitleaks compatibility level")
+			}
+		}
+	}
+
+	// Check betterleaks version compatibility (betterleaksMinVersion field).
+	if betterleaksMinVer != "" {
+		if isDev {
+			logging.Debug().
+				Str("required", betterleaksMinVer).
+				Msg("dev build, skipping betterleaksMinVersion check.")
+		} else {
+			minSemVer, err := gv.NewSemver(betterleaksMinVer)
+			if err != nil {
+				return fmt.Errorf("invalid betterleaksMinVersion '%s': %w", betterleaksMinVer, err)
+			}
+			currentSemVer, err := gv.NewSemver(version.Version)
+			if err != nil {
+				return fmt.Errorf("unable to parse current version: %w", err)
+			}
+			if currentSemVer.LessThan(minSemVer) {
+				logging.Warn().
+					Str("required", betterleaksMinVer).
+					Str("current", version.Version).
+					Str("config path", configPath).
+					Msg("config requires a newer betterleaks version")
+			}
+		}
+	}
+
+	if gitleaksMinVer == "" && betterleaksMinVer == "" {
+		logging.Debug().Str("config path", configPath).
+			Msg("no minVersion specified in config... consider adding minVersion to ensure compatibility.")
+	}
+
+	return nil
+}
+
+func (rc *rawConfig) parseAllowlist(a *rawRuleAllowlist) (*Allowlist, error) {
 	var matchCondition AllowlistMatchCondition
 	switch strings.ToUpper(a.Condition) {
 	case "AND", "&&":
@@ -273,11 +514,19 @@ func parseAllowlist(a *viperRuleAllowlist) (*Allowlist, error) {
 	}
 	var allowlistRegexes []*regexp.Regexp
 	for _, a := range a.Regexes {
-		allowlistRegexes = append(allowlistRegexes, regexp.MustCompile(a))
+		pat, err := regexp.Compile(a)
+		if err != nil {
+			return nil, fmt.Errorf("invalid regex %q: %w", a, err)
+		}
+		allowlistRegexes = append(allowlistRegexes, pat)
 	}
 	var allowlistPaths []*regexp.Regexp
 	for _, a := range a.Paths {
-		allowlistPaths = append(allowlistPaths, regexp.MustCompile(a))
+		pat, err := regexp.Compile(a)
+		if err != nil {
+			return nil, fmt.Errorf("invalid path regex %q: %w", a, err)
+		}
+		allowlistPaths = append(allowlistPaths, pat)
 	}
 
 	allowlist := &Allowlist{
@@ -295,6 +544,61 @@ func parseAllowlist(a *viperRuleAllowlist) (*Allowlist, error) {
 	return allowlist, nil
 }
 
+// PrefilterProgram returns the compiled global prefilter program, or nil if not set.
+func (c *Config) PrefilterProgram() exprruntime.Program { return c.prefilterProgram }
+
+// SetPrefilterProgram stores a compiled global prefilter program.
+func (c *Config) SetPrefilterProgram(p exprruntime.Program) { c.prefilterProgram = p }
+
+// FilterProgram returns the compiled global filter program, or nil if not set.
+func (c *Config) FilterProgram() exprruntime.Program { return c.filterProgram }
+
+// SetFilterProgram stores a compiled global filter program.
+func (c *Config) SetFilterProgram(p exprruntime.Program) { c.filterProgram = p }
+
+// CompileFilters compiles only the global prefilter needed before scanning.
+// Global finding filters and per-rule filters compile lazily on first candidate.
+func (c *Config) CompileFilters(tokenizer *tiktoken.Tiktoken) error {
+	runtime, err := exprruntime.New(nil)
+	if err != nil {
+		return fmt.Errorf("creating expr runtime: %w", err)
+	}
+
+	if c.Prefilter != "" {
+		prg, compileErr := runtime.CompilePrefilter(c.Prefilter)
+		if compileErr != nil {
+			return fmt.Errorf("compiling global prefilter: %w", compileErr)
+		}
+		c.prefilterProgram = prg
+	}
+
+	return nil
+}
+
+// CompileValidation returns a runtime for per-rule validation expressions.
+// Individual validation programs are compiled lazily by the detector.
+// Returns (nil, nil) when no rules have validation expressions.
+func (c *Config) CompileValidation() (*exprruntime.Runtime, error) {
+	// Quick check: skip environment creation if nothing to compile.
+	hasValidation := false
+	for _, r := range c.Rules {
+		if r.ValidateExpr != "" {
+			hasValidation = true
+			break
+		}
+	}
+	if !hasValidation {
+		return nil, nil
+	}
+
+	runtime, err := exprruntime.New(nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating validation env: %w", err)
+	}
+
+	return runtime, nil
+}
+
 func (c *Config) GetOrderedRules() []Rule {
 	var orderedRules []Rule
 	for _, id := range c.OrderedRules {
@@ -305,17 +609,12 @@ func (c *Config) GetOrderedRules() []Rule {
 	return orderedRules
 }
 
-func (c *Config) extendDefault() error {
-	extendDepth++
-	viper.SetConfigType("toml")
-	if err := viper.ReadConfig(strings.NewReader(DefaultConfig)); err != nil {
+func (c *Config) extendDefault(depth int) error {
+	var defaultRawConfig rawConfig
+	if err := toml.Unmarshal([]byte(DefaultConfig), &defaultRawConfig); err != nil {
 		return fmt.Errorf("failed to load extended default config, err: %w", err)
 	}
-	defaultViperConfig := ViperConfig{}
-	if err := viper.Unmarshal(&defaultViperConfig); err != nil {
-		return fmt.Errorf("failed to load extended default config, err: %w", err)
-	}
-	cfg, err := defaultViperConfig.Translate()
+	cfg, err := defaultRawConfig.translate(depth + 1)
 	if err != nil {
 		return fmt.Errorf("failed to load extended default config, err: %w", err)
 
@@ -325,30 +624,26 @@ func (c *Config) extendDefault() error {
 	return nil
 }
 
-func (c *Config) extendPath() error {
-	extendDepth++
-	viper.SetConfigFile(c.Extend.Path)
-	if err := viper.ReadInConfig(); err != nil {
-		return fmt.Errorf("failed to load extended config, err: %w", err)
-	}
-	extensionViperConfig := ViperConfig{}
-	if err := viper.Unmarshal(&extensionViperConfig); err != nil {
-		return fmt.Errorf("failed to load extended config, err: %w", err)
-	}
-	cfg, err := extensionViperConfig.Translate()
+func (c *Config) extendPath(depth int) error {
+	data, err := os.ReadFile(c.Extend.Path)
 	if err != nil {
 		return fmt.Errorf("failed to load extended config, err: %w", err)
 	}
+	var extensionRawConfig rawConfig
+	if err := toml.Unmarshal(data, &extensionRawConfig); err != nil {
+		return fmt.Errorf("failed to load extended config, err: %w", err)
+	}
+	extensionRawConfig.path = c.Extend.Path
 	logging.Debug().Msgf("extending config with %s", c.Extend.Path)
+	cfg, err := extensionRawConfig.translate(depth + 1)
+	if err != nil {
+		return fmt.Errorf("failed to load extended config, err: %w", err)
+	}
 	c.extend(cfg)
 	return nil
 }
 
-func (c *Config) extendURL() {
-	// TODO
-}
-
-func (c *Config) extend(extensionConfig Config) {
+func (c *Config) extend(extensionConfig *Config) {
 	// Get config name for helpful log messages.
 	var configName string
 	if c.Extend.Path != "" {
@@ -403,10 +698,22 @@ func (c *Config) extend(extensionConfig Config) {
 			if currentRule.Path != nil {
 				baseRule.Path = currentRule.Path
 			}
+			if currentRule.ValidateExpr != "" {
+				baseRule.ValidateExpr = currentRule.ValidateExpr
+			}
+			if currentRule.Confidence != "" {
+				baseRule.Confidence = currentRule.Confidence
+			}
+			// Current rule's Filter replaces the extending one if set.
+			if currentRule.Filter != "" {
+				baseRule.Filter = currentRule.Filter
+			}
 			baseRule.Tags = append(baseRule.Tags, currentRule.Tags...)
 			baseRule.Keywords = append(baseRule.Keywords, currentRule.Keywords...)
-			for _, a := range currentRule.Allowlists {
-				baseRule.Allowlists = append(baseRule.Allowlists, a)
+			baseRule.Allowlists = append(baseRule.Allowlists, currentRule.Allowlists...)
+			if currentRule.componentsSet {
+				baseRule.Components = currentRule.Components
+				baseRule.componentsSet = true
 			}
 			// The keywords from the base rule and the extended rule must be merged into the global keywords list
 			for _, k := range baseRule.Keywords {
@@ -417,8 +724,14 @@ func (c *Config) extend(extensionConfig Config) {
 	}
 
 	// append allowlists, not attempting to merge
-	for _, a := range extensionConfig.Allowlists {
-		c.Allowlists = append(c.Allowlists, a)
+	c.Allowlists = append(c.Allowlists, extensionConfig.Allowlists...)
+
+	// Current config's global Prefilter/Filter wins over extension's if set.
+	if c.Prefilter == "" {
+		c.Prefilter = extensionConfig.Prefilter
+	}
+	if c.Filter == "" {
+		c.Filter = extensionConfig.Filter
 	}
 
 	// sort to keep extended rules in order

@@ -55,7 +55,9 @@ const getArchitecture = () => {
       arch = "armv7";
     }
   } else if (architecture === "ia32") {
-    arch = "i386";
+    // "386", not "i386": this has to match GoReleaser's {{ .Arch }}, which is
+    // the Go GOARCH value, so the release asset is cli_<version>_linux_386.tar.gz.
+    arch = "386";
   } else {
     console.error(
       "Your architecture doesn't seem to be supported. Your architecture is",

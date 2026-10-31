@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"github.com/Infisical/infisical-merge/packages/pam/session/masking"
 )
 
 type sessionMutexInfo struct {
@@ -24,20 +26,33 @@ type SessionLogEntry struct {
 	Output    string    `json:"output"`
 }
 
-// TerminalEventType represents the type of terminal event
-type TerminalEventType string
+// SessionEventType represents the type of session event
+type SessionEventType string
 
 const (
-	TerminalEventInput  TerminalEventType = "input"  // Data from user to server
-	TerminalEventOutput TerminalEventType = "output" // Data from server to user
+	SessionEventInput  SessionEventType = "input"  // Data from user to server
+	SessionEventOutput SessionEventType = "output" // Data from server to user
+	SessionEventRDP    SessionEventType = "rdp"    // RDP tap event (see SessionChannelRDP)
 )
 
-// TerminalEvent represents a single event in a terminal session
-type TerminalEvent struct {
-	Timestamp   time.Time         `json:"timestamp"`
-	EventType   TerminalEventType `json:"eventType"`
-	Data        []byte            `json:"data"`        // Raw terminal data
-	ElapsedTime float64           `json:"elapsedTime"` // Seconds since session start (for replay)
+// SessionChannelType represents the type of SSH channel
+type SessionChannelType string
+
+const (
+	SessionChannelShell SessionChannelType = "terminal" // Interactive shell session
+	SessionChannelExec  SessionChannelType = "exec"     // Single command execution
+	SessionChannelSFTP  SessionChannelType = "sftp"     // SFTP file transfer
+	SessionChannelRDP   SessionChannelType = "rdp"      // RDP frame/input tap; Data carries an RDP-specific JSON envelope
+)
+
+// SessionEvent represents a single event in a recorded session (SSH or RDP).
+type SessionEvent struct {
+	Timestamp   time.Time          `json:"timestamp"`
+	EventType   SessionEventType   `json:"eventType"`
+	ChannelType SessionChannelType `json:"channelType,omitempty"` // Channel kind (SSH shell/exec/sftp or RDP)
+	Data        []byte             `json:"data"`                  // SSH: gateway-rendered text; RDP: JSON envelope (base64-marshaled)
+	Rendered    bool               `json:"rendered,omitempty"`    // Data is display-ready; absent on recordings that stored raw bytes
+	ElapsedTime float64            `json:"elapsedTime"`           // Seconds since session start (for replay)
 }
 
 type HttpEventType string
@@ -62,7 +77,7 @@ const (
 
 type SessionLogger interface {
 	LogEntry(entry SessionLogEntry) error
-	LogTerminalEvent(event TerminalEvent) error
+	LogSessionEvent(event SessionEvent) error
 	LogHttpEvent(event HttpEvent) error
 	Close() error
 }
@@ -74,6 +89,7 @@ type EncryptedSessionLogger struct {
 	file          *os.File
 	mutex         sync.Mutex
 	sessionStart  time.Time // Track session start time for elapsed time calculation
+	masker        masking.Masker
 }
 
 type RequestResponsePair struct {
@@ -173,7 +189,7 @@ func CleanupSessionMutex(sessionID string) {
 	}
 }
 
-func NewSessionLogger(sessionID string, encryptionKey string, expiresAt time.Time, resourceType string) (*EncryptedSessionLogger, error) {
+func NewSessionLogger(sessionID string, encryptionKey string, expiresAt time.Time, resourceType string, masker masking.Masker) (*EncryptedSessionLogger, error) {
 	if sessionID == "" {
 		return nil, fmt.Errorf("session ID cannot be empty")
 	}
@@ -209,6 +225,7 @@ func NewSessionLogger(sessionID string, encryptionKey string, expiresAt time.Tim
 		expiresAt:     expiresAt,
 		file:          file,
 		sessionStart:  time.Now(),
+		masker:        masker,
 	}, nil
 }
 
@@ -255,17 +272,40 @@ func (sl *EncryptedSessionLogger) writeEvent(productEventData func() ([]byte, er
 	return nil
 }
 
+func (sl *EncryptedSessionLogger) applyMasking(data []byte) []byte {
+	if sl.masker == nil {
+		return data
+	}
+	return sl.masker.Mask(data)
+}
+
+func (sl *EncryptedSessionLogger) applyMaskingString(s string) string {
+	if sl.masker == nil {
+		return s
+	}
+	return sl.masker.MaskString(s)
+}
+
 func (sl *EncryptedSessionLogger) LogEntry(entry SessionLogEntry) error {
 	return sl.writeEvent(func() ([]byte, error) {
+		entry.Input = sl.applyMaskingString(entry.Input)
+		entry.Output = sl.applyMaskingString(entry.Output)
 		return json.Marshal(entry)
 	})
 }
 
-func (sl *EncryptedSessionLogger) LogTerminalEvent(event TerminalEvent) error {
+func (sl *EncryptedSessionLogger) LogSessionEvent(event SessionEvent) error {
 	return sl.writeEvent(func() ([]byte, error) {
-		// Calculate elapsed time if not already set
 		if event.ElapsedTime == 0 {
 			event.ElapsedTime = time.Since(sl.sessionStart).Seconds()
+		}
+		// RDP carries a structured JSON envelope (with base64-encoded PDU
+		// bytes, scancodes, etc.) in Data, not free-form terminal text.
+		// Masking patterns are SSH-shaped regexes; running them over the
+		// envelope would corrupt valid recordings whenever a pattern
+		// happened to match a substring of the JSON or base64.
+		if event.ChannelType != SessionChannelRDP {
+			event.Data = sl.applyMasking(event.Data)
 		}
 		return json.Marshal(event)
 	})
@@ -273,6 +313,7 @@ func (sl *EncryptedSessionLogger) LogTerminalEvent(event TerminalEvent) error {
 
 func (sl *EncryptedSessionLogger) LogHttpEvent(event HttpEvent) error {
 	return sl.writeEvent(func() ([]byte, error) {
+		event.Body = sl.applyMasking(event.Body)
 		return json.Marshal(event)
 	})
 }

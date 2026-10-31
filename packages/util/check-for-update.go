@@ -209,29 +209,6 @@ func writeUpdateCheckCache(cache *UpdateCheckCache) error {
 	return nil
 }
 
-func DisplayAptInstallationChangeBanner(isSilent bool) {
-	DisplayAptInstallationChangeBannerWithWriter(isSilent, os.Stderr)
-}
-
-func DisplayAptInstallationChangeBannerWithWriter(isSilent bool, w io.Writer) {
-	if isSilent {
-		return
-	}
-
-	if runtime.GOOS == "linux" {
-		_, err := exec.LookPath("apt-get")
-		isApt := err == nil
-		if isApt {
-			yellow := color.New(color.FgYellow).SprintFunc()
-			msg := fmt.Sprintf("%s",
-				yellow("Update Required: Your current package installation script is outdated and will no longer receive updates.\nPlease update to the new installation script which can be found here https://infisical.com/docs/cli/overview#installation debian section\n"),
-			)
-
-			fmt.Fprintln(w, msg)
-		}
-	}
-}
-
 func getLatestTag(repoOwner string, repoName string) (string, time.Time, bool, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", repoOwner, repoName)
 	resp, err := githubHTTPClient.Get(url)
@@ -309,13 +286,44 @@ func getReleasePublishedAt(repoOwner string, repoName string, version string) (t
 }
 
 func GetUpdateInstructions() string {
-	os := runtime.GOOS
-	switch os {
+	execPath, err := os.Executable()
+	if err != nil {
+		execPath = ""
+	}
+	if resolved, err := filepath.EvalSymlinks(execPath); err == nil {
+		execPath = resolved
+	}
+	return getUpdateInstructions(runtime.GOOS, execPath)
+}
+
+func getUpdateInstructions(goos string, execPath string) string {
+	p := strings.ToLower(execPath)
+	isNpm := strings.Contains(p, "node_modules")
+
+	switch goos {
 	case "darwin":
-		return "To update, run: brew update && brew upgrade infisical"
+		if isNpm {
+			return "To update, run: npm update -g @infisical/cli"
+		}
+		if strings.Contains(p, "/homebrew/") || strings.Contains(p, "/cellar/") {
+			return "To update, run: brew update && brew upgrade infisical"
+		}
+		return ""
 	case "windows":
-		return "To update, run: scoop update infisical"
+		if isNpm {
+			return "To update, run: npm update -g @infisical/cli"
+		}
+		if strings.Contains(p, "scoop") {
+			return "To update, run: scoop update infisical"
+		}
+		if strings.Contains(p, "winget") {
+			return "To update, run: winget upgrade Infisical.Infisical"
+		}
+		return ""
 	case "linux":
+		if isNpm {
+			return "To update, run: npm update -g @infisical/cli"
+		}
 		pkgManager := getLinuxPackageManager()
 		switch pkgManager {
 		case "apt-get":

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mattn/go-isatty"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -20,6 +21,12 @@ import (
 )
 
 var Telemetry *telemetry.Telemetry
+
+// Log configuration variables set via flags
+var (
+	logFormat      string
+	logDestination string
+)
 
 var RootCmd = &cobra.Command{
 	Use:               "infisical",
@@ -61,6 +68,23 @@ func RootCmdStdoutWriter() io.Writer {
 	return &rootCmdStdoutWriter{}
 }
 
+// isStructuredOutputRequested checks whether the command has a --format or --output
+// flag explicitly set to a machine-readable format (json, csv, yaml). When true,
+// human-oriented messages like update notifications should be suppressed to avoid
+// breaking parsers that consume the CLI output.
+func isStructuredOutputRequested(cmd *cobra.Command) bool {
+	structuredFormats := map[string]bool{"json": true, "csv": true, "yaml": true}
+
+	for _, flagName := range []string{"format", "output", "report-format"} {
+		if f := cmd.Flags().Lookup(flagName); f != nil && f.Changed {
+			if structuredFormats[strings.ToLower(f.Value.String())] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the RootCmd.
 func Execute() {
@@ -71,24 +95,104 @@ func Execute() {
 	}
 }
 
+// resolveDomain picks the domain by precedence: --domain flag > env > .infisical.yaml > default (flagValue).
+// Must run after flag parsing (PersistentPreRun, not init) so cmd.Flags().Changed is reliable.
+func resolveDomain(cmd *cobra.Command, flagValue string) string {
+	if cmd.Flags().Changed("domain") {
+		return flagValue
+	}
+
+	if envDomain, ok := util.GetEnvDomain(); ok {
+		return envDomain
+	}
+
+	domain, valid := util.GetDomainFromFile()
+	if domain == "" {
+		return flagValue
+	}
+
+	if !valid {
+		util.PrintWarningWithWriter("The 'general.domain' field in .infisical.yaml (or 'domain' in a legacy .infisical.json) is not a valid URL (must be an http:// or https:// URL with a host). It will be ignored.", cmd.ErrOrStderr())
+		return flagValue
+	}
+
+	// A .infisical.yaml is usually committed to the repo, so a malicious one could redirect requests
+	// and credentials. Always surface where traffic is going (even under --silent); it goes to stderr.
+	util.PrintWarningWithWriter(fmt.Sprintf("Using domain '%s' from .infisical.yaml (or a legacy .infisical.json); all requests and credentials will be sent there.", domain), cmd.ErrOrStderr())
+	return domain
+}
+
+// Commands that manage profiles/sessions themselves print their own outcome,
+// so the ambient "using profile X" notice would just be noise for them.
+var profileNoticeExemptCommands = map[string]bool{
+	"login":   true,
+	"logout":  true,
+	"profile": true,
+	"org":     true,
+	"user":    true,
+	"reset":   true,
+	"vault":   true,
+}
+
+func topLevelCommandName(cmd *cobra.Command) string {
+	current := cmd
+	for current.Parent() != nil && current.Parent() != RootCmd {
+		if current.Parent().Name() == smCommandName && current.Parent().Parent() == RootCmd {
+			break
+		}
+		current = current.Parent()
+	}
+	return current.Name()
+}
+
 func init() {
 	util.GetStderrWriter = RootCmdStderrWriter
 	util.GetStdoutWriter = RootCmdStdoutWriter
-	cobra.OnInitialize(initLog)
+	cobra.OnInitialize(initLog, initLogOutput, initTelemetry)
 	RootCmd.PersistentFlags().StringP("log-level", "l", "", "log level (trace, debug, info, warn, error, fatal)")
-	RootCmd.PersistentFlags().Bool("telemetry", true, "Infisical collects non-sensitive telemetry data to enhance features and improve user experience. Participation is voluntary")
-	RootCmd.PersistentFlags().StringVar(&config.INFISICAL_URL, "domain", fmt.Sprintf("%s/api", util.INFISICAL_DEFAULT_US_URL), "Point the CLI to your Infisical instance (e.g., https://eu.infisical.com for EU Cloud, or https://your-instance.com for self-hosted). Can also set via INFISICAL_API_URL environment variable. Required for non-US Cloud users.")
+	RootCmd.PersistentFlags().StringVar(&logFormat, "log-format", "", "log output format: console (default, colored), plain (no color), json (structured). Set NO_COLOR=1 to disable colors in console mode. Can also set via LOG_FORMAT env var.")
+	RootCmd.PersistentFlags().StringVar(&logDestination, "log-destination", "", "log output destination: stderr (default), stdout. Can also set via LOG_DESTINATION env var.")
+	RootCmd.PersistentFlags().Bool("telemetry", true, "Infisical collects non-sensitive telemetry data to enhance features and improve user experience. Participation is voluntary. Can also opt out by setting INFISICAL_DISABLE_TELEMETRY=1 or DO_NOT_TRACK=1.")
+	RootCmd.PersistentFlags().StringVar(&config.INFISICAL_URL, "domain", fmt.Sprintf("%s/api", util.INFISICAL_DEFAULT_US_URL), "Point the CLI to your Infisical instance (e.g., https://eu.infisical.com for EU Cloud, or https://your-instance.com for self-hosted). Can also set via INFISICAL_DOMAIN environment variable or the 'general.domain' field in .infisical.yaml (or 'domain' in a legacy .infisical.json). Required for non-US Cloud users.")
 	RootCmd.PersistentFlags().Bool("silent", false, "Disable output of tip/info messages. Useful when running in scripts or CI/CD pipelines.")
+	RootCmd.PersistentFlags().String("profile", "", "Use a specific login profile for this command (see [infisical profile list]). Can also set via the INFISICAL_PROFILE environment variable.")
+	RootCmd.PersistentFlags().String("org", "", "Use a specific organization for this command, by name, slug, or id. Overrides the profile's default organization without changing it. Can also set via the INFISICAL_ORG environment variable.")
 	RootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
 		silent, err := cmd.Flags().GetBool("silent")
 		if err != nil {
 			util.HandleError(err)
 		}
 
-		config.INFISICAL_URL = util.AppendAPIEndpoint(config.INFISICAL_URL)
+		profileFlag, err := cmd.Flags().GetString("profile")
+		if err != nil {
+			util.HandleError(err)
+		}
+		if profileFlag != "" {
+			config.INFISICAL_PROFILE_OVERRIDE = profileFlag
+			config.INFISICAL_PROFILE_OVERRIDE_SOURCE = util.ProfileSourceFlag
+		} else if envProfile := strings.TrimSpace(os.Getenv(util.INFISICAL_PROFILE_ENV_NAME)); envProfile != "" {
+			config.INFISICAL_PROFILE_OVERRIDE = envProfile
+			config.INFISICAL_PROFILE_OVERRIDE_SOURCE = util.ProfileSourceEnv
+		}
 
-		// util.DisplayAptInstallationChangeBannerWithWriter(silent, cmd.ErrOrStderr())
-		if !util.IsRunningInDocker() && !silent {
+		orgFlag, err := cmd.Flags().GetString("org")
+		if err != nil {
+			util.HandleError(err)
+		}
+		if orgFlag != "" {
+			config.INFISICAL_ORG_OVERRIDE = orgFlag
+			config.INFISICAL_ORG_OVERRIDE_SOURCE = util.OrgSourceFlag
+		} else if envOrg := strings.TrimSpace(os.Getenv(util.INFISICAL_ORG_ENV_NAME)); envOrg != "" {
+			config.INFISICAL_ORG_OVERRIDE = envOrg
+			config.INFISICAL_ORG_OVERRIDE_SOURCE = util.OrgSourceEnv
+		}
+
+		_, envDomainSet := util.GetEnvDomain()
+		config.INFISICAL_DOMAIN_EXPLICITLY_SET = cmd.Flags().Changed("domain") || envDomainSet
+
+		config.INFISICAL_URL = util.AppendAPIEndpoint(resolveDomain(cmd, config.INFISICAL_URL))
+
+		if !util.IsRunningInDocker() && !silent && !isStructuredOutputRequested(cmd) {
 			util.CheckForUpdateWithWriter(cmd.ErrOrStderr())
 		}
 
@@ -97,23 +201,52 @@ func init() {
 		if !silent && err == nil && loggedInDetails.IsUserLoggedIn && !loggedInDetails.LoginExpired {
 			token, err := util.GetInfisicalToken(cmd)
 
-			if err == nil && token != nil {
+			if err == nil && token != nil && !ignoresEnvServiceToken(cmd, token) {
 				util.PrintWarningWithWriter(fmt.Sprintf("Your logged-in session is being overwritten by the token provided from the %s.", token.Source), cmd.ErrOrStderr())
 			}
 		}
 
-	}
-
-	// if config.INFISICAL_URL is set to the default value, check if INFISICAL_URL is set in the environment
-	// this is used to allow overrides of the default value
-	if !RootCmd.Flag("domain").Changed {
-		if envInfisicalBackendUrl, ok := os.LookupEnv("INFISICAL_API_URL"); ok {
-			config.INFISICAL_URL = util.AppendAPIEndpoint(envInfisicalBackendUrl)
+		// The "Using profile ..." notice is printed by the session loader the
+		// first time a command actually uses a login session, so commands that
+		// never do (scan, agent, gateway, ...) stay quiet even in a pinned
+		// terminal. Profile-management commands print their own outcome.
+		if !silent && !isStructuredOutputRequested(cmd) && !profileNoticeExemptCommands[topLevelCommandName(cmd)] {
+			util.EnableProfileNotice(cmd.ErrOrStderr())
 		}
 	}
 
-	isTelemetryOn, _ := RootCmd.PersistentFlags().GetBool("telemetry")
-	Telemetry = telemetry.NewTelemetry(isTelemetryOn)
+	// Enabled until initTelemetry applies the opt-out: argv is not parsed yet here.
+	Telemetry = telemetry.NewTelemetry(true)
+}
+
+// initTelemetry applies the opt-out. It runs as a cobra initializer, so after flag parsing and for every
+// command, including one that replaces the root's PersistentPreRun.
+func initTelemetry() {
+	enabled := telemetryEnabled(RootCmd)
+	util.TelemetryOptedOut = !enabled
+	Telemetry.SetEnabled(enabled)
+}
+
+// telemetryEnabled resolves the opt-out. An explicitly passed --telemetry wins; otherwise telemetry is off if
+// INFISICAL_DISABLE_TELEMETRY or DO_NOT_TRACK is set.
+func telemetryEnabled(root *cobra.Command) bool {
+	flags := root.PersistentFlags()
+	if flags.Changed("telemetry") {
+		enabled, _ := flags.GetBool("telemetry")
+		return enabled
+	}
+
+	return !optedOut(os.Getenv(util.INFISICAL_DISABLE_TELEMETRY_NAME)) && !optedOut(os.Getenv(util.DO_NOT_TRACK_NAME))
+}
+
+// optedOut reads an opt-out variable. DO_NOT_TRACK has no formal spec; like PostHog's own CLI, any value other
+// than empty, 0 or false opts out, so a value that is neither still never sends.
+func optedOut(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "0", "false":
+		return false
+	}
+	return true
 }
 
 func initLog() {
@@ -149,8 +282,88 @@ func initLog() {
 	}
 }
 
-// GetLoggerConfig returns the logger configuration with the provided writer.
-func GetLoggerConfig(w io.Writer) zerolog.ConsoleWriter {
+// initLogOutput configures the logger output format and destination based on
+// flags and environment variables. Called via cobra.OnInitialize after flags
+// are parsed.
+func initLogOutput() {
+	// Determine format: flag > env > default
+	format := logFormat
+	if format == "" {
+		format = os.Getenv("LOG_FORMAT")
+	}
+	if format == "" {
+		format = "console"
+	}
+
+	// Determine destination: flag > env > default
+	dest := logDestination
+	if dest == "" {
+		dest = os.Getenv("LOG_DESTINATION")
+	}
+	if dest == "" {
+		dest = "stderr"
+	}
+
+	// Select output writer based on destination
+	var w io.Writer
+	switch strings.ToLower(dest) {
+	case "stdout":
+		w = os.Stdout
+	default:
+		w = os.Stderr
+	}
+
+	// Configure logger based on format
+	switch strings.ToLower(format) {
+	case "json":
+		// Raw JSON output - zerolog default without ConsoleWriter
+		log.Logger = zerolog.New(w).With().Timestamp().Logger()
+	case "plain":
+		// Plain text without colors
+		log.Logger = log.Output(GetLoggerConfig(w, true))
+	default: // "console"
+		// Colored console output, disable only if explicitly requested via NO_COLOR
+		noColor := shouldDisableColor()
+		log.Logger = log.Output(GetLoggerConfig(w, noColor))
+	}
+}
+
+// shouldDisableColor returns true if ANSI color codes should be disabled.
+// Colors are only disabled when explicitly requested via NO_COLOR env var.
+func shouldDisableColor() bool {
+	// NO_COLOR env var (https://no-color.org/) - disables color when present and non-empty
+	if val, ok := os.LookupEnv("NO_COLOR"); ok && val != "" {
+		return true
+	}
+	return false
+}
+
+// A value the flag does not name is refused rather than quietly treated as console: --log-format JSON
+// in a unit file would otherwise put human-readable lines into a log pipeline with nothing to say why.
+func BuildAgentProxyLogWriter(format, filePath string) (io.Writer, error) {
+	var stream io.Writer
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "json":
+		stream = os.Stderr
+	case "console", "":
+		stream = GetLoggerConfig(os.Stderr, !isatty.IsTerminal(os.Stderr.Fd()))
+	default:
+		return nil, fmt.Errorf("--log-format must be console or json, got %q", format)
+	}
+
+	if filePath == "" {
+		return stream, nil
+	}
+
+	f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open log file %q: %w", filePath, err)
+	}
+	return zerolog.MultiLevelWriter(stream, f), nil
+}
+
+// GetLoggerConfig returns the logger configuration with the provided writer. noColor drops ANSI codes.
+func GetLoggerConfig(w io.Writer, noColor bool) zerolog.ConsoleWriter {
 	// very annoying but zerolog doesn't allow us to change one color without changing all of them
 	// these are the default colors for each level, except for warn
 	levelColors := map[string]string{
@@ -177,16 +390,28 @@ func GetLoggerConfig(w io.Writer) zerolog.ConsoleWriter {
 
 	return zerolog.ConsoleWriter{
 		Out:        w,
+		NoColor:    noColor,
 		TimeFormat: time.RFC3339,
+		// zerolog >= 1.35 bolds info/warn/error messages by default. Keep the message
+		// rendered as-is so CLI output stays consistent with prior releases.
+		FormatMessage: func(i interface{}) string {
+			if i == nil {
+				return ""
+			}
+			return fmt.Sprintf("%s", i)
+		},
 		FormatLevel: func(i interface{}) string {
 			level := fmt.Sprintf("%s", i)
-			color := levelColors[level]
-			if color == "" {
-				color = "\033[0m" // no color for unknown levels
-			}
 			abbrev := levelAbbrev[level]
 			if abbrev == "" {
 				abbrev = strings.ToUpper(level) // fallback to uppercase if unknown
+			}
+			if noColor {
+				return abbrev
+			}
+			color := levelColors[level]
+			if color == "" {
+				color = "\033[0m" // no color for unknown levels
 			}
 			return color + abbrev + "\033[0m"
 		},

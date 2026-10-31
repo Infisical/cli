@@ -83,3 +83,45 @@ func TestIsJWTExpired_MissingExpClaim(t *testing.T) {
 		t.Error("expected token without exp claim to be treated as expired")
 	}
 }
+
+// An organization token is minted from the profile's own session and dies with
+// it. Sending one that outlived its session fails mid-command with no way to
+// recover, so it must be treated as a cache miss and exchanged again.
+func TestOrgSessionUsable(t *testing.T) {
+	session := sessionToken(t, "session-a", time.Hour)
+	sameSession := sessionToken(t, "session-a", time.Hour)
+	otherSession := sessionToken(t, "session-b", time.Hour)
+	expired := sessionToken(t, "session-a", -time.Hour)
+
+	t.Run("a token from the current session is used", func(t *testing.T) {
+		if !orgSessionUsable(sameSession, session) {
+			t.Fatal("expected a cached token from the live session to be usable")
+		}
+	})
+
+	t.Run("a token from a superseded session is not", func(t *testing.T) {
+		if orgSessionUsable(otherSession, session) {
+			t.Fatal("expected a token from another session to be re-exchanged rather than sent")
+		}
+	})
+
+	t.Run("an expired token is not", func(t *testing.T) {
+		if orgSessionUsable(expired, session) {
+			t.Fatal("expected an expired token to be re-exchanged")
+		}
+	})
+
+	t.Run("an empty or unparsable token is not", func(t *testing.T) {
+		if orgSessionUsable("", session) || orgSessionUsable("not-a-jwt", session) {
+			t.Fatal("expected an unreadable cached token to be re-exchanged")
+		}
+	})
+
+	t.Run("an unreadable session token refuses the cache", func(t *testing.T) {
+		// Without a session to compare against, nothing shows the cached token
+		// is still live, so pay for an exchange rather than risk a failure.
+		if orgSessionUsable(sameSession, "not-a-jwt") {
+			t.Fatal("expected an unknown session to refuse the cached token")
+		}
+	})
+}
