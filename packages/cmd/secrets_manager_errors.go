@@ -6,9 +6,11 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/util"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
@@ -21,6 +23,10 @@ const (
 	errCodeProjectNotFound         = "project_not_found"
 	errCodeProjectTypeNotSupported = "project_type_not_supported"
 	errCodeEnvironmentNotFound     = "environment_not_found"
+	errCodeEnvironmentExists       = "environment_exists"
+	errCodeEnvironmentPending      = "environment_pending_deletion"
+	errCodeProjectRequired         = "project_required"
+	errCodeInvalidFlagValue        = "invalid_flag_value"
 	errCodeSecretExists            = "secret_exists"
 	errCodeSecretNotFound          = "secret_not_found"
 	errCodeFolderNotFound          = "folder_not_found"
@@ -33,6 +39,7 @@ var errorCodes = []string{
 	errCodeAuthRequired, errCodePermissionDenied, errCodeProjectNotLinked, errCodeProjectNotFound,
 	errCodeProjectTypeNotSupported, errCodeEnvironmentNotFound, errCodeSecretExists, errCodeSecretNotFound,
 	errCodeFolderNotFound, errCodeNothingToUpdate, errCodeConfirmationRequired, errCodeConfirmationDeclined,
+	errCodeEnvironmentExists, errCodeEnvironmentPending, errCodeProjectRequired, errCodeInvalidFlagValue,
 }
 
 const secretsManagerPrefix = "infisical " + secretsManagerCommandName
@@ -146,6 +153,47 @@ func errEnvironmentNotFound(slug string, scope errorScope, cause error) *util.CL
 			Command: secretsManagerPrefix + " environments get" + scope.projectFlag()}}}
 }
 
+func errEnvironmentExists(slug string, scope errorScope) *util.CLIError {
+	return &util.CLIError{Code: errCodeEnvironmentExists,
+		Message: fmt.Sprintf("Environment %s already exists in project %q. Nothing was written.", quoted(slug, "env"), scope.projectLabel()),
+		Next: []util.NextStep{{Purpose: "To see it",
+			Command: secretsManagerPrefix + " environments get " + util.SuggestedValue(slug, "slug") + scope.projectFlag()}}}
+}
+
+// errEnvironmentPending is for a slug held by an environment that is soft-deleted but not yet gone:
+// it can't be used, created again, or deleted again without --force until deleteAfter.
+func errEnvironmentPending(slug, deleteAfter string, scope errorScope) *util.CLIError {
+	until := ""
+	if day := formatDay(deleteAfter); day != "" {
+		until = " until " + day
+	}
+	return &util.CLIError{Code: errCodeEnvironmentPending,
+		Message: fmt.Sprintf("Environment %s in project %q is pending deletion%s, and keeps its slug until then.", quoted(slug, "env"), scope.projectLabel(), until),
+		Next: []util.NextStep{{Purpose: "To delete it now and free the slug",
+			Command: secretsManagerPrefix + " environments delete " + util.SuggestedValue(slug, "slug") + " --force" + scope.projectFlag()}}}
+}
+
+// errProjectRequired is for a destructive command run without --projectId: it never falls back to
+// INFISICAL_PROJECT_ID or the workspace file (see CLI.md).
+func errProjectRequired(what string) *util.CLIError {
+	return &util.CLIError{Code: errCodeProjectRequired,
+		Message: fmt.Sprintf("Deleting %s needs --projectId: a delete never uses %s or the project linked to this directory.", what, util.INFISICAL_PROJECT_ID_NAME),
+		Next:    []util.NextStep{{Purpose: "To find the project ID", Command: secretsManagerPrefix + " projects list"}}}
+}
+
+func errEmptyFlag(flag string) *util.CLIError {
+	return &util.CLIError{Code: errCodeInvalidFlagValue,
+		Message: fmt.Sprintf("--%s can't be empty: pass a value, or leave out --%s to keep the current one.", flag, flag)}
+}
+
+func formatDay(timestamp string) string {
+	parsed, err := time.Parse(time.RFC3339Nano, timestamp)
+	if err != nil {
+		return ""
+	}
+	return parsed.Local().Format("2006-01-02")
+}
+
 func errSecretExists(names []string, scope errorScope) *util.CLIError {
 	message := fmt.Sprintf("Secret %s already exists.", listOf(names))
 	switch {
@@ -238,13 +286,18 @@ func errorOutputFormat(cmd *cobra.Command) string {
 var exitProcess = os.Exit
 
 // exitWithError prints err and exits 1: a *util.CLIError in the CLI.md format, anything else the way
-// util.HandleError always has.
-func exitWithError(cmd *cobra.Command, err error) {
+// util.HandleError always has, with messages.
+func exitWithError(cmd *cobra.Command, err error, messages ...string) {
 	var cliErr *util.CLIError
 	if errors.As(err, &cliErr) {
+		// The text format has no room for the request ID, which support asks for.
+		var apiErr *api.APIError
+		if errors.As(cliErr.Cause, &apiErr) && apiErr.ReqId != "" {
+			log.Debug().Msgf("request ID: %s", apiErr.ReqId)
+		}
 		util.WriteCLIError(util.GetStderrWriter(), cliErr, errorOutputFormat(cmd))
 		exitProcess(1)
 		return
 	}
-	util.HandleError(err)
+	util.HandleError(err, messages...)
 }
