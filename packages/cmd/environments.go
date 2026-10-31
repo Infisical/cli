@@ -15,7 +15,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// buildEnvironmentsCmd builds the `infisical secrets-manager environments` command tree.
 func buildEnvironmentsCmd() *cobra.Command {
 	environmentsCmd := &cobra.Command{
 		Use:     "environments",
@@ -85,7 +84,7 @@ infisical secrets-manager environments update qa --slug testing --projectId <pro
 		Short: "Delete an environment and all of its secrets",
 		Example: `infisical secrets-manager environments delete qa --projectId <project-id>
 
-# Delete for good now, skipping the grace period (also frees the slug of one pending deletion)
+# Permanently delete now, skipping the grace period (also frees the slug of one pending deletion)
 infisical secrets-manager environments delete qa --force --projectId <project-id>`,
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.ExactArgs(1),
@@ -93,7 +92,7 @@ infisical secrets-manager environments delete qa --force --projectId <project-id
 		Annotations:           serviceTokenUnsupported,
 	}
 	deleteCmd.Flags().String("projectId", "", "ID of the project, required (a delete never uses INFISICAL_PROJECT_ID or .infisical.yaml)")
-	deleteCmd.Flags().Bool("force", false, "Delete for good now instead of after the grace period, including an environment already pending deletion")
+	deleteCmd.Flags().Bool("force", false, "Permanently delete now instead of after the grace period, including an environment already pending deletion")
 	addConfirmFlags(deleteCmd)
 	addEnvironmentsCommonFlags(deleteCmd, "Delete the environment", "The output to format the deleted environment in")
 	environmentsCmd.AddCommand(deleteCmd)
@@ -110,8 +109,6 @@ func addEnvironmentsCommonFlags(cmd *cobra.Command, action, outputDescription st
 	addProjectsOutputFlag(cmd, outputDescription)
 }
 
-// environmentsTarget is what every environments command starts from: the project, with its active
-// environments and those pending deletion, and a client to act on it.
 type environmentsTarget struct {
 	client       *resty.Client
 	project      api.ProjectEnvironments
@@ -119,8 +116,7 @@ type environmentsTarget struct {
 	outputFormat string
 }
 
-// loadEnvironmentsTarget resolves and fetches the project. With explicitProject, only --projectId
-// counts, as for a delete.
+// A delete passes explicitProject: it never falls back to INFISICAL_PROJECT_ID or .infisical.yaml.
 func loadEnvironmentsTarget(cmd *cobra.Command, explicitProject bool) environmentsTarget {
 	outputFormat := crudOutputFormat(cmd, "environments")
 
@@ -171,8 +167,6 @@ func (t environmentsTarget) pending(slug string) (api.DeletedEnvironment, bool) 
 	return api.DeletedEnvironment{}, false
 }
 
-// existing returns the active environment with slug, or exits with environment_pending_deletion or
-// environment_not_found.
 func (t environmentsTarget) existing(cmd *cobra.Command, slug string) api.ProjectEnvironment {
 	if environment, ok := t.active(slug); ok {
 		return environment
@@ -184,7 +178,6 @@ func (t environmentsTarget) existing(cmd *cobra.Command, slug string) api.Projec
 	return api.ProjectEnvironment{}
 }
 
-// requireFreeSlug exits when slug is taken by an active environment or held by one pending deletion.
 func (t environmentsTarget) requireFreeSlug(cmd *cobra.Command, slug string) {
 	if _, ok := t.active(slug); ok {
 		exitWithError(cmd, errEnvironmentExists(slug, t.scope))
@@ -194,15 +187,29 @@ func (t environmentsTarget) requireFreeSlug(cmd *cobra.Command, slug string) {
 	}
 }
 
-func (t environmentsTarget) printEnvironment(environment api.Environment, success string) {
+func (t environmentsTarget) printEnvironment(cmd *cobra.Command, environment api.Environment, notice string) {
 	if t.outputFormat != "" {
 		printFormattedOutput(t.outputFormat, environment)
 		return
 	}
-	if success != "" {
-		util.PrintSuccessMessage(success)
+	if notice != "" {
+		printSuccessNotice(cmd, notice)
 	}
 	visualize.PrintEnvironmentDetails(environment)
+}
+
+func printSuccessNotice(cmd *cobra.Command, message string) {
+	if silent, _ := cmd.Flags().GetBool("silent"); !silent {
+		util.PrintSuccessMessageStderr(message)
+	}
+}
+
+// environmentList is the structured output of `environments get`. Pending environments are listed
+// apart, so a script iterating environments never picks a slug it can't use, but can still see
+// which slugs are held and until when.
+type environmentList struct {
+	Environments    []api.ProjectEnvironment `json:"environments"`
+	PendingDeletion []api.DeletedEnvironment `json:"pendingDeletion"`
 }
 
 func runEnvironmentsGet(cmd *cobra.Command, args []string) {
@@ -219,13 +226,20 @@ func runEnvironmentsGet(cmd *cobra.Command, args []string) {
 				return errEnvironmentNotFound(slug, target.scope, cause)
 			}), "Unable to get the environment")
 		}
-		target.printEnvironment(environment, "")
+		target.printEnvironment(cmd, environment, "")
 		Telemetry.CaptureEvent("cli-command:environments get", posthog.NewProperties().Set("version", util.CLI_VERSION))
 		return
 	}
 
 	if target.outputFormat != "" {
-		printFormattedOutput(target.outputFormat, target.project.Environments)
+		list := environmentList{Environments: target.project.Environments, PendingDeletion: target.project.DeletedEnvironments}
+		if list.Environments == nil {
+			list.Environments = []api.ProjectEnvironment{}
+		}
+		if list.PendingDeletion == nil {
+			list.PendingDeletion = []api.DeletedEnvironment{}
+		}
+		printFormattedOutput(target.outputFormat, list)
 	} else if len(target.project.Environments) == 0 {
 		printProjectsTip(cmd, fmt.Sprintf("Project %s has no environments. Create one with [infisical secrets-manager environments create <slug>].", util.SanitizeDisplay(target.project.Name)))
 	} else {
@@ -257,13 +271,13 @@ func runEnvironmentsCreate(cmd *cobra.Command, args []string) {
 		exitWithError(cmd, classifyAPIError(err, nil), "Unable to create the environment")
 	}
 
-	target.printEnvironment(environment, fmt.Sprintf("Created environment %s in project %s", util.SanitizeDisplay(environment.Slug), util.SanitizeDisplay(target.project.Name)))
+	target.printEnvironment(cmd, environment, fmt.Sprintf("Created environment %s in project %s", util.SanitizeDisplay(environment.Slug), util.SanitizeDisplay(target.project.Name)))
 	Telemetry.CaptureEvent("cli-command:environments create", posthog.NewProperties().Set("version", util.CLI_VERSION))
 }
 
-// environmentUpdate is the PATCH body for the flags that were passed, trimmed. An explicitly empty
-// --name or --slug is an error, since Changed is true for "" and the backend would get a blank value.
-func environmentUpdate(cmd *cobra.Command) (api.UpdateEnvironmentRequest, error) {
+// An explicitly empty --name or --slug is an error: Changed is true for "", and the backend would get a
+// blank value.
+func environmentUpdate(cmd *cobra.Command) (api.UpdateEnvironmentRequest, *util.CLIError) {
 	var request api.UpdateEnvironmentRequest
 	for _, field := range []struct {
 		flag  string
@@ -275,7 +289,7 @@ func environmentUpdate(cmd *cobra.Command) (api.UpdateEnvironmentRequest, error)
 		value, _ := cmd.Flags().GetString(field.flag)
 		value = strings.TrimSpace(value)
 		if value == "" {
-			return api.UpdateEnvironmentRequest{}, fmt.Errorf("--%s can't be empty", field.flag)
+			return api.UpdateEnvironmentRequest{}, errEmptyFlag(field.flag)
 		}
 		*field.value = &value
 	}
@@ -284,9 +298,9 @@ func environmentUpdate(cmd *cobra.Command) (api.UpdateEnvironmentRequest, error)
 
 func runEnvironmentsUpdate(cmd *cobra.Command, args []string) {
 	slug := args[0]
-	request, err := environmentUpdate(cmd)
-	if err != nil {
-		util.HandleError(err)
+	request, invalid := environmentUpdate(cmd)
+	if invalid != nil {
+		exitWithError(cmd, invalid)
 	}
 	if request.Name == nil && request.Slug == nil {
 		exitWithError(cmd, errNothingToUpdate([]string{"name", "slug"}))
@@ -305,7 +319,7 @@ func runEnvironmentsUpdate(cmd *cobra.Command, args []string) {
 		}), "Unable to update the environment")
 	}
 
-	target.printEnvironment(environment, fmt.Sprintf("Updated environment %s", util.SanitizeDisplay(environment.Slug)))
+	target.printEnvironment(cmd, environment, fmt.Sprintf("Updated environment %s", util.SanitizeDisplay(environment.Slug)))
 	Telemetry.CaptureEvent("cli-command:environments update", posthog.NewProperties().Set("version", util.CLI_VERSION))
 }
 
@@ -320,11 +334,11 @@ func runEnvironmentsDelete(cmd *cobra.Command, args []string) {
 		environmentID = active.ID
 		description = fmt.Sprintf("environment %s from project %s, with all of its secrets", util.SuggestedValue(slug, "slug"), project)
 		if force {
-			description += ", for good and without a grace period"
+			description += ", permanently and without a grace period"
 		}
 	} else if pending, ok := target.pending(slug); ok && force {
 		environmentID = pending.ID
-		description = fmt.Sprintf("environment %s, already pending deletion, from project %s for good", util.SuggestedValue(slug, "slug"), project)
+		description = fmt.Sprintf("environment %s, already pending deletion, permanently from project %s", util.SuggestedValue(slug, "slug"), project)
 	} else {
 		target.existing(cmd, slug)
 	}
@@ -345,14 +359,19 @@ func runEnvironmentsDelete(cmd *cobra.Command, args []string) {
 		}), "Unable to delete the environment")
 	}
 
+	// A hard delete of an environment already pending deletion returns the row as it was, with its old
+	// deleteAfter, so whether it's gone comes from --force, not from the response.
+	if force {
+		environment.DeleteAfter = ""
+	}
 	if target.outputFormat != "" {
 		printFormattedOutput(target.outputFormat, environment)
 	} else if day := formatDay(environment.DeleteAfter); day != "" {
-		util.PrintSuccessMessage(fmt.Sprintf("Deleted environment %s. It will be removed for good on %s.", util.SanitizeDisplay(slug), day))
-		printProjectsTip(cmd, fmt.Sprintf("To remove it now and free its slug, run [infisical secrets-manager environments delete %s --force --projectId %s].",
+		printSuccessNotice(cmd, fmt.Sprintf("Deleted environment %s. It will be permanently deleted on %s.", util.SanitizeDisplay(slug), day))
+		printProjectsTip(cmd, fmt.Sprintf("To permanently delete it now and free its slug, run [infisical secrets-manager environments delete %s --force --projectId %s].",
 			util.SuggestedValue(slug, "slug"), util.SuggestedValue(target.project.ID, "project-id")))
 	} else {
-		util.PrintSuccessMessage(fmt.Sprintf("Deleted environment %s for good.", util.SanitizeDisplay(slug)))
+		printSuccessNotice(cmd, fmt.Sprintf("Permanently deleted environment %s.", util.SanitizeDisplay(slug)))
 	}
 
 	Telemetry.CaptureEvent("cli-command:environments delete", posthog.NewProperties().Set("hardDelete", force).Set("version", util.CLI_VERSION))

@@ -20,6 +20,9 @@ import (
 const testEnvironmentID = "0a6c2f4e-1b3d-4e5f-8a9b-0c1d2e3f4a5b"
 const testPendingID = "9f8e7d6c-5b4a-4f3e-8d2c-1b0a9f8e7d6c"
 
+// Midday UTC, so the date in messages is the same in every time zone a test might run in.
+const testDeleteAfter = "2026-11-13T12:00:00.000Z"
+
 // fakeEnvironmentsAPI answers the routes the environments commands call, like the backend does, and
 // records every request so a test can assert what was (and wasn't) sent.
 type fakeEnvironmentsAPI struct {
@@ -74,8 +77,12 @@ func (f *fakeEnvironmentsAPI) serve(t *testing.T) {
 			_, _ = fmt.Fprintf(w, `{"environment":{"id":%q,"name":"Staging","slug":"staging","position":2,"projectId":%q}}`, testEnvironmentID, testProjectID)
 		case r.Method == http.MethodGet:
 			notFound()
-		case r.Method == http.MethodDelete:
+		case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/"+testPendingID):
+			_, _ = fmt.Fprintf(w, `{"environment":{"id":%q,"name":"QA","slug":"qa","position":3,"projectId":%q,"deleteAfter":%q}}`, testPendingID, testProjectID, testDeleteAfter)
+		case r.Method == http.MethodDelete && r.URL.Query().Get("hardDelete") == "true":
 			_, _ = fmt.Fprintf(w, `{"environment":{"id":"x","name":"n","slug":"s","position":1,"projectId":%q}}`, testProjectID)
+		case r.Method == http.MethodDelete:
+			_, _ = fmt.Fprintf(w, `{"environment":{"id":"x","name":"n","slug":"s","position":1,"projectId":%q,"deleteAfter":%q}}`, testProjectID, testDeleteAfter)
 		default:
 			_, _ = fmt.Fprintf(w, `{"environment":{"id":"new","name":"n","slug":"s","position":3,"projectId":%q}}`, testProjectID)
 		}
@@ -117,6 +124,7 @@ func runEnvironments(t *testing.T, fake *fakeEnvironmentsAPI, args ...string) (s
 	t.Cleanup(func() { util.GetStdoutWriter, exitProcess, Telemetry = oldStdout, oldExit, oldTelemetry })
 
 	root := &cobra.Command{Use: "infisical"}
+	root.PersistentFlags().Bool("silent", false, "")
 	product := &cobra.Command{Use: secretsManagerCommandName}
 	product.AddCommand(buildEnvironmentsCmd())
 	root.AddCommand(product)
@@ -148,9 +156,15 @@ func runEnvironments(t *testing.T, fake *fakeEnvironmentsAPI, args ...string) (s
 func TestEnvironmentsGetListsAndShowsOne(t *testing.T) {
 	fake := &fakeEnvironmentsAPI{}
 	_, stdout, exited := runEnvironments(t, fake, "get", "--projectId", testProjectID, "-o", "json")
-	var listed []map[string]string
-	if exited || json.Unmarshal([]byte(stdout), &listed) != nil || len(listed) != 2 || listed[1]["slug"] != "staging" {
+	var listed struct {
+		Environments    []map[string]string `json:"environments"`
+		PendingDeletion []map[string]string `json:"pendingDeletion"`
+	}
+	if exited || json.Unmarshal([]byte(stdout), &listed) != nil || len(listed.Environments) != 2 || listed.Environments[1]["slug"] != "staging" {
 		t.Errorf("list: exited=%v stdout=%s", exited, stdout)
+	}
+	if len(listed.PendingDeletion) != 1 || listed.PendingDeletion[0]["slug"] != "qa" || listed.PendingDeletion[0]["deleteAfter"] == "" {
+		t.Errorf("held slugs must be visible to scripts: %s", stdout)
 	}
 
 	_, stdout, exited = runEnvironments(t, fake, "get", "staging", "--projectId", testProjectID, "-o", "json")
@@ -262,7 +276,7 @@ func TestEnvironmentsCreateAndUpdateSendOnlyWhatWasPassed(t *testing.T) {
 }
 
 // An explicit empty --name or --slug is rejected before anything is sent, instead of PATCHing a
-// blank value.
+// blank value, and in the format -o asks for.
 func TestEnvironmentUpdateRejectsEmptyValues(t *testing.T) {
 	cases := map[string]string{
 		`--name=`:      "--name can't be empty",
@@ -278,10 +292,68 @@ func TestEnvironmentUpdateRejectsEmptyValues(t *testing.T) {
 		if err := update.ParseFlags([]string{flag}); err != nil {
 			t.Fatal(err)
 		}
-		_, err = environmentUpdate(update)
-		if got := fmt.Sprint(err); (want == "" && err != nil) || (want != "" && got != want) {
-			t.Errorf("%s: got %v, want %q", flag, err, want)
+		_, invalid := environmentUpdate(update)
+		switch {
+		case want == "" && invalid != nil:
+			t.Errorf("%s: got %v", flag, invalid)
+		case want != "" && (invalid == nil || invalid.Code != errCodeInvalidFlagValue || !strings.HasPrefix(invalid.Message, want)):
+			t.Errorf("%s: got %+v, want invalid_flag_value starting %q", flag, invalid, want)
 		}
+	}
+
+	for _, format := range []string{"json", "yaml"} {
+		fake := &fakeEnvironmentsAPI{}
+		stderr, stdout, exited := runEnvironments(t, fake, "update", "staging", "--slug=", "--projectId", testProjectID, "-o", format)
+		if !exited || stdout != "" || !strings.Contains(stderr, "invalid_flag_value") || len(fake.requests) != 0 {
+			t.Errorf("-o %s: exited=%v requests=%v stderr=%s", format, exited, fake.requests, stderr)
+		}
+	}
+}
+
+// A normal delete is soft: the output gives the date it is permanently deleted and how to delete it now. The
+// notices go to stderr, so stdout only ever carries data.
+func TestEnvironmentsDeleteReportsWhatHappened(t *testing.T) {
+	stderr, stdout, exited := runEnvironments(t, &fakeEnvironmentsAPI{}, "delete", "staging", "--yes", "--projectId", testProjectID)
+	if exited || stdout != "" || !strings.Contains(stderr, "Deleted environment staging. It will be permanently deleted on 2026-11-13.") ||
+		!strings.Contains(stderr, "environments delete staging --force --projectId "+testProjectID) {
+		t.Errorf("soft delete: exited=%v stdout=%q stderr=%q", exited, stdout, stderr)
+	}
+
+	stderr, stdout, _ = runEnvironments(t, &fakeEnvironmentsAPI{}, "delete", "staging", "--yes", "--force", "--projectId", testProjectID)
+	if stdout != "" || !strings.Contains(stderr, "Permanently deleted environment staging.") || strings.Contains(stderr, "--force") {
+		t.Errorf("hard delete: stdout=%q stderr=%q", stdout, stderr)
+	}
+
+	stderr, _, _ = runEnvironments(t, &fakeEnvironmentsAPI{}, "delete", "qa", "--yes", "--force", "--projectId", testProjectID)
+	if !strings.Contains(stderr, "Permanently deleted environment qa.") || strings.Contains(stderr, "will be permanently deleted on") {
+		t.Errorf("--force on an environment pending deletion removes it now: %q", stderr)
+	}
+	_, stdout, _ = runEnvironments(t, &fakeEnvironmentsAPI{}, "delete", "qa", "--yes", "--force", "--projectId", testProjectID, "-o", "json")
+	if strings.Contains(stdout, "deleteAfter") {
+		t.Errorf("a permanently deleted environment has no deleteAfter: %s", stdout)
+	}
+
+	_, stdout, _ = runEnvironments(t, &fakeEnvironmentsAPI{}, "delete", "staging", "--yes", "--projectId", testProjectID, "-o", "json")
+	if !strings.Contains(stdout, `"deleteAfter":"`+testDeleteAfter+`"`) {
+		t.Errorf("-o json should carry deleteAfter: %s", stdout)
+	}
+
+	stderr, _, _ = runEnvironments(t, &fakeEnvironmentsAPI{}, "delete", "staging", "--yes", "--silent", "--projectId", testProjectID)
+	if stderr != "" {
+		t.Errorf("--silent should print nothing: %q", stderr)
+	}
+}
+
+// The table itself goes to os.Stdout through visualize, which this harness doesn't capture; the
+// end-to-end suite checks it.
+func TestEnvironmentsCreateNoticeRespectsSilent(t *testing.T) {
+	stderr, stdout, _ := runEnvironments(t, &fakeEnvironmentsAPI{}, "create", "preview", "--projectId", testProjectID)
+	if !strings.Contains(stderr, "Created environment") || strings.Contains(stdout, "Created environment") {
+		t.Errorf("the notice belongs on stderr: stdout=%q stderr=%q", stdout, stderr)
+	}
+	stderr, _, _ = runEnvironments(t, &fakeEnvironmentsAPI{}, "create", "preview", "--silent", "--projectId", testProjectID)
+	if stderr != "" {
+		t.Errorf("--silent should print no notice: %q", stderr)
 	}
 }
 

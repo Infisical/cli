@@ -505,8 +505,8 @@ func CallUpdateEnvironment(httpClient *resty.Client, projectID, environmentID st
 	return environmentResponse.Environment, nil
 }
 
-// CallDeleteEnvironment soft-deletes the environment, or deletes it for good with hardDelete. Backends
-// without soft delete ignore hardDelete and always delete for good; their response has no deleteAfter.
+// CallDeleteEnvironment soft-deletes the environment, or permanently deletes it with hardDelete. Backends
+// without soft delete ignore hardDelete and always delete permanently; their response has no deleteAfter.
 func CallDeleteEnvironment(httpClient *resty.Client, projectID, environmentID string, hardDelete bool) (Environment, error) {
 	var environmentResponse EnvironmentResponse
 	request := httpClient.

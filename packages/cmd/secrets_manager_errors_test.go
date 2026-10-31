@@ -38,6 +38,7 @@ func everyConstructedError() []*util.CLIError {
 		errEnvironmentExists("qa", testScope),
 		errEnvironmentPending("qa", "2026-11-12T10:00:00.000Z", testScope),
 		errProjectRequired("an environment"),
+		errEmptyFlag("name"),
 		errSecretExists([]string{"API_KEY"}, testScope),
 		errSecretNotFound([]string{"API_KEY", "DB_URL"}, testScope),
 		errFolderNotFound("api", testScope),

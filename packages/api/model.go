@@ -266,7 +266,7 @@ type CreateProjectResponse struct {
 }
 
 // Environment is a project environment as the /v1/projects/:projectId/environments endpoints return
-// it. DeleteAfter is set once it is soft-deleted, and is when it will be deleted for good.
+// it. DeleteAfter is set once it is soft-deleted, and is when it will be permanently deleted.
 type Environment struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`

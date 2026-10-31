@@ -111,6 +111,11 @@ func PrintSuccessMessage(message string) {
 	color.New(color.FgGreen).Println(message)
 }
 
+// PrintSuccessMessageStderr is PrintSuccessMessage for commands whose stdout carries only their data.
+func PrintSuccessMessageStderr(message string) {
+	color.New(color.FgGreen).Fprintln(GetStderrWriter(), message)
+}
+
 func PrintErrorMessageAndExit(messages ...string) {
 	if len(messages) > 0 {
 		for _, message := range messages {

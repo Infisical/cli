@@ -26,6 +26,7 @@ const (
 	errCodeEnvironmentExists       = "environment_exists"
 	errCodeEnvironmentPending      = "environment_pending_deletion"
 	errCodeProjectRequired         = "project_required"
+	errCodeInvalidFlagValue        = "invalid_flag_value"
 	errCodeSecretExists            = "secret_exists"
 	errCodeSecretNotFound          = "secret_not_found"
 	errCodeFolderNotFound          = "folder_not_found"
@@ -38,7 +39,7 @@ var errorCodes = []string{
 	errCodeAuthRequired, errCodePermissionDenied, errCodeProjectNotLinked, errCodeProjectNotFound,
 	errCodeProjectTypeNotSupported, errCodeEnvironmentNotFound, errCodeSecretExists, errCodeSecretNotFound,
 	errCodeFolderNotFound, errCodeNothingToUpdate, errCodeConfirmationRequired, errCodeConfirmationDeclined,
-	errCodeEnvironmentExists, errCodeEnvironmentPending, errCodeProjectRequired,
+	errCodeEnvironmentExists, errCodeEnvironmentPending, errCodeProjectRequired, errCodeInvalidFlagValue,
 }
 
 const secretsManagerPrefix = "infisical " + secretsManagerCommandName
@@ -180,7 +181,11 @@ func errProjectRequired(what string) *util.CLIError {
 		Next:    []util.NextStep{{Purpose: "To find the project ID", Command: secretsManagerPrefix + " projects list"}}}
 }
 
-// formatDay turns an API timestamp into a date for a message, or "" when it can't be read.
+func errEmptyFlag(flag string) *util.CLIError {
+	return &util.CLIError{Code: errCodeInvalidFlagValue,
+		Message: fmt.Sprintf("--%s can't be empty: pass a value, or leave out --%s to keep the current one.", flag, flag)}
+}
+
 func formatDay(timestamp string) string {
 	parsed, err := time.Parse(time.RFC3339Nano, timestamp)
 	if err != nil {

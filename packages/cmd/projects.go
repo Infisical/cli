@@ -157,7 +157,6 @@ func projectsOutputFormat(cmd *cobra.Command) string {
 	return crudOutputFormat(cmd, "projects")
 }
 
-// crudOutputFormat is -o for a command whose output is structured data: json, yaml, or "" for a table.
 func crudOutputFormat(cmd *cobra.Command, noun string) string {
 	outputFormat, err := cmd.Flags().GetString("output")
 	if err != nil {
