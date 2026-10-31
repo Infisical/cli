@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Infisical/infisical-merge/packages/telemetry"
 	"github.com/Infisical/infisical-merge/packages/util"
@@ -20,7 +21,6 @@ import (
 const testEnvironmentID = "0a6c2f4e-1b3d-4e5f-8a9b-0c1d2e3f4a5b"
 const testPendingID = "9f8e7d6c-5b4a-4f3e-8d2c-1b0a9f8e7d6c"
 
-// Midday UTC, so the date in messages is the same in every time zone a test might run in.
 const testDeleteAfter = "2026-11-13T12:00:00.000Z"
 
 // fakeEnvironmentsAPI answers the routes the environments commands call, like the backend does, and
@@ -313,6 +313,11 @@ func TestEnvironmentUpdateRejectsEmptyValues(t *testing.T) {
 // A normal delete is soft: the output gives the date it is permanently deleted and how to delete it now. The
 // notices go to stderr, so stdout only ever carries data.
 func TestEnvironmentsDeleteReportsWhatHappened(t *testing.T) {
+	// formatDay prints the local date, which is 2026-11-14 for testDeleteAfter from UTC+12 on.
+	oldLocal := time.Local
+	time.Local = time.UTC
+	t.Cleanup(func() { time.Local = oldLocal })
+
 	stderr, stdout, exited := runEnvironments(t, &fakeEnvironmentsAPI{}, "delete", "staging", "--yes", "--projectId", testProjectID)
 	if exited || stdout != "" || !strings.Contains(stderr, "Deleted environment staging. It will be permanently deleted on 2026-11-13.") ||
 		!strings.Contains(stderr, "environments delete staging --force --projectId "+testProjectID) {
