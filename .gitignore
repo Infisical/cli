@@ -1,4 +1,5 @@
 .infisical.json
+.infisical.yaml
 dist/
 agent-config.test.yaml
 
@@ -9,5 +10,10 @@ infisical-merge
 test/infisical-merge
 .DS_Store
 
+infisical
+
 
 /agent-testing
+.vscode/
+.idea/
+/session/

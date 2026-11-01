@@ -1,0 +1,323 @@
+package oracle
+
+import (
+	"bytes"
+	"encoding/hex"
+	"strings"
+	"testing"
+)
+
+func ociFixture(t *testing.T, h string) []byte {
+	t.Helper()
+	raw, err := hex.DecodeString(h)
+	if err != nil {
+		t.Fatalf("bad fixture: %v", err)
+	}
+	return raw
+}
+
+func TestOciGetValueReadsRealCapturedPayloads(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload string
+		key     string
+		wantLen int
+	}{
+		{"phase-1 response session key", ociPhaseOneResponse, "AUTH_SESSKEY", 64},
+		{"phase-1 response verifier salt", ociPhaseOneResponse, "AUTH_VFR_DATA", 32},
+		{"phase-1 response pbkdf2 salt", ociPhaseOneResponse, "AUTH_PBKDF2_CSK_SALT", 32},
+		{"phase-2 request session key", ociPhaseTwoRequest, "AUTH_SESSKEY", 64},
+		{"phase-2 request password", ociPhaseTwoRequest, "AUTH_PASSWORD", 64},
+		{"phase-2 request speedy key", ociPhaseTwoRequest, "AUTH_PBKDF2_SPEEDY_KEY", 160},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ociGetValue(ociFixture(t, tc.payload), tc.key)
+			if err != nil {
+				t.Fatalf("read %s: %v", tc.key, err)
+			}
+			if len(got) != tc.wantLen {
+				t.Fatalf("%s is %d bytes, want %d", tc.key, len(got), tc.wantLen)
+			}
+			if strings.TrimLeft(got, "0123456789ABCDEFabcdef") != "" {
+				t.Fatalf("%s is not hex: %q", tc.key, got)
+			}
+		})
+	}
+}
+
+func TestOciSetValueKeepsEveryOtherFieldIntact(t *testing.T) {
+	payload := ociFixture(t, ociPhaseTwoRequest)
+	original, err := ociGetValue(payload, "AUTH_PASSWORD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := strings.Repeat("A", len(original))
+
+	out, err := ociSetValue(payload, "AUTH_PASSWORD", replacement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != len(payload) {
+		t.Fatalf("same-length replacement changed the payload size: %d vs %d", len(out), len(payload))
+	}
+	got, err := ociGetValue(out, "AUTH_PASSWORD")
+	if err != nil || got != replacement {
+		t.Fatalf("replacement not readable back: %q (%v)", got, err)
+	}
+	for _, other := range []string{"AUTH_SESSKEY", "AUTH_PBKDF2_SPEEDY_KEY"} {
+		before, _ := ociGetValue(payload, other)
+		after, _ := ociGetValue(out, other)
+		if before != after {
+			t.Fatalf("%s changed during an unrelated replacement", other)
+		}
+	}
+}
+
+func TestOciSetValueResizesBothLengthFields(t *testing.T) {
+	payload := ociFixture(t, ociPhaseTwoRequest)
+	longer := strings.Repeat("B", 96)
+
+	out, err := ociSetValue(payload, "AUTH_PASSWORD", longer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ociGetValue(out, "AUTH_PASSWORD")
+	if err != nil {
+		t.Fatalf("resized value not readable: %v", err)
+	}
+	if got != longer {
+		t.Fatalf("resized value = %d bytes, want %d", len(got), len(longer))
+	}
+	if sess, _ := ociGetValue(out, "AUTH_SESSKEY"); len(sess) != 64 {
+		t.Fatal("resizing one value corrupted the next key")
+	}
+}
+
+func TestOciGetValueRejectsAnAbsentKey(t *testing.T) {
+	if _, err := ociGetValue(ociFixture(t, ociPhaseTwoRequest), "AUTH_NOT_THERE"); err == nil {
+		t.Fatal("expected an error for a key that is not present")
+	}
+}
+
+const ociPhaseOneBundle = "220102000108070605004c696e7578333930782f4c696e75782d322e342e7800" +
+	"690301d007170269036903023506010101ef0f0119010101010101017fff0310" +
+	"03030101ff01ffff010c0101ff01060cf6097f050fff0d0b003f000000000000" +
+	"0c020c020100001800870003000000800000003c3c3c800000000000002bd007" +
+	"0376020200000000000000feffffffffffffff1500000001000000feffffffff" +
+	"ffffff0500000000000000fefffffffffffffffeffffffffffffff0757454254" +
+	"455354270000000d415554485f5445524d494e414c00000000000000002d0000" +
+	"000f415554485f50524f4752414d5f4e4d600000002073716c706c7573406661" +
+	"346339313135366265322028544e532056312d56332900000000240000000c41" +
+	"5554485f4d414348494e45240000000c66613463393131353662653200000000" +
+	"1800000008415554485f5049440c000000043137323100000000180000000841" +
+	"5554485f53494412000000066f7261636c6500000000"
+
+const ociPhaseOneResponse = "0108004c696e7578333930782f4c696e75782d322e342e78006903230a006603" +
+	"4003014003660301660348030148036603016603520301520366030166036103" +
+	"01610366030166031f03081f0366030100640000006001240f050b0c030c0c05" +
+	"04050d0609070805050505050f05050505050a05050505050405060708082347" +
+	"2347081123081141b0470083036907d003000000000000000000000000000000" +
+	"000000000000000000000000000000000000000000003506010101ef0f011901" +
+	"0101010101017fff031003030101ff01ffff010c0101ff01060cf6097f050fff" +
+	"0d0b003f0000000000000c020c0201000118007f01020000000102800000003c" +
+	"3c3c800000000000002b0806000c0000000c415554485f534553534b45594000" +
+	"0000403035434537443430334139384345303235454338384131394639424331" +
+	"4131394534424646423844354237363830413631383546463536363036303441" +
+	"303134000000000d0000000d415554485f5646525f4441544120000000203939" +
+	"3141454330394541393731374635434132424535454236353730303234331548" +
+	"00001400000014415554485f50424b4446325f43534b5f53414c542000000020" +
+	"3145383631304543334339393342424333383736454542373442463931343645" +
+	"000000001600000016415554485f50424b4446325f5647454e5f434f554e5404" +
+	"0000000434303936000000001600000016415554485f50424b4446325f534445" +
+	"525f434f554e54010000000133000000001a0000001a415554485f474c4f4241" +
+	"4c4c595f554e495155455f444249440020000000204337334343323832433338" +
+	"4138454336363237414535323143373733343230360000000004010000000b00" +
+	"0100000000000000000000000000000000000000000000000000000000000000" +
+	"0000000000000000000002000000000000360100000000000000000000000000" +
+	"00d0d1d8aaffff00000000000000000000000000000000000000000000000000" +
+	"0000000000000000000000000000000000000000000000000000000000000000" +
+	"00000000000000000000000000000000001d"
+
+const ociPhaseTwoRequest = "0373030000000000000300000000000000feffffffffffffff15000000010100" +
+	"40feffffffffffffff1500000000000000fefffffffffffffffeffffffffffff" +
+	"ff0757454254455354240000000c415554485f534553534b4559c00000004030" +
+	"3845303835324437304537364130463530324445434544344330364133354141" +
+	"4333463333463139423735413245354337334631424446323239324346393101" +
+	"0000004200000016415554485f50424b4446325f5350454544595f4b4559e001" +
+	"0000a03336453737424635343443343635393146393436354344354338363242" +
+	"3436334641303638463641364145383643374133393944433937354430463144" +
+	"3442444632464441314136453932314132393146373132444337324138454141" +
+	"3234353646433239414142463943433344303434434641463341394246414246" +
+	"3139413936453430454331363237343343413432373944384338363833303042" +
+	"37334400000000270000000d415554485f50415353574f5244c0000000404243" +
+	"3844463044424342424133303536413746453737463546333830393732423836" +
+	"3335314445353232413430463942324430343434414637314132433030420000" +
+	"00001800000008415554485f5254540f00000005313633353200000000270000" +
+	"000d415554485f434c4e545f4d454d0c00000004343039360000000027000000" +
+	"0d415554485f5445524d494e414c00000000000000002d0000000f415554485f" +
+	"50524f4752414d5f4e4d600000002073716c706c757340666134633931313536" +
+	"6265322028544e532056312d56332900000000240000000c415554485f4d4143" +
+	"48494e45240000000c6661346339313135366265320000000018000000084155" +
+	"54485f5049440c0000000431373231000000001800000008415554485f534944" +
+	"12000000066f7261636c65000000003900000013415554485f434f4e4e454354" +
+	"5f535452494e47ec010000a4284445534352495054494f4e3d28434f4e4e4543" +
+	"545f444154413d28534552564943455f4e414d453d6672656570646231292843" +
+	"49443d2850524f4752414d3d73716c706c75732928484f53543d666134633931" +
+	"3135366265322928555345523d6f7261636c6529292928414444524553533d28" +
+	"50524f544f434f4c3d7463702928484f53543d3139322e3136382e36352e3235" +
+	"342928504f52543d353139393929292900000000420000001653455353494f4e" +
+	"5f434c49454e545f434841525345540300000001310000000045000000175345" +
+	"5353494f4e5f434c49454e545f4c49425f54595045030000000131000000004e" +
+	"0000001a53455353494f4e5f434c49454e545f4452495645525f4e414d451800" +
+	"00000853514c2a504c555300000000420000001653455353494f4e5f434c4945" +
+	"4e545f56455253494f4e1b000000093338363430303636300000000042000000" +
+	"1653455353494f4e5f434c49454e545f4c4f4241545452030000000131000000" +
+	"001800000008415554485f41434c0c0000000438383030000000003600000012" +
+	"415554485f414c5445525f53455353494f4e6f00000025414c54455220534553" +
+	"53494f4e205345542054494d455f5a4f4e453d272b30303a3030270001000000" +
+	"4500000017415554485f4c4f474943414c5f53455353494f4e5f494460000000" +
+	"2035423731383733423342333930364239453036333041303031324143393042" +
+	"43000000003000000010415554485f4641494c4f5645525f4944000000000000" +
+	"00001e0000000a415554485f464c41475303000000013100000000"
+
+func TestTranslatePhase1ResponseOCIRewritesOnlyTheSessionKey(t *testing.T) {
+	payload := ociFixture(t, ociPhaseOneResponse)
+	before, err := ociGetValue(payload, "AUTH_SESSKEY")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	state, rebuilt, err := translatePhase1ResponseInPlace(payload, "WebPw_1234")
+	if err != nil {
+		t.Fatalf("translate failed: %v", err)
+	}
+	after, err := ociGetValue(rebuilt, "AUTH_SESSKEY")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after == before {
+		t.Fatal("AUTH_SESSKEY was not re-encrypted")
+	}
+	if len(state.ServerSessKey) == 0 {
+		t.Fatal("no server session key recovered")
+	}
+	for _, untouched := range []string{"AUTH_VFR_DATA", "AUTH_PBKDF2_CSK_SALT"} {
+		a, _ := ociGetValue(payload, untouched)
+		b, _ := ociGetValue(rebuilt, untouched)
+		if a != b {
+			t.Fatalf("%s must not change", untouched)
+		}
+	}
+}
+
+func TestTranslatePhase1ResponseOCIRejectsAPayloadWithoutTheVerifier(t *testing.T) {
+	if _, _, err := translatePhase1ResponseInPlace([]byte("not an oracle payload"), "pw"); err == nil {
+		t.Fatal("expected an error when AUTH_SESSKEY and AUTH_VFR_DATA are absent")
+	}
+}
+
+func TestPbkdf2CountRejectsAnImplausibleWorkFactor(t *testing.T) {
+	if _, err := pbkdf2Count("2000000000", defaultPbkdf2VGenCount, maxPbkdf2VGenCount); err == nil {
+		t.Fatal("a work factor that would occupy a CPU for minutes must be refused")
+	}
+	if _, err := pbkdf2Count("-1", defaultPbkdf2VGenCount, maxPbkdf2VGenCount); err == nil {
+		t.Fatal("a negative work factor must be refused, not silently weaken the derivation")
+	}
+}
+
+func TestPbkdf2CountAcceptsRealOracleValues(t *testing.T) {
+	for _, tc := range []struct {
+		raw      string
+		fallback int
+		limit    int
+		want     int
+	}{
+		{"4096", defaultPbkdf2VGenCount, maxPbkdf2VGenCount, 4096},
+		{"3", defaultPbkdf2SDerCount, maxPbkdf2SDerCount, 3},
+		{"", defaultPbkdf2VGenCount, maxPbkdf2VGenCount, defaultPbkdf2VGenCount},
+		{"0", defaultPbkdf2VGenCount, maxPbkdf2VGenCount, defaultPbkdf2VGenCount},
+		{"not-a-number", defaultPbkdf2SDerCount, maxPbkdf2SDerCount, defaultPbkdf2SDerCount},
+	} {
+		got, err := pbkdf2Count(tc.raw, tc.fallback, tc.limit)
+		if err != nil || got != tc.want {
+			t.Fatalf("pbkdf2Count(%q) = %d, %v; want %d", tc.raw, got, err, tc.want)
+		}
+	}
+}
+
+func TestTranslatePhase1ResponseRefusesAHostileWorkFactor(t *testing.T) {
+	payload := ociFixture(t, ociPhaseOneResponse)
+	hostile, err := ociSetValue(payload, "AUTH_PBKDF2_VGEN_COUNT", "2000000000")
+	if err != nil {
+		t.Skipf("fixture carries no VGEN count to tamper with: %v", err)
+	}
+	if _, _, err := translatePhase1ResponseInPlace(hostile, "WebPw_1234"); err == nil {
+		t.Fatal("a hostile work factor must fail the session instead of deriving the key")
+	}
+}
+
+func TestOCIAuthRequestUsernameIsRewritten(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		hex   string
+		subOp byte
+	}{
+		{"phase one bundle", ociPhaseOneBundle, AuthSubOpPhaseOne},
+		{"phase two request", ociPhaseTwoRequest, AuthSubOpPhaseTwo},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := ociFixture(t, tc.hex)
+			for _, newUser := range []string{"X", "SYSTEM", "APPDEMO", "A_VERY_LONG_ORACLE_USERNAME_HERE"} {
+				rewritten, applied := rewriteBundledUsername(payload, tc.subOp, newUser)
+				if !applied {
+					t.Fatalf("%q was not substituted into the %s", newUser, tc.name)
+				}
+				if bytes.Contains(rewritten, []byte("WEBTEST")) {
+					t.Fatalf("%q left the original username in the request", newUser)
+				}
+				if !bytes.Contains(rewritten, []byte(newUser)) {
+					t.Fatalf("%q does not appear in the rewritten request", newUser)
+				}
+				off := indexOfAuthRequest(rewritten, tc.subOp)
+				if off < 0 {
+					t.Fatal("rewritten request is no longer recognisable")
+				}
+				lenPos, userLen, err := ociLocateUsername(rewritten[off:])
+				if err != nil || userLen != len(newUser) {
+					t.Fatalf("rewritten length is %d (err %v), want %d", userLen, err, len(newUser))
+				}
+				capAt, cerr := ociLocateUsernameCapacity(rewritten[off:], userLen, lenPos)
+				if cerr != nil {
+					t.Fatalf("capacity was not kept consistent with the new username: %v (capAt %d)", cerr, capAt)
+				}
+			}
+		})
+	}
+}
+
+func TestThinAuthRequestUsernameSurvivesBothFramings(t *testing.T) {
+	pythonStyle := append([]byte{TTCMsgAuthRequest, AuthSubOpPhaseOne, 0x01, 0x01, 0x01, 0x07,
+		0x01, 0x01, 0x01, 0x01, 0x05, 0x01, 0x01, 0x07}, []byte("APPDEMO")...)
+	pythonStyle = append(pythonStyle, 0x01, 0x0d, 0x0d)
+	pythonStyle = append(pythonStyle, []byte("AUTH_TERMINAL")...)
+
+	rewritten, err := rewriteAuthRequestUser(pythonStyle, AuthSubOpPhaseOne, "WEBTEST")
+	if err != nil {
+		t.Fatalf("the python-oracledb framing was not handled: %v", err)
+	}
+	if !bytes.Contains(rewritten, []byte("WEBTEST")) || bytes.Contains(rewritten, []byte("APPDEMO")) {
+		t.Fatal("the username was not substituted in the python-oracledb framing")
+	}
+	if !bytes.Contains(rewritten, []byte("AUTH_TERMINAL")) {
+		t.Fatal("the rewrite damaged the key-value section")
+	}
+}
+
+func TestAuthRequestRewriteRefusesAStrayMatch(t *testing.T) {
+	junk := append([]byte{TTCMsgAuthRequest, AuthSubOpPhaseOne, 0x00, 0x01, 0x01, 0x04},
+		[]byte("\x00\x00\x00\x00noKVPsectionfollows")...)
+	if _, err := rewriteAuthRequestUser(junk, AuthSubOpPhaseOne, "WEBTEST"); err == nil {
+		t.Fatal("a payload with no key-value section must not be accepted as an auth request")
+	}
+}

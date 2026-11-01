@@ -6,16 +6,8 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/exec"
-	"os/signal"
-	"strconv"
-	"strings"
-	"syscall"
 	"time"
 
-	"github.com/Infisical/infisical-merge/packages/pam/session"
-	"github.com/Infisical/infisical-merge/packages/util"
-	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
 )
 
@@ -23,112 +15,6 @@ type SSHProxyServer struct {
 	BaseProxyServer // Embed common functionality
 	server          net.Listener
 	port            int
-	sshProcess      *exec.Cmd
-}
-
-func StartSSHLocalProxy(accessToken string, accessParams PAMAccessParams, projectID string, durationStr string) {
-	httpClient := resty.New()
-	httpClient.SetAuthToken(accessToken)
-	httpClient.SetHeader("User-Agent", "infisical-cli")
-
-	pamRequest := accessParams.ToAPIRequest(projectID, durationStr)
-
-	pamResponse, err := CallPAMAccessWithMFA(httpClient, pamRequest)
-	if err != nil {
-		if HandleApprovalWorkflow(httpClient, err, projectID, accessParams, durationStr) {
-			return
-		}
-		util.HandleError(err, "Failed to access PAM account")
-		return
-	}
-
-	// Verify this is an SSH resource
-	if pamResponse.ResourceType != session.ResourceTypeSSH {
-		util.HandleError(fmt.Errorf("account is not an SSH resource, got: %s", pamResponse.ResourceType), "Invalid resource type")
-		return
-	}
-
-	duration, err := time.ParseDuration(durationStr)
-	if err != nil {
-		util.HandleError(err, "Failed to parse duration")
-		return
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	proxy := &SSHProxyServer{
-		BaseProxyServer: BaseProxyServer{
-			httpClient:             httpClient,
-			relayHost:              pamResponse.RelayHost,
-			relayClientCert:        pamResponse.RelayClientCertificate,
-			relayClientKey:         pamResponse.RelayClientPrivateKey,
-			relayServerCertChain:   pamResponse.RelayServerCertificateChain,
-			gatewayClientCert:      pamResponse.GatewayClientCertificate,
-			gatewayClientKey:       pamResponse.GatewayClientPrivateKey,
-			gatewayServerCertChain: pamResponse.GatewayServerCertificateChain,
-			sessionExpiry:          time.Now().Add(duration),
-			sessionId:              pamResponse.SessionId,
-			resourceType:           pamResponse.ResourceType,
-			ctx:                    ctx,
-			cancel:                 cancel,
-			shutdownCh:             make(chan struct{}),
-		},
-	}
-
-	if err := proxy.ValidateResourceTypeSupported(); err != nil {
-		util.HandleError(err, "Gateway version outdated")
-		return
-	}
-
-	// Start the local TCP proxy on a random port
-	err = proxy.Start(0) // 0 = random port
-	if err != nil {
-		util.HandleError(err, "Failed to start SSH proxy server")
-		return
-	}
-
-	// Extract metadata
-	username, ok := pamResponse.Metadata["username"]
-	if !ok {
-		util.HandleError(fmt.Errorf("PAM response metadata is missing 'username'"), "Failed to start proxy server")
-		return
-	}
-
-	log.Debug().
-		Str("sessionID", pamResponse.SessionId).
-		Str("username", username).
-		Int("port", proxy.port).
-		Msg("SSH proxy ready")
-
-	// Set up signal handling
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		sig := <-sigChan
-		log.Debug().Msgf("Received signal %v, initiating graceful shutdown...", sig)
-		proxy.gracefulShutdown()
-	}()
-
-	// Start the proxy server in a goroutine
-	go proxy.Run()
-
-	// Give the proxy a moment to start accepting connections
-	time.Sleep(500 * time.Millisecond)
-
-	// Launch SSH client connected to the local proxy (transparent to user)
-	err = proxy.launchSSHClient(username)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to launch SSH client")
-		proxy.gracefulShutdown()
-		return
-	}
-
-	// Wait for SSH process to complete
-	proxy.waitForSSHCompletion()
-
-	// SSH client exited, shutdown gracefully
-	proxy.gracefulShutdown()
 }
 
 func (p *SSHProxyServer) Start(port int) error {
@@ -151,60 +37,10 @@ func (p *SSHProxyServer) Start(port int) error {
 	return nil
 }
 
-func (p *SSHProxyServer) launchSSHClient(username string) error {
-	// Build SSH command: ssh -p <local-port> <username>@localhost
-	sshArgs := []string{
-		"-p", strconv.Itoa(p.port),
-		"-o", "StrictHostKeyChecking=no", // Skip host key verification (we're connecting to localhost)
-		"-o", "UserKnownHostsFile=/dev/null",
-		"-o", "LogLevel=ERROR",
-		fmt.Sprintf("%s@127.0.0.1", username),
-	}
-
-	p.sshProcess = exec.Command("ssh", sshArgs...)
-	p.sshProcess.Stdin = os.Stdin
-	p.sshProcess.Stdout = os.Stdout
-	p.sshProcess.Stderr = os.Stderr
-
-	log.Debug().Msgf("Executing: ssh %s", strings.Join(sshArgs, " "))
-
-	err := p.sshProcess.Start()
-	if err != nil {
-		return fmt.Errorf("failed to start SSH client: %w", err)
-	}
-
-	log.Debug().Msgf("SSH client started with PID: %d", p.sshProcess.Process.Pid)
-	return nil
-}
-
-func (p *SSHProxyServer) waitForSSHCompletion() {
-	if p.sshProcess == nil {
-		return
-	}
-
-	err := p.sshProcess.Wait()
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			log.Debug().Msgf("SSH client exited with code: %d", exitErr.ExitCode())
-		} else {
-			log.Error().Err(err).Msg("Error waiting for SSH client")
-		}
-	} else {
-		log.Debug().Msg("SSH client exited successfully")
-	}
-}
-
 func (p *SSHProxyServer) gracefulShutdown() {
 	p.shutdownOnce.Do(func() {
 		log.Debug().Msg("Starting graceful shutdown of SSH proxy...")
 
-		// Kill SSH process if it's still running
-		if p.sshProcess != nil && p.sshProcess.Process != nil {
-			log.Debug().Msg("Terminating SSH client process")
-			p.sshProcess.Process.Signal(syscall.SIGTERM)
-		}
-
-		// Send session termination notification before cancelling context
 		p.NotifySessionTermination()
 
 		// Signal the accept loop to stop
@@ -222,7 +58,9 @@ func (p *SSHProxyServer) gracefulShutdown() {
 		p.WaitForConnectionsWithTimeout(10 * time.Second)
 
 		log.Debug().Msg("SSH proxy shutdown complete")
-		os.Exit(0)
+		if p.exitAfterShutdown() {
+			os.Exit(0)
+		}
 	})
 }
 
@@ -308,10 +146,9 @@ func (p *SSHProxyServer) handleConnection(clientConn net.Conn) {
 	connCtx, connCancel := context.WithCancel(p.ctx)
 	defer connCancel()
 
-	errCh := make(chan error, 2)
+	gatewayErrCh, clientErrCh := p.NewDisconnectChannels()
 
-	// Bidirectional data forwarding with context cancellation
-	// Client (local SSH) → Gateway (SSH proxy)
+	// Client (local SSH) → Gateway (SSH proxy): if this side closes first, the client disconnected normally
 	go func() {
 		defer connCancel()
 		_, err := io.Copy(gatewayConn, clientConn)
@@ -322,10 +159,10 @@ func (p *SSHProxyServer) handleConnection(clientConn net.Conn) {
 				log.Debug().Err(err).Msg("Client to gateway copy ended")
 			}
 		}
-		errCh <- err
+		clientErrCh <- err
 	}()
 
-	// Gateway (SSH proxy) → Client (local SSH)
+	// Gateway (SSH proxy) → Client (local SSH): if this side closes first, the gateway dropped the connection
 	go func() {
 		defer connCancel()
 		_, err := io.Copy(clientConn, gatewayConn)
@@ -336,14 +173,10 @@ func (p *SSHProxyServer) handleConnection(clientConn net.Conn) {
 				log.Debug().Err(err).Msg("Gateway to client copy ended")
 			}
 		}
-		errCh <- err
+		gatewayErrCh <- err
 	}()
 
-	select {
-	case <-errCh:
-	case <-connCtx.Done():
-		log.Debug().Msg("Connection cancelled by context")
-	}
+	p.WaitForConnectionClose(gatewayErrCh, clientErrCh, connCtx)
 
 	log.Debug().Msgf("SSH connection closed for client: %s", clientConn.RemoteAddr().String())
 }

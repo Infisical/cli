@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
@@ -249,7 +250,7 @@ func (p *PostgresProxy) handleStartup(clientConn net.Conn, clientBackend *pgprot
 			return p.handleAuthentication(clientBackend, serverFrontend)
 
 		case *pgproto3.CancelRequest:
-			log.Debug().Str("sessionID", p.config.SessionID).Uint32("pid", msg.ProcessID).Uint32("secret", msg.SecretKey).Msg("← CLIENT: CancelRequest")
+			log.Debug().Str("sessionID", p.config.SessionID).Uint32("pid", msg.ProcessID).Str("secret", hex.EncodeToString(msg.SecretKey)).Msg("← CLIENT: CancelRequest")
 			serverFrontend.Send(msg)
 			err := serverFrontend.Flush()
 			if err != nil {

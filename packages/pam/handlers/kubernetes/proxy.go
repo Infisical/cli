@@ -11,11 +11,13 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
+	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 )
@@ -24,6 +26,8 @@ type KubernetesProxyConfig struct {
 	TargetApiServer           string
 	AuthMethod                string
 	InjectServiceAccountToken string
+	ImpersonateNamespace      string
+	ImpersonateServiceAccount string
 	TLSConfig                 *tls.Config
 	SessionID                 string
 	SessionLogger             session.SessionLogger
@@ -38,6 +42,47 @@ type KubernetesProxy struct {
 
 func NewKubernetesProxy(config KubernetesProxyConfig) *KubernetesProxy {
 	return &KubernetesProxy{config: config}
+}
+
+// injectAuthHeaders sets the appropriate auth headers based on the configured auth method.
+// For service-account-token: injects the stored Bearer token.
+// For gateway-kubernetes-auth: reads the gateway pod's own token (fresh each call) and sets
+// Impersonate-User/Group headers to act as the target service account.
+func (p *KubernetesProxy) injectAuthHeaders(headers http.Header) error {
+	// Strip any client-supplied impersonation headers to prevent privilege escalation
+	headers.Del("Impersonate-User")
+	headers.Del("Impersonate-Group")
+	headers.Del("Impersonate-Uid")
+	for key := range headers {
+		if strings.HasPrefix(strings.ToLower(key), "impersonate-extra-") {
+			headers.Del(key)
+		}
+	}
+
+	switch p.config.AuthMethod {
+	case "service-account-token", "":
+		headers.Set("Authorization", fmt.Sprintf("Bearer %s", p.config.InjectServiceAccountToken))
+	case "gateway-kubernetes-auth":
+		if p.config.ImpersonateNamespace == "" || p.config.ImpersonateServiceAccount == "" {
+			return fmt.Errorf("gateway-kubernetes-auth requires non-empty namespace and service account name")
+		}
+		// Read fresh on each request — K8s auto-rotates projected volume tokens
+		token, err := os.ReadFile(util.KUBERNETES_SERVICE_ACCOUNT_TOKEN_PATH)
+		if err != nil {
+			return fmt.Errorf("gateway not running in K8s cluster, unable to read pod service account token: %w", err)
+		}
+		headers.Set("Authorization", fmt.Sprintf("Bearer %s", strings.TrimSpace(string(token))))
+
+		saUser := fmt.Sprintf("system:serviceaccount:%s:%s",
+			p.config.ImpersonateNamespace, p.config.ImpersonateServiceAccount)
+		headers.Set("Impersonate-User", saUser)
+		headers.Set("Impersonate-Group", "system:serviceaccounts")
+		headers.Add("Impersonate-Group", fmt.Sprintf("system:serviceaccounts:%s", p.config.ImpersonateNamespace))
+		headers.Add("Impersonate-Group", "system:authenticated")
+	default:
+		return fmt.Errorf("unsupported Kubernetes auth method: %s", p.config.AuthMethod)
+	}
+	return nil
 }
 
 func buildHttpInternalServerError(message string) string {
@@ -165,7 +210,14 @@ func (p *KubernetesProxy) HandleConnection(ctx context.Context, clientConn net.C
 			continue // Continue to next request
 		}
 		proxyReq.Header = req.Header.Clone()
-		proxyReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", p.config.InjectServiceAccountToken))
+		if err := p.injectAuthHeaders(proxyReq.Header); err != nil {
+			l.Error().Err(err).Msg("Failed to inject auth headers")
+			_, err = clientConn.Write([]byte(buildHttpInternalServerError("failed to configure auth headers")))
+			if err != nil {
+				return err
+			}
+			continue
+		}
 
 		resp, err := selfServerClient.Do(proxyReq)
 		if err != nil {
@@ -255,8 +307,11 @@ func (p *KubernetesProxy) forwardWebsocketConnection(
 	sb.WriteString(fmt.Sprintf("%s %s HTTP/1.1\r\n", req.Method, newUrl.RequestURI()))
 	headers := req.Header.Clone()
 	headers.Set("Host", newUrl.Host)
-	// Inject the auth header
-	headers.Set("Authorization", fmt.Sprintf("Bearer %s", p.config.InjectServiceAccountToken))
+	if err := p.injectAuthHeaders(headers); err != nil {
+		l.Error().Err(err).Msg("Failed to inject auth headers for websocket")
+		_, _ = clientConn.Write([]byte(buildHttpInternalServerError("failed to configure auth headers")))
+		return err
+	}
 	for key, values := range headers {
 		for _, value := range values {
 			sb.WriteString(fmt.Sprintf("%s: %s\r\n", key, value))
