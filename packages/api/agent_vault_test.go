@@ -117,3 +117,25 @@ func TestCreateAgentVaultSessionReturnsTheMintedSession(t *testing.T) {
 		t.Errorf("session = %+v, want id sess-1 and token tok-1", res.Session)
 	}
 }
+
+func TestCreateAgentVaultSessionRejectsAPartlyEmptySession(t *testing.T) {
+	for name, body := range map[string]string{
+		"id only":    `{"session":{"id":"sess-1","token":""}}`,
+		"token only": `{"session":{"id":"","token":"tok-1"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(body))
+			}))
+			defer srv.Close()
+			old := config.INFISICAL_URL
+			config.INFISICAL_URL = srv.URL
+			defer func() { config.INFISICAL_URL = old }()
+
+			if _, err := CallCreateAgentVaultSession(resty.New(), CreateAgentVaultSessionRequest{AccessBundles: []string{"coding-agent"}, TTL: "5m"}); err == nil {
+				t.Fatal("a session missing its id or token was accepted")
+			}
+		})
+	}
+}
