@@ -43,9 +43,16 @@
     "label": "|string|",
     "no-ca-trust": "|bool|false",
     "no-proxy": "|string|",
+    "no-skills": "|bool|false",
     "proxy": "|string|",
     "session-token": "|string|",
+    "skills-dir": "|string|",
     "ttl": "|string|never"
+  },
+  "infisical agent-vault skills": {},
+  "infisical agent-vault skills push": {
+    "client-id": "|string|",
+    "client-secret": "|string|"
   },
   "infisical av": {},
   "infisical av proxy": {
@@ -68,9 +75,16 @@
     "label": "|string|",
     "no-ca-trust": "|bool|false",
     "no-proxy": "|string|",
+    "no-skills": "|bool|false",
     "proxy": "|string|",
     "session-token": "|string|",
+    "skills-dir": "|string|",
     "ttl": "|string|never"
+  },
+  "infisical av skills": {},
+  "infisical av skills push": {
+    "client-id": "|string|",
+    "client-secret": "|string|"
   },
   "infisical bootstrap": {
     "domain": "|string|",

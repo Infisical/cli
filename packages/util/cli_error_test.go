@@ -145,6 +145,77 @@ func TestWriteCLIErrorYAML(t *testing.T) {
 	}
 }
 
+// Third-party tokens look like secret names, so they're recognized by format. Built at runtime so the
+// file itself holds nothing a secret scanner would flag.
+func TestSuggestedValueHidesThirdPartyTokens(t *testing.T) {
+	tokens := []string{
+		"ghp" + "_" + strings.Repeat("aB3", 12),
+		"gho" + "_" + strings.Repeat("Z9", 18),
+		"sk" + "_live_" + strings.Repeat("x1Y", 8),
+		"rk" + "_test_" + strings.Repeat("Q", 24),
+		"xoxb" + "-123456789012-" + strings.Repeat("a", 24),
+		"glpat" + "-" + strings.Repeat("Ab_", 7),
+		"npm" + "_" + strings.Repeat("k7", 18),
+		"AKIA" + strings.Repeat("Q7", 8),
+		"sk" + "-proj-" + strings.Repeat("aB", 12),
+		"sk" + "-ant-api03-" + strings.Repeat("Xy", 12),
+	}
+	for _, token := range tokens {
+		if got := SuggestedValue(token, "v"); got != "<v>" {
+			t.Errorf("SuggestedValue(%q) = %q, want <v>", token, got)
+		}
+		var out bytes.Buffer
+		WriteCLIError(&out, &CLIError{Code: "x", Message: "Failed.", Next: []NextStep{{Purpose: "To retry", Command: "infisical secrets-manager secrets get " + token}}}, OUTPUT_FORMAT_JSON)
+		if strings.Contains(out.String(), token) {
+			t.Errorf("%s reached the suggested command: %s", token[:6], out.String())
+		}
+	}
+	for _, name := range []string{"npm_config_registry", "GITHUB_TOKEN", "STRIPE_SK_LIVE", "ghp_short", "sk-backend-production-app", "AKIA_ROLE", "xoxb-bot"} {
+		if got := SuggestedValue(name, "v"); got != name {
+			t.Errorf("SuggestedValue(%q) = %q, a plain name must still print", name, got)
+		}
+	}
+}
+
+// Messages repeat text the CLI doesn't control, such as the backend's permission message or a project
+// name, so they're redacted like suggestions. Plain text must come through unchanged.
+func TestWriteCLIErrorRedactsMessages(t *testing.T) {
+	github := "ghp" + "_" + strings.Repeat("aB3", 12)
+	secrets := []string{"st.abc123.def456.ghi789", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl", github}
+	err := &CLIError{Code: "permission_denied",
+		Message: "You don't have permission to do this (no access to " + secrets[0] + ", " + secrets[1] + " or " + github + ").",
+		Next:    []NextStep{{Purpose: "To retry with " + github, Command: "infisical login"}}}
+	plain := &CLIError{Code: "permission_denied",
+		Message: `You don't have permission to do this (You are not allowed to create on secrets). Project "Payments API" is unchanged.`}
+	for _, format := range []string{"", OUTPUT_FORMAT_JSON, OUTPUT_FORMAT_YAML} {
+		var out bytes.Buffer
+		WriteCLIError(&out, err, format)
+		for _, secret := range secrets {
+			if strings.Contains(out.String(), secret) {
+				t.Errorf("format %q printed a credential from the message:\n%s", format, out.String())
+			}
+		}
+		out.Reset()
+		WriteCLIError(&out, plain, format)
+		// YAML folds long strings across lines, so read the message back instead of searching the output.
+		message := strings.TrimSpace(out.String())
+		if format != "" {
+			var parsed struct {
+				Error struct {
+					Message string `yaml:"message" json:"message"`
+				} `yaml:"error" json:"error"`
+			}
+			if err := yaml.Unmarshal(out.Bytes(), &parsed); err != nil {
+				t.Fatalf("format %q: %v", format, err)
+			}
+			message = parsed.Error.Message
+		}
+		if message != plain.Message {
+			t.Errorf("format %q changed a plain message: %q", format, message)
+		}
+	}
+}
+
 // A suggestion built from unexpected input must still never print a credential.
 func TestWriteCLIErrorNeverPrintsCredentials(t *testing.T) {
 	secrets := []string{"st.abc123.def456.ghi789", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl", "hunter2-client-secret"}

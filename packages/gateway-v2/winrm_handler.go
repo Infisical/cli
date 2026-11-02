@@ -183,6 +183,7 @@ var serveWinrmMux = sync.OnceValue(func() *http.ServeMux {
 	mux.HandleFunc("/v1/rotate-credential", wrapWinrm(handleWinrmRotateCredential))
 	mux.HandleFunc("/v1/sync-dependency", wrapWinrm(handleWinrmSyncDependency))
 	mux.HandleFunc("/v1/validate-credential", wrapWinrm(handleWinrmValidateCredential))
+	mux.HandleFunc("/v1/scan-certificates", wrapWinrm(handleWinrmScanCertificates))
 	return mux
 })
 
@@ -226,6 +227,10 @@ func wrapWinrm(fn winrmHandlerFn) http.HandlerFunc {
 
 		result, err := fn(ctx, &env)
 		if err != nil {
+			if errors.Is(err, errWinrmGatewayBusy) {
+				writeWinrmError(w, http.StatusServiceUnavailable, "The gateway is busy with other certificate scans. Try again shortly.")
+				return
+			}
 			log.Warn().Err(err).Str("path", r.URL.Path).Msg("winrm: operation failed")
 			// Hide the internal host/port from the control plane on connect/auth failures.
 			if errors.Is(err, winrm.ErrConnect) {
