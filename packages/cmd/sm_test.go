@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -491,19 +492,54 @@ func TestSecretsCreateAndUpdateTakeSetFlags(t *testing.T) {
 	}
 }
 
-func TestSecretWriteConflictMapsToCodes(t *testing.T) {
-	scope := errorScope{ProjectID: testProjectID, Environment: "dev", SecretPath: "/app"}
+func TestSecretWriteErrorMapsToCodes(t *testing.T) {
+	scope := errorScope{ProjectID: testProjectID, Environment: "dev", SecretPath: "/app", SecretType: util.SECRET_TYPE_SHARED}
 	cases := map[util.SecretWriteMode]string{util.SecretWriteCreateOnly: errCodeSecretExists, util.SecretWriteUpdateOnly: errCodeSecretNotFound}
 	for mode, code := range cases {
-		err := secretWriteConflict(&util.SecretWriteConflict{Mode: mode, Keys: []string{"A", "B"}}, scope)
+		err := secretWriteError(&util.SecretWriteConflict{Mode: mode, Keys: []string{"A", "B"}}, mode, scope)
 		var cliErr *util.CLIError
 		if !errors.As(err, &cliErr) || cliErr.Code != code || !strings.Contains(cliErr.Message, `"A", "B"`) ||
-			!strings.Contains(cliErr.Next[0].Command, "--env dev --path /app --projectId "+testProjectID) {
+			!strings.HasSuffix(cliErr.Next[0].Command, "=<value> --env dev --path /app --projectId "+testProjectID) {
 			t.Errorf("mode %d: got %+v", mode, err)
 		}
 	}
+
+	if err := secretWriteError(&util.SecretWriteRepeated{Key: "DUP"}, util.SecretWriteCreateOnly, scope); codeOf(err) != errCodeInvalidArgument {
+		t.Errorf("repeated name: got %v", err)
+	}
+
 	other := errors.New("network down")
-	if secretWriteConflict(other, scope) != other {
-		t.Error("other errors must pass through unchanged, so set prints them as before")
+	if secretWriteError(other, util.SecretWriteCreateOnly, scope) != other {
+		t.Error("errors the CLI can't identify must pass through unchanged")
+	}
+}
+
+// Running the suggestion for a refused personal write must act on the personal override, never on the
+// shared secret with the same name.
+func TestSecretWriteSuggestionKeepsThePersonalType(t *testing.T) {
+	scope := errorScope{ProjectID: testProjectID, Environment: "dev", SecretType: util.SECRET_TYPE_PERSONAL}
+	for _, mode := range []util.SecretWriteMode{util.SecretWriteCreateOnly, util.SecretWriteUpdateOnly} {
+		var cliErr *util.CLIError
+		errors.As(secretWriteError(&util.SecretWriteConflict{Mode: mode, Keys: []string{"A"}}, mode, scope), &cliErr)
+		if cliErr == nil || !strings.HasSuffix(cliErr.Next[0].Command, "=<value> --env dev --type personal --projectId "+testProjectID) {
+			t.Errorf("mode %d: got %+v", mode, cliErr)
+		}
+	}
+}
+
+// WriteRawSecrets wraps API errors, so create and update must still find them; set must print them as
+// it always has.
+func TestSecretWriteErrorClassifiesAPIErrorsForCreateAndUpdateOnly(t *testing.T) {
+	scope := errorScope{ProjectID: testProjectID, Environment: "dev"}
+	denied := fmt.Errorf("unable to process new secret creations [err=%w]", apiError(403, "PermissionDenied", "You are not allowed to create on secrets"))
+	if codeOf(secretWriteError(denied, util.SecretWriteCreateOnly, scope)) != errCodePermissionDenied {
+		t.Error("create: a wrapped 403 PermissionDenied should be permission_denied")
+	}
+	notMember := fmt.Errorf("unable to retrieve secrets [err=%w]", apiError(403, "ProjectMembershipNotFound", "You are not a member of this project"))
+	if codeOf(secretWriteError(notMember, util.SecretWriteUpdateOnly, scope)) != errCodeProjectNotFound {
+		t.Error("update: a wrapped ProjectMembershipNotFound should be project_not_found")
+	}
+	if secretWriteError(denied, util.SecretWriteUpsert, scope) != denied {
+		t.Error("set must print API errors unchanged")
 	}
 }

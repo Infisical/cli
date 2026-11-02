@@ -38,11 +38,13 @@ func everyConstructedError() []*util.CLIError {
 		errProjectRequired("an environment"),
 		errEmptyFlag("name"),
 		errProjectSlugAndID(),
+		errFlagRequired("name", "the name of the new project"),
+		errSecretRepeated("DUP"),
 		errProjectDeleteProtected("payments-api"),
 		errSecretExists([]string{"API_KEY"}, testScope),
 		errSecretNotFound([]string{"API_KEY", "DB_URL"}, testScope),
 		errFolderNotFound("api", testScope),
-		errNothingToUpdate([]string{"name", "slug", "position"}),
+		errNothingToUpdate([]string{"name", "slug"}),
 		errConfirmationRequired(action, "infisical secrets-manager environments delete qa --yes"),
 		errConfirmationDeclined(action),
 	}
@@ -236,12 +238,13 @@ func TestClassifyAPIError(t *testing.T) {
 		{apiError(403, "TokenError", "invalid signature"), nil, errCodeAuthRequired},
 		{apiError(403, "TokenError", "Your token has expired. Please re-authenticate."), nil, errCodeAuthRequired},
 		{apiError(403, "PermissionDenied", "You are not allowed to create on environments"), nil, errCodePermissionDenied},
+		{apiError(403, "ProjectMembershipNotFound", "You are not a member of this project with ID "+testProjectID), environmentNotFound, errCodeProjectNotFound},
 		{apiError(404, "NotFound", "Environment with slug 'stagng' in project with ID '"+testProjectID+"' not found"), environmentNotFound, errCodeEnvironmentNotFound},
 		{apiError(404, "NotFound", "Project with ID '"+testProjectID+"' not found"), projectNotFound, errCodeProjectNotFound},
 		{fmt.Errorf("listing: %w", apiError(404, "NotFound", "Project with ID 'x' not found")), projectNotFound, errCodeProjectNotFound},
 	}
 	for _, c := range cases {
-		got := classifyAPIError(c.err, c.notFound)
+		got := classifyAPIError(c.err, errorScope{}, c.notFound)
 		var cliErr *util.CLIError
 		if !errors.As(got, &cliErr) || cliErr.Code != c.code {
 			t.Errorf("%v: got %v, want code %s", c.err, got, c.code)
@@ -263,13 +266,13 @@ func TestClassifyAPIErrorNeverReadsTheMessage(t *testing.T) {
 		name     string
 		notFound func(error) *util.CLIError
 	}{
-		{401, "UnauthorizedError", nil}, {403, "TokenError", nil}, {403, "PermissionDenied", nil},
+		{401, "UnauthorizedError", nil}, {403, "TokenError", nil}, {403, "PermissionDenied", nil}, {403, "ProjectMembershipNotFound", nil},
 		{403, "ForbiddenError", nil}, {400, "BadRequest", nil}, {404, "NotFound", nil},
 		{404, "NotFound", environmentNotFound}, {404, "NotFound", projectNotFound}, {409, "Conflict", projectNotFound},
 	} {
 		results := map[string]bool{}
 		for _, message := range messages {
-			got := classifyAPIError(apiError(kind.status, kind.name, message), kind.notFound)
+			got := classifyAPIError(apiError(kind.status, kind.name, message), errorScope{}, kind.notFound)
 			code := "unchanged"
 			var cliErr *util.CLIError
 			if errors.As(got, &cliErr) {
@@ -297,11 +300,11 @@ func TestClassifyAPIErrorLeavesUnknownErrorsAlone(t *testing.T) {
 		errors.New("network down"),
 		api.NewGenericRequestError("CallGetProject", errors.New("dial tcp: refused")),
 	} {
-		if got := classifyAPIError(err, nil); got != err {
+		if got := classifyAPIError(err, errorScope{}, nil); got != err {
 			t.Errorf("%v was changed to %v", err, got)
 		}
 	}
-	if got := classifyAPIError(apiError(400, "BadRequest", "x"), environmentNotFound); got == nil || codeOf(got) != "" {
+	if got := classifyAPIError(apiError(400, "BadRequest", "x"), errorScope{}, environmentNotFound); got == nil || codeOf(got) != "" {
 		t.Errorf("notFound applies to 404s only, got %v", got)
 	}
 }

@@ -643,6 +643,16 @@ func (e *SecretWriteConflict) Error() string {
 	return fmt.Sprintf("secrets don't exist: %s", strings.Join(e.Keys, ", "))
 }
 
+// SecretWriteRepeated is returned before anything is written when a create-only or update-only write
+// names the same key twice, which would otherwise write the first value and then fail on the second.
+type SecretWriteRepeated struct {
+	Key string
+}
+
+func (e *SecretWriteRepeated) Error() string {
+	return fmt.Sprintf("secret %s is given more than once", e.Key)
+}
+
 func SetRawSecrets(secretArgs []string, secretType string, environmentName string, secretsPath string, projectId string, tokenDetails *models.TokenDetails, file string, tagSlugs []string) ([]models.SecretSetOperation, error) {
 	return WriteRawSecrets(SecretWriteUpsert, secretArgs, secretType, environmentName, secretsPath, projectId, tokenDetails, file, tagSlugs)
 }
@@ -675,6 +685,17 @@ func WriteRawSecrets(mode SecretWriteMode, secretArgs []string, secretType strin
 
 		if len(secretArgs) == 0 {
 			PrintErrorMessageAndExit("no valid secrets found in the file")
+		}
+	}
+
+	if mode != SecretWriteUpsert {
+		seen := make(map[string]bool, len(secretArgs))
+		for _, arg := range secretArgs {
+			key, _, _ := strings.Cut(arg, "=")
+			if seen[key] {
+				return nil, &SecretWriteRepeated{Key: key}
+			}
+			seen[key] = true
 		}
 	}
 
@@ -712,7 +733,7 @@ func WriteRawSecrets(mode SecretWriteMode, secretArgs []string, secretType strin
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("unable to retrieve secrets [err=%v]", err)
+		return nil, fmt.Errorf("unable to retrieve secrets [err=%w]", err)
 	}
 
 	sharedSecretMapByName := make(map[string]models.SingleEnvironmentVariable, len(secrets))
@@ -863,7 +884,7 @@ func WriteRawSecrets(mode SecretWriteMode, secretArgs []string, secretType strin
 
 		err = api.CallCreateRawSecretsV3(httpClient, createSecretRequest)
 		if err != nil {
-			return nil, fmt.Errorf("unable to process new secret creations [err=%v]", err)
+			return nil, fmt.Errorf("unable to process new secret creations [err=%w]", err)
 		}
 	}
 
@@ -880,7 +901,7 @@ func WriteRawSecrets(mode SecretWriteMode, secretArgs []string, secretType strin
 
 		err = api.CallUpdateRawSecretsV3(httpClient, updateSecretRequest)
 		if err != nil {
-			return nil, fmt.Errorf("unable to process secret update request [err=%v]", err)
+			return nil, fmt.Errorf("unable to process secret update request [err=%w]", err)
 		}
 	}
 
@@ -902,12 +923,12 @@ func GetOrCreateTag(client *resty.Client, projectId string, slug string) (api.Se
 				Color: "",
 			})
 			if createErr != nil {
-				return api.SecretTag{}, fmt.Errorf("could not create tag %q: [err=%v]", slug, createErr)
+				return api.SecretTag{}, fmt.Errorf("could not create tag %q: [err=%w]", slug, createErr)
 			}
 
 			return newTag, nil
 		}
 	}
 
-	return api.SecretTag{}, fmt.Errorf("unable to resolve tag slug %q [err=%v]", slug, err)
+	return api.SecretTag{}, fmt.Errorf("unable to resolve tag slug %q [err=%w]", slug, err)
 }

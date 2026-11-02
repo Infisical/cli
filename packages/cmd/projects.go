@@ -301,7 +301,7 @@ func runProjectsGetBySlug(cmd *cobra.Command, slug, outputFormat string) {
 func secretsManagerProjectBySlug(cmd *cobra.Command, client *resty.Client, slug string) api.ProjectSettings {
 	project, err := api.CallGetProjectSettingsBySlug(client, slug)
 	if err != nil {
-		exitWithError(cmd, classifyAPIError(err, func(cause error) *util.CLIError {
+		exitWithError(cmd, classifyAPIError(err, errorScope{ProjectName: util.SuggestedValue(slug, "slug")}, func(cause error) *util.CLIError {
 			return errProjectNotFound(errorScope{ProjectName: util.SuggestedValue(slug, "slug")}, cause)
 		}), "Unable to get the project")
 	}
@@ -332,7 +332,7 @@ func runProjectsDelete(cmd *cobra.Command, args []string) {
 
 	deleted, err := api.CallDeleteProject(client, project.ID)
 	if err != nil {
-		exitWithError(cmd, classifyAPIError(err, func(cause error) *util.CLIError {
+		exitWithError(cmd, classifyAPIError(err, errorScope{ProjectName: util.SuggestedValue(slug, "slug")}, func(cause error) *util.CLIError {
 			return errProjectNotFound(errorScope{ProjectName: util.SuggestedValue(slug, "slug")}, cause)
 		}), "Unable to delete the project")
 	}
@@ -368,7 +368,7 @@ func runProjectsCreate(cmd *cobra.Command, args []string) {
 	name, _ := cmd.Flags().GetString("name")
 	name = strings.TrimSpace(name)
 	if name == "" {
-		util.HandleError(fmt.Errorf("the project name is required; pass --name"))
+		exitWithError(cmd, errFlagRequired("name", "the name of the new project"))
 	}
 	description, _ := cmd.Flags().GetString("description")
 	slug, _ := cmd.Flags().GetString("slug")
@@ -380,13 +380,13 @@ func runProjectsCreate(cmd *cobra.Command, args []string) {
 		Type:               secretManagerProjectType,
 	})
 	if err != nil {
-		util.HandleError(err, "Unable to create the project")
+		exitWithError(cmd, classifyAPIError(err, errorScope{}, nil), "Unable to create the project")
 	}
 
 	if outputFormat != "" {
 		printFormattedOutput(outputFormat, project)
 	} else {
-		util.PrintSuccessMessage(fmt.Sprintf("Created project %s", util.SanitizeDisplay(project.Name)))
+		printSuccessNotice(cmd, fmt.Sprintf("Created project %s", util.SanitizeDisplay(project.Name)))
 		printProjectDetails(project)
 	}
 

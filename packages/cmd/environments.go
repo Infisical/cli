@@ -133,7 +133,7 @@ func loadEnvironmentsTarget(cmd *cobra.Command, explicitProject bool) environmen
 	client := secretsManagerHTTPClient(cmd, "manage environments")
 	project, err := api.CallGetProjectEnvironments(client, projectID)
 	if err != nil {
-		exitWithError(cmd, classifyAPIError(err, func(cause error) *util.CLIError {
+		exitWithError(cmd, classifyAPIError(err, errorScope{ProjectID: projectID}, func(cause error) *util.CLIError {
 			return errProjectNotFound(errorScope{ProjectID: projectID}, cause)
 		}), "Unable to get the project")
 	}
@@ -222,7 +222,7 @@ func runEnvironmentsGet(cmd *cobra.Command, args []string) {
 		}
 		environment, err := api.CallGetEnvironmentBySlug(target.client, target.project.ID, slug)
 		if err != nil {
-			exitWithError(cmd, classifyAPIError(err, func(cause error) *util.CLIError {
+			exitWithError(cmd, classifyAPIError(err, target.scope, func(cause error) *util.CLIError {
 				return errEnvironmentNotFound(slug, target.scope, cause)
 			}), "Unable to get the environment")
 		}
@@ -268,7 +268,7 @@ func runEnvironmentsCreate(cmd *cobra.Command, args []string) {
 
 	environment, err := api.CallCreateEnvironment(target.client, target.project.ID, request)
 	if err != nil {
-		exitWithError(cmd, classifyAPIError(err, nil), "Unable to create the environment")
+		exitWithError(cmd, classifyAPIError(err, target.scope, nil), "Unable to create the environment")
 	}
 
 	target.printEnvironment(cmd, environment, fmt.Sprintf("Created environment %s in project %s", util.SanitizeDisplay(environment.Slug), util.SanitizeDisplay(target.project.Name)))
@@ -314,7 +314,7 @@ func runEnvironmentsUpdate(cmd *cobra.Command, args []string) {
 
 	environment, err := api.CallUpdateEnvironment(target.client, target.project.ID, existing.ID, request)
 	if err != nil {
-		exitWithError(cmd, classifyAPIError(err, func(cause error) *util.CLIError {
+		exitWithError(cmd, classifyAPIError(err, target.scope, func(cause error) *util.CLIError {
 			return errEnvironmentNotFound(slug, target.scope, cause)
 		}), "Unable to update the environment")
 	}
@@ -354,7 +354,7 @@ func runEnvironmentsDelete(cmd *cobra.Command, args []string) {
 
 	environment, err := api.CallDeleteEnvironment(target.client, target.project.ID, environmentID, force)
 	if err != nil {
-		exitWithError(cmd, classifyAPIError(err, func(cause error) *util.CLIError {
+		exitWithError(cmd, classifyAPIError(err, target.scope, func(cause error) *util.CLIError {
 			return errEnvironmentNotFound(slug, target.scope, cause)
 		}), "Unable to delete the environment")
 	}

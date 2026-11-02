@@ -10,11 +10,14 @@ import (
 	"testing"
 )
 
-// fakeProjectsAPI answers GET /v1/projects/slug/:slug, GET /v1/projects/:id and DELETE /v1/projects/:id
-// like the backend, and records every request.
+// fakeProjectsAPI answers GET /v1/projects/slug/:slug, GET /v1/projects/:id, DELETE /v1/projects/:id
+// and POST /v1/projects like the backend, and records every request. With notMember, the project
+// routes answer the way the backend does for a user who isn't a member of the project.
 type fakeProjectsAPI struct {
 	projectType string
 	protected   bool
+	notMember   bool
+	denyCreate  bool
 	mu          sync.Mutex
 	requests    []string
 }
@@ -40,6 +43,14 @@ func (f *fakeProjectsAPI) serve(t *testing.T) {
 			"orgId": "org-1", "hasDeleteProtection": f.protected,
 			"environments": []map[string]string{{"id": "e1", "name": "Development", "slug": "dev"}}}
 		switch {
+		case f.notMember && strings.HasPrefix(r.URL.Path, "/api/v1/projects/"):
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":"ProjectMembershipNotFound","message":"You are not a member of this project with ID ` + testProjectID + `.","reqId":"req-test"}`))
+		case f.denyCreate && r.Method == http.MethodPost && r.URL.Path == "/api/v1/projects":
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":"PermissionDenied","message":"You are not allowed to create on workspace","reqId":"req-test"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/projects":
+			_ = json.NewEncoder(w).Encode(map[string]any{"project": project})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/slug/payments-api":
 			_ = json.NewEncoder(w).Encode(project)
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/"+testProjectID:
@@ -122,6 +133,36 @@ func TestProjectsGetBySlugErrors(t *testing.T) {
 	stderr, _, exited = runProjects(t, &fakeProjectsAPI{projectType: "cert-manager"}, "get", "--projectId", testProjectID, "-o", "json")
 	if !exited || errorCode(t, stderr) != errCodeProjectTypeNotSupported {
 		t.Errorf("another product by --projectId: exited=%v stderr=%s", exited, stderr)
+	}
+}
+
+// Someone who isn't a member gets project_not_found naming what they typed, never the project's ID.
+func TestProjectsNotAMember(t *testing.T) {
+	for _, args := range [][]string{{"get", "payments-api"}, {"delete", "payments-api", "--yes"}} {
+		fake := &fakeProjectsAPI{notMember: true}
+		stderr, _, exited := runProjects(t, fake, append(args, "-o", "json")...)
+		if !exited || errorCode(t, stderr) != errCodeProjectNotFound || !strings.Contains(stderr, `Project \"payments-api\"`) ||
+			strings.Contains(stderr, testProjectID) || len(fake.deletes()) != 0 {
+			t.Errorf("%v: exited=%v deletes=%v stderr=%s", args, exited, fake.deletes(), stderr)
+		}
+	}
+}
+
+func TestProjectsCreate(t *testing.T) {
+	stderr, stdout, exited := runProjects(t, &fakeProjectsAPI{}, "create", "--name", "Payments API")
+	if exited || !strings.Contains(stderr, "Created project Payments API") || strings.Contains(stdout, "Created project") {
+		t.Errorf("the success notice belongs on stderr: exited=%v stdout=%q stderr=%q", exited, stdout, stderr)
+	}
+
+	fake := &fakeProjectsAPI{}
+	stderr, _, exited = runProjects(t, fake, "create", "--name", "  ", "-o", "json")
+	if !exited || errorCode(t, stderr) != errCodeInvalidFlagValue || len(fake.requests) != 0 {
+		t.Errorf("blank --name: exited=%v requests=%v stderr=%s", exited, fake.requests, stderr)
+	}
+
+	stderr, _, exited = runProjects(t, &fakeProjectsAPI{denyCreate: true}, "create", "--name", "Payments API", "-o", "json")
+	if !exited || errorCode(t, stderr) != errCodePermissionDenied {
+		t.Errorf("denied: exited=%v stderr=%s", exited, stderr)
 	}
 }
 

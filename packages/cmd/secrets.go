@@ -155,17 +155,26 @@ var secretWriteEvents = map[util.SecretWriteMode]string{
 	util.SecretWriteUpdateOnly: "cli-command:secrets update",
 }
 
-// secretWriteConflict turns a refused create or update into secret_exists or secret_not_found, naming
-// where the command looked so the suggested command targets the same place.
-func secretWriteConflict(err error, scope errorScope) error {
+// secretWriteError turns a refused create or update into its CLIError, naming where the command
+// looked so the suggested command targets the same place and secret type. API errors are classified
+// only for create and update: set is shared with the legacy `infisical secrets set`, whose errors
+// print as they always have.
+func secretWriteError(err error, mode util.SecretWriteMode, scope errorScope) error {
 	var conflict *util.SecretWriteConflict
-	if !errors.As(err, &conflict) {
+	if errors.As(err, &conflict) {
+		if conflict.Mode == util.SecretWriteCreateOnly {
+			return errSecretExists(conflict.Keys, scope)
+		}
+		return errSecretNotFound(conflict.Keys, scope)
+	}
+	var repeated *util.SecretWriteRepeated
+	if errors.As(err, &repeated) {
+		return errSecretRepeated(repeated.Key)
+	}
+	if mode == util.SecretWriteUpsert {
 		return err
 	}
-	if conflict.Mode == util.SecretWriteCreateOnly {
-		return errSecretExists(conflict.Keys, scope)
-	}
-	return errSecretNotFound(conflict.Keys, scope)
+	return classifyAPIError(err, scope, nil)
 }
 
 func runSecretsWrite(cmd *cobra.Command, args []string, mode util.SecretWriteMode) {
@@ -254,7 +263,7 @@ func runSecretsWrite(cmd *cobra.Command, args []string, mode util.SecretWriteMod
 		secretOperations, err = util.WriteRawSecrets(mode, writeArgs, secretType, environmentName, secretsPath, projectId, token, file, tags)
 
 		if err != nil {
-			exitWithError(cmd, secretWriteConflict(err, errorScope{ProjectID: projectId, Environment: environmentName, SecretPath: secretsPath}), "Unable to set secrets")
+			exitWithError(cmd, secretWriteError(err, mode, errorScope{ProjectID: projectId, Environment: environmentName, SecretPath: secretsPath, SecretType: secretType}), "Unable to set secrets")
 		}
 	} else {
 		if projectId == "" {
@@ -281,7 +290,7 @@ func runSecretsWrite(cmd *cobra.Command, args []string, mode util.SecretWriteMod
 		}, file, tags)
 
 		if err != nil {
-			exitWithError(cmd, secretWriteConflict(err, errorScope{ProjectID: projectId, Environment: environmentName, SecretPath: secretsPath}), "Unable to set secrets")
+			exitWithError(cmd, secretWriteError(err, mode, errorScope{ProjectID: projectId, Environment: environmentName, SecretPath: secretsPath, SecretType: secretType}), "Unable to set secrets")
 		}
 	}
 

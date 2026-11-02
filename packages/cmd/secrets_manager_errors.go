@@ -27,6 +27,7 @@ const (
 	errCodeEnvironmentPending      = "environment_pending_deletion"
 	errCodeProjectRequired         = "project_required"
 	errCodeInvalidFlagValue        = "invalid_flag_value"
+	errCodeInvalidArgument         = "invalid_argument"
 	errCodeProjectDeleteProtected  = "project_delete_protected"
 	errCodeSecretExists            = "secret_exists"
 	errCodeSecretNotFound          = "secret_not_found"
@@ -41,7 +42,7 @@ var errorCodes = []string{
 	errCodeProjectTypeNotSupported, errCodeEnvironmentNotFound, errCodeSecretExists, errCodeSecretNotFound,
 	errCodeFolderNotFound, errCodeNothingToUpdate, errCodeConfirmationRequired, errCodeConfirmationDeclined,
 	errCodeEnvironmentExists, errCodeEnvironmentPending, errCodeProjectRequired, errCodeInvalidFlagValue,
-	errCodeProjectDeleteProtected,
+	errCodeProjectDeleteProtected, errCodeInvalidArgument,
 }
 
 const secretsManagerPrefix = "infisical " + secretsManagerCommandName
@@ -53,6 +54,7 @@ type errorScope struct {
 	ProjectName string
 	Environment string
 	SecretPath  string
+	SecretType  string
 }
 
 func (s errorScope) projectLabel() string {
@@ -86,7 +88,11 @@ func (s errorScope) secretScopeFlags() string {
 	if s.SecretPath != "" && s.SecretPath != "/" {
 		path = " --path " + util.SuggestedValue(s.SecretPath, "path")
 	}
-	return s.envFlag() + path + s.projectFlag()
+	secretType := ""
+	if s.SecretType == util.SECRET_TYPE_PERSONAL {
+		secretType = " --type " + util.SECRET_TYPE_PERSONAL
+	}
+	return s.envFlag() + path + secretType + s.projectFlag()
 }
 
 // firstSecretName is the name a suggestion uses; constructors are always given at least one, but an
@@ -188,6 +194,16 @@ func errEmptyFlag(flag string) *util.CLIError {
 		Message: fmt.Sprintf("--%s can't be empty: pass a value, or leave out --%s to keep the current one.", flag, flag)}
 }
 
+func errFlagRequired(flag, value string) *util.CLIError {
+	return &util.CLIError{Code: errCodeInvalidFlagValue,
+		Message: fmt.Sprintf("--%s is required: pass %s.", flag, value)}
+}
+
+func errSecretRepeated(name string) *util.CLIError {
+	return &util.CLIError{Code: errCodeInvalidArgument,
+		Message: fmt.Sprintf("Secret %s is given more than once: pass each secret once. Nothing was written.", quoted(name, "name"))}
+}
+
 func errProjectSlugAndID() *util.CLIError {
 	return &util.CLIError{Code: errCodeInvalidFlagValue,
 		Message: "Pass a project slug or --projectId, not both."}
@@ -261,12 +277,14 @@ func errConfirmationDeclined(action destructiveAction) *util.CLIError {
 }
 
 // classifyAPIError turns a backend error into a CLIError using only what is stable: the status code,
-// the error names the backend guarantees (TokenError, PermissionDenied), and what the caller was
-// looking up. It never reads the message text, which the backend can reword at any time. notFound
+// the error names the backend guarantees (TokenError, PermissionDenied, ProjectMembershipNotFound),
+// and what the caller was looking up. It never reads the message text, which the backend can reword at
+// any time. project names the project for ProjectMembershipNotFound, which reports it as
+// project_not_found instead of echoing the project's ID back to someone who isn't a member. notFound
 // builds the error for a 404 when the request had one subject (an environment by slug, a project by
 // ID); pass nil when a 404 could mean several things. Anything else is returned unchanged, so it
 // still prints the way it did before.
-func classifyAPIError(err error, notFound func(cause error) *util.CLIError) error {
+func classifyAPIError(err error, project errorScope, notFound func(cause error) *util.CLIError) error {
 	var apiErr *api.APIError
 	if !errors.As(err, &apiErr) {
 		return err
@@ -277,6 +295,8 @@ func classifyAPIError(err error, notFound func(cause error) *util.CLIError) erro
 	case apiErr.StatusCode == 403 && apiErr.Name == "TokenError":
 		// The backend reports every JWT problem (expired, malformed, bad signature) as a 403 TokenError.
 		return errAuthRequired(err)
+	case apiErr.StatusCode == 403 && apiErr.Name == "ProjectMembershipNotFound":
+		return errProjectNotFound(project, err)
 	case apiErr.StatusCode == 403 && apiErr.Name == "PermissionDenied":
 		return errPermissionDenied(apiErr.ErrorMessage, err)
 	case apiErr.StatusCode == 404 && notFound != nil:
