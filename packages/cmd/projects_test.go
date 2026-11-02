@@ -10,8 +10,8 @@ import (
 	"testing"
 )
 
-// fakeProjectsAPI answers GET /v1/projects/slug/:slug and DELETE /v1/projects/:id like the backend,
-// and records every request.
+// fakeProjectsAPI answers GET /v1/projects/slug/:slug, GET /v1/projects/:id and DELETE /v1/projects/:id
+// like the backend, and records every request.
 type fakeProjectsAPI struct {
 	projectType string
 	protected   bool
@@ -42,6 +42,8 @@ func (f *fakeProjectsAPI) serve(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/slug/payments-api":
 			_ = json.NewEncoder(w).Encode(project)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/"+testProjectID:
+			_ = json.NewEncoder(w).Encode(map[string]any{"project": project})
 		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/projects/"+testProjectID:
 			delete(project, "environments")
 			_ = json.NewEncoder(w).Encode(map[string]any{"project": project})
@@ -115,6 +117,11 @@ func TestProjectsGetBySlugErrors(t *testing.T) {
 	stderr, _, exited = runProjects(t, &fakeProjectsAPI{projectType: "cert-manager"}, "get", "payments-api", "-o", "json")
 	if !exited || errorCode(t, stderr) != errCodeProjectTypeNotSupported {
 		t.Errorf("another product: exited=%v stderr=%s", exited, stderr)
+	}
+
+	stderr, _, exited = runProjects(t, &fakeProjectsAPI{projectType: "cert-manager"}, "get", "--projectId", testProjectID, "-o", "json")
+	if !exited || errorCode(t, stderr) != errCodeProjectTypeNotSupported {
+		t.Errorf("another product by --projectId: exited=%v stderr=%s", exited, stderr)
 	}
 }
 

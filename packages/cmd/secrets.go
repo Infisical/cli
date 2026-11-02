@@ -245,7 +245,13 @@ func runSecretsWrite(cmd *cobra.Command, args []string, mode util.SecretWriteMod
 			util.PrintErrorMessageAndExit("When using service tokens or machine identities, you must set the --projectId flag")
 		}
 
-		secretOperations, err = util.WriteRawSecrets(mode, args, secretType, environmentName, secretsPath, projectId, token, file, tags)
+		// set has always sent a token's values as typed, @filepath included, and keeps doing so for
+		// compatibility. create and update read the file the way a login session does.
+		writeArgs := processedArgs
+		if mode == util.SecretWriteUpsert {
+			writeArgs = args
+		}
+		secretOperations, err = util.WriteRawSecrets(mode, writeArgs, secretType, environmentName, secretsPath, projectId, token, file, tags)
 
 		if err != nil {
 			exitWithError(cmd, secretWriteConflict(err, errorScope{ProjectID: projectId, Environment: environmentName, SecretPath: secretsPath}), "Unable to set secrets")

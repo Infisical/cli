@@ -245,7 +245,7 @@ func runProjectsGet(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to get the project")
 	}
 	if project.Type != "" && project.Type != secretManagerProjectType {
-		util.HandleError(fmt.Errorf("project %s is a %s project, not a Secrets Management project", util.SanitizeDisplay(project.ID), util.SanitizeDisplay(project.Type)))
+		exitWithError(cmd, errProjectTypeNotSupported(project.Name, project.Type))
 	}
 
 	if outputFormat != "" {
