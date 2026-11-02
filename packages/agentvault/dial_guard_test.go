@@ -37,6 +37,12 @@ func TestBlockedDestination(t *testing.T) {
 		{"64:ff9b::a9fe:a9fe%1", true},
 		{"64:ff9b:1::1", true},
 		{"2002:a9fe:a9fe::1", true},
+		{"2001:10::1", true},
+		{"3fff::1", true},
+		{"5f00::1", true},
+		{"100:0:0:1::1", true},
+		{"64:ff9b::a00:1", true},
+		{"64:ff9b::808:808", false},
 		{"8.8.8.8", false},
 		{"1.1.1.1", false},
 		{"2606:4700:4700::1111", false},
@@ -51,12 +57,25 @@ func TestBlockedDestination(t *testing.T) {
 }
 
 func TestGuardControlFailsClosed(t *testing.T) {
+	control := guardControl(nil)
 	for _, address := range []string{"127.0.0.1:443", "[::1]:443", "not-an-address", "127.0.0.1%lo0:443"} {
-		if err := guardControl("tcp", address, nil); !errors.Is(err, errPrivateDestination) {
+		if err := control("tcp", address, nil); !errors.Is(err, errPrivateDestination) {
 			t.Errorf("guardControl(%q) = %v, want errPrivateDestination", address, err)
 		}
 	}
-	if err := guardControl("tcp4", "8.8.8.8:443", nil); err != nil {
+	if err := control("tcp4", "8.8.8.8:443", nil); err != nil {
 		t.Errorf("a public address was refused: %v", err)
+	}
+}
+
+func TestGuardControlRefusesTheHostsOwnAddresses(t *testing.T) {
+	control := guardControl(map[netip.Addr]bool{netip.MustParseAddr("8.8.4.4"): true})
+	for _, address := range []string{"8.8.4.4:443", "[::ffff:8.8.4.4]:443"} {
+		if err := control("tcp", address, nil); !errors.Is(err, errPrivateDestination) {
+			t.Errorf("guardControl(%q) = %v, want errPrivateDestination", address, err)
+		}
+	}
+	if err := control("tcp4", "8.8.8.8:443", nil); err != nil {
+		t.Errorf("a public address that isn't the host's was refused: %v", err)
 	}
 }

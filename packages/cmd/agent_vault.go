@@ -366,7 +366,7 @@ func addAgentVaultProxyFlags(cmd *cobra.Command) {
 	cmd.Flags().String("socks5-tls-name", "", "DNS name or IP address clients reach the SOCKS5 port by; the proxy makes the port's certificate for it")
 	cmd.Flags().String("socks5-tls-cert", "", "your own certificate for the SOCKS5 port, instead of one the proxy makes: PEM, base64 PEM or file path")
 	cmd.Flags().String("socks5-tls-key", "", "private key for --socks5-tls-cert: PEM, base64 PEM or file path")
-	cmd.Flags().Bool("socks5-allow-private-destinations", false, "let SOCKS5 traffic that no service covers reach private, loopback and link-local addresses")
+	cmd.Flags().Bool("socks5-allow-private-destinations", false, "let SOCKS5 traffic that no service covers reach private and internal addresses, such as loopback, link-local and the host's own")
 	cmd.Flags().String("log-format", "console", "log output format: console | json")
 	cmd.Flags().String("log-file", "", "path to also write logs to")
 	// Units written for enrollment still pass this on every start; failing on an unknown flag would take an

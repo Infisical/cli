@@ -484,7 +484,7 @@ func serve(opts Options, s startup) error {
 		socksListening.Msg("agent-vault: SOCKS5 listening")
 		if opts.Socks5.AllowPrivateDestinations {
 			log.Warn().Str("door", "socks5").
-				Msg("agent-vault: SOCKS5 traffic may reach private, loopback and link-local addresses")
+				Msg("agent-vault: SOCKS5 traffic may reach private and internal addresses")
 		}
 	}
 
