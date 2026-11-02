@@ -237,6 +237,14 @@ func TestAgentVaultProxySocks5FromFlagsAndEnv(t *testing.T) {
 		t.Fatalf("got %+v", in.socks5)
 	}
 
+	in, err = readProxyInputs(t, nil, "--socks5-port", "1080", "--socks5-tls-name", "fe80::1%eth0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.socks5.TLSName != "fe80::1" {
+		t.Fatalf("the zone should come off the certificate's address, got %q", in.socks5.TLSName)
+	}
+
 	in, err = readProxyInputs(t, map[string]string{
 		"INFISICAL_AGENT_VAULT_SOCKS5_PORT":                       "1080",
 		"INFISICAL_AGENT_VAULT_SOCKS5_TLS_NAME":                   "10.0.0.5",

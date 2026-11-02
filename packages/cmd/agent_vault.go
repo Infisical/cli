@@ -275,6 +275,10 @@ func socks5TLSName(raw, source string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// A zone such as %eth0 names an interface on this machine only; a certificate carries the bare address.
+	if addr, err := netip.ParseAddr(name); err == nil {
+		name = addr.WithZone("").String()
+	}
 	name = strings.ToLower(strings.TrimRight(name, "."))
 	if name == "" || strings.ContainsAny(name, "/* \t") {
 		return "", fmt.Errorf("%s must be a DNS name or an IP address, got %q", source, raw)
