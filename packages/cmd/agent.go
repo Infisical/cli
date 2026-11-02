@@ -1455,6 +1455,8 @@ func (tm *AgentManager) FetchNewAccessToken() error {
 	}
 
 	log.Debug().Msg("FetchNewAccessToken: calling auth strategy")
+	// The token's life starts before its response arrives, so a suspend in between cannot make it look fresh.
+	requestedAt := tokenNow()
 	credential, err := authStrategies[tm.authStrategy]()
 
 	if err != nil {
@@ -1470,9 +1472,9 @@ func (tm *AgentManager) FetchNewAccessToken() error {
 		util.PrintErrorMessageAndExit("At this time, agent does not support refresh of tokens with 30 seconds or less ttl. Please increase access token ttl and try again")
 	}
 
-	tm.accessTokenFetchedTime = tokenNow()
+	tm.accessTokenFetchedTime = requestedAt
 	// A login issues a fresh token, so the refresh schedule starts over from it.
-	tm.accessTokenRefreshedTime = tm.accessTokenFetchedTime
+	tm.accessTokenRefreshedTime = requestedAt
 
 	log.Debug().Msg("FetchNewAccessToken: setting token")
 	tm.SetToken(credential.AccessToken, accessTokenTTL, accessTokenMaxTTL)
@@ -1724,6 +1726,8 @@ func (tm *AgentManager) RefreshAccessToken(accessToken string) error {
 		return err
 	}
 
+	// The token's life starts before its response arrives, so a suspend in between cannot make it look fresh.
+	requestedAt := tokenNow()
 	response, err := api.CallMachineIdentityRefreshAccessToken(httpClient, api.UniversalAuthRefreshRequest{AccessToken: accessToken})
 	if err != nil {
 		return err
@@ -1731,7 +1735,7 @@ func (tm *AgentManager) RefreshAccessToken(accessToken string) error {
 
 	accessTokenTTL := time.Duration(response.AccessTokenTTL * int(time.Second))
 	accessTokenMaxTTL := time.Duration(response.AccessTokenMaxTTL * int(time.Second))
-	tm.accessTokenRefreshedTime = tokenNow()
+	tm.accessTokenRefreshedTime = requestedAt
 
 	tm.SetToken(response.AccessToken, accessTokenTTL, accessTokenMaxTTL)
 
@@ -1750,10 +1754,15 @@ var (
 	tokenSleep = time.Sleep
 )
 
-// sleepUntil returns once the wall clock reaches deadline.
+// sleepUntil returns once the wall clock reaches deadline, or once it has slept the wait it started with,
+// whichever comes first. Sleeps run on the monotonic clock, so a correction that sets the wall clock back
+// cannot delay the wake.
 func sleepUntil(deadline time.Time) {
-	for remaining := deadline.Sub(tokenNow()); remaining > 0; remaining = deadline.Sub(tokenNow()) {
-		tokenSleep(min(remaining, tokenLifecycleTick))
+	wait := deadline.Sub(tokenNow())
+	for wait > 0 {
+		step := min(wait, tokenLifecycleTick)
+		tokenSleep(step)
+		wait = min(wait-step, deadline.Sub(tokenNow()))
 	}
 }
 
@@ -1781,7 +1790,7 @@ func (tm *AgentManager) ManageTokenLifecycle() {
 
 				if isSavedTokenValid {
 					log.Info().Msg("token refreshed successfully from saved file")
-					tm.accessTokenFetchedTime = tokenNow()
+					tm.accessTokenFetchedTime = tm.accessTokenRefreshedTime
 				} else {
 					log.Error().Msg("unable to refresh token from saved file")
 				}
