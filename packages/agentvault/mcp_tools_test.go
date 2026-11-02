@@ -964,3 +964,44 @@ func TestASSERefusalOnlyReachesAStreamOfTheSameSessionAndService(t *testing.T) {
 		t.Fatalf("a POST after the stream closed got %d", got.status)
 	}
 }
+
+func TestAStreamOpeningWithAByteOrderMarkIsStillFiltered(t *testing.T) {
+	resp := jsonResponse("\xef\xbb\xbfdata: "+toolsListResult+"\n\n", http.Header{"Content-Type": {"text/event-stream"}})
+	hideUnlistedTools(resp, toToolSet([]string{"read_file"}))
+	if got := readResponse(t, resp); !strings.Contains(got, `"read_file"`) || strings.Contains(got, "delete_repo") {
+		t.Fatalf("stream = %q", got)
+	}
+}
+
+func TestARepeatedEndpointKeepsOneRegistration(t *testing.T) {
+	var registry sseStreamRegistry
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	filter := newSSEToolsFilter(pr, toToolSet([]string{"read_file"}))
+	streamURL, _ := url.Parse("https://mcp.example:443/sse")
+	registry.watch(filter, "session-a", "svc-1", *streamURL)
+
+	stream := bufio.NewReader(filter)
+	for i := range 50 {
+		// The first event opens the stream with a byte order mark, which must not hide it.
+		bom := ""
+		if i == 0 {
+			bom = "\xef\xbb\xbf"
+		}
+		go func() {
+			_, _ = io.WriteString(pw, bom+"event: endpoint\ndata: /messages?sessionId="+strconv.Itoa(i%2)+"\n\n")
+		}()
+		readSSEEvent(t, stream)
+	}
+	registry.mu.Lock()
+	n := len(registry.streams)
+	registry.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("%d registrations, want 1", n)
+	}
+	post, _ := url.Parse("https://mcp.example:443/messages?sessionId=1")
+	refusal := &mcpToolRefusal{status: http.StatusForbidden, overStream: true}
+	if got := registry.deliver("session-a", "svc-1", post, refusal); got.status != http.StatusAccepted {
+		t.Fatalf("the latest endpoint got %d", got.status)
+	}
+}

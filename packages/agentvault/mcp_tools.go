@@ -493,6 +493,11 @@ func (f *sseToolsFilter) inject(event []byte) bool {
 
 func (f *sseToolsFilter) readUpstream() {
 	src := bufio.NewReader(f.upstream)
+	// A stream may open with a UTF-8 byte order mark, which SSE clients drop. Dropped here too, so the first
+	// field is read by its name rather than missed: a tools/list result or an endpoint event in it.
+	if bom, err := src.Peek(3); err == nil && string(bom) == "\xef\xbb\xbf" {
+		_, _ = src.Discard(3)
+	}
 	for {
 		line, err := readSSELine(src)
 		select {
@@ -708,10 +713,17 @@ type sseStreamKey struct {
 	session, service, target string
 }
 
-// Records each endpoint the stream announces, resolved against the URL the stream was opened at, until the
-// stream is closed.
+// Records the endpoint the stream announces, resolved against the URL the stream was opened at, until the
+// stream is closed. Only the latest one is kept, so a server repeating the event holds one entry, not one
+// per event.
 func (r *sseStreamRegistry) watch(filter *sseToolsFilter, session, service string, streamURL url.URL) {
-	var keys []sseStreamKey
+	var current *sseStreamKey
+	forget := func() {
+		if current != nil && r.streams[*current] == filter {
+			delete(r.streams, *current)
+		}
+		current = nil
+	}
 	filter.onEndpoint = func(endpoint string) {
 		target, err := streamURL.Parse(endpoint)
 		if err != nil {
@@ -720,20 +732,17 @@ func (r *sseStreamRegistry) watch(filter *sseToolsFilter, session, service strin
 		key := sseStreamKey{session: session, service: service, target: sseTarget(target)}
 		r.mu.Lock()
 		defer r.mu.Unlock()
+		forget()
 		if r.streams == nil {
 			r.streams = map[sseStreamKey]*sseToolsFilter{}
 		}
 		r.streams[key] = filter
-		keys = append(keys, key)
+		current = &key
 	}
 	filter.onClose = func() {
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		for _, key := range keys {
-			if r.streams[key] == filter {
-				delete(r.streams, key)
-			}
-		}
+		forget()
 	}
 }
 
