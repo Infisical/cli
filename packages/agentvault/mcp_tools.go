@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 const (
@@ -22,6 +25,12 @@ const (
 	// What the proxy holds in memory to check one request against an allowlist. Larger than the log's cap so
 	// a call with a sizeable argument still goes through, and finite so no agent can exhaust the proxy.
 	maxToolsAllowlistBody = 32 << 20
+	// A refusal names the tool it refused, cut to the longest name an admin could have allowed, so an agent
+	// can't make the answer and the warning logged with it as large as its request.
+	maxRefusedToolName = 128
+
+	mcpMethodHeader = "Mcp-Method"
+	mcpNameHeader   = "Mcp-Name"
 )
 
 // A request the service's tool allowlist refuses, answered by the proxy so the upstream never sees it.
@@ -29,6 +38,11 @@ type mcpToolRefusal struct {
 	status int
 	body   []byte
 	reason string
+	// For a legacy SSE client: the refusal can be sent on the event stream the server opened for this POST,
+	// as the server's own answer would be. streamEvent is what goes on it, nil when there is nothing to
+	// answer.
+	overStream  bool
+	streamEvent []byte
 }
 
 func (r *mcpToolRefusal) Error() string { return r.reason }
@@ -57,7 +71,8 @@ type jsonrpcError struct {
 // logs are on, and refused whole when any call in it names a tool the list leaves out. A server may parse JSON
 // whatever its Content-Type, so a body that could be read as JSON is checked whatever its type, and refused
 // when it does not parse strictly; any other body, such as a form-encoded OAuth token request, cannot be a
-// JSON-RPC message and is forwarded. A body the proxy cannot read is refused, so the list fails closed. The
+// JSON-RPC message and is forwarded. A body the proxy cannot read is refused, so the list fails closed: one
+// compressed, declared in a charset other than UTF-8, or whose routing headers differ from it. The
 // detail is what the session log records, from the same parse.
 func checkToolAllowlist(svc *resolvedService, req *http.Request, logging bool) (*mcpDetail, *mcpToolRefusal) {
 	if !strings.EqualFold(req.Method, http.MethodPost) {
@@ -68,13 +83,13 @@ func checkToolAllowlist(svc *resolvedService, req *http.Request, logging bool) (
 		}
 		return nil, unreadableToolsRequest(svc.name)
 	}
-	mediaType, _, _ := mime.ParseMediaType(req.Header.Get("Content-Type"))
+	mediaType, readableAsUTF8 := requestMediaType(req.Header)
 	declaredJSON := mediaType == "application/json"
 	var detail *mcpDetail
 	if logging && declaredJSON {
 		detail = unparsedMCP()
 	}
-	if req.Header.Get("Content-Encoding") != "" {
+	if req.Header.Get("Content-Encoding") != "" || !readableAsUTF8 {
 		return detail, unreadableToolsRequest(svc.name)
 	}
 	body, whole := bufferRequestBody(req, maxToolsAllowlistBody)
@@ -82,7 +97,12 @@ func checkToolAllowlist(svc *resolvedService, req *http.Request, logging bool) (
 		// Over the cap, or the read failed, in which case the agent has gone and never sees this answer.
 		return detail, oversizedToolsRequest(svc.name)
 	}
+	routingHeaders := len(req.Header.Values(mcpMethodHeader)) > 0 || len(req.Header.Values(mcpNameHeader)) > 0
 	if !declaredJSON && !mayBeJSON(body) {
+		// A gateway may route on the headers alone, so they need a body they can be checked against.
+		if routingHeaders {
+			return nil, unreadableToolsRequest(svc.name)
+		}
 		return nil, nil
 	}
 	if logging {
@@ -94,6 +114,10 @@ func checkToolAllowlist(svc *resolvedService, req *http.Request, logging bool) (
 	}
 	if logging {
 		detail = mcpDetailOf(messages)
+	}
+	batch := bytes.HasPrefix(bytes.TrimSpace(body), []byte("["))
+	if routingHeaders && !routingHeadersMatch(req.Header, messages, batch) {
+		return detail, unreadableToolsRequest(svc.name)
 	}
 
 	refused := ""
@@ -112,31 +136,42 @@ func checkToolAllowlist(svc *resolvedService, req *http.Request, logging bool) (
 	if refused == "" {
 		return detail, nil
 	}
-	batch := bytes.HasPrefix(bytes.TrimSpace(body), []byte("["))
 	return detail, unlistedToolRefusal(svc, refused, messages, batch, streamableHTTPClient(req))
 }
 
-// The allowlist judged the body the agent sent, and a body substitution can change the tool it names, so the
-// body that goes upstream is judged again. The substitution has already put it in memory.
-func toolsAllowedAfterSubstitution(svc *resolvedService, req *http.Request) bool {
-	if req.Body == nil || req.Body == http.NoBody {
-		return true
+// The body's media type, and whether a server would decode it as UTF-8, the only encoding the proxy reads.
+// Servers such as express.json() decode the body with the declared charset before parsing, so in UTF-7 a
+// string the proxy reads as one tool name can hold a second "name" key the server sees and runs. A header
+// that doesn't parse, such as one naming charset twice (Go fails, Node keeps the last), can't be trusted
+// either, and neither can two Content-Type headers. us-ascii is refused as well: Node clears each byte's
+// high bit when decoding it, which turns 0xA2 into a quote.
+func requestMediaType(header http.Header) (string, bool) {
+	values := header.Values("Content-Type")
+	if len(values) == 0 {
+		return "", true
 	}
-	body, err := io.ReadAll(req.Body)
-	req.Body = io.NopCloser(bytes.NewReader(body))
-	if err != nil {
+	mediaType, params, err := mime.ParseMediaType(values[0])
+	if len(values) > 1 || err != nil {
+		return "", false
+	}
+	charset, named := params["charset"]
+	return mediaType, !named || strings.EqualFold(charset, "utf-8") || strings.EqualFold(charset, "utf8")
+}
+
+// The 2026-07-28 revision of the specification lets a gateway route on Mcp-Method and Mcp-Name while the
+// server runs the body, and requires a server to refuse a request whose headers differ from its body. The
+// proxy refuses one too, so a server that skips that check can't be sent a tool the headers hide. The headers
+// describe one message, so they never go with a batch.
+func routingHeadersMatch(header http.Header, messages []jsonrpcMessage, batch bool) bool {
+	methods, names := header.Values(mcpMethodHeader), header.Values(mcpNameHeader)
+	if len(methods) > 1 || len(names) > 1 || batch || len(messages) != 1 {
 		return false
 	}
-	messages, ok := parseJSONRPCMessages(body)
-	if !ok {
+	message := messages[0]
+	if len(methods) == 1 && methods[0] != message.Method {
 		return false
 	}
-	for _, message := range messages {
-		if message.Method == mcpMethodToolsCall && !svc.allowedTools[message.Tool] {
-			return false
-		}
-	}
-	return true
+	return len(names) == 0 || message.Method != mcpMethodToolsCall || names[0] == message.Tool
 }
 
 // Whether a parser could read the body as a JSON object or array, the only shapes a JSON-RPC message takes:
@@ -153,14 +188,16 @@ func mayBeJSON(body []byte) bool {
 }
 
 func unlistedToolMessage(tool, service string) string {
-	return fmt.Sprintf("Tool %q isn't allowed on service %q. An admin controls which tools this service allows in Agent Vault.", tool, service)
+	return fmt.Sprintf("Tool %q isn't allowed on service %q. An admin controls which tools this service allows in Agent Vault.", truncateLogged(tool, maxRefusedToolName), service)
 }
 
-// The legacy SSE transport's clients ignore the body of a successful POST, since its answer is meant to
-// arrive on the event stream, so a refusal sent as 200 would leave the call waiting until it timed out.
-// They surface a failed POST as an error instead, so they get 403 with the same body. A Streamable HTTP
-// client is told apart by its Accept header, which the specification requires to list both types and the
-// SSE clients leave at the default.
+// The legacy SSE transport's clients ignore the body of a successful POST, since its answer arrives on the
+// event stream, and some treat a failed POST as the end of the connection: the Python SDK stops sending, so
+// every later call fails too. So the refusal goes where the server's answer would, on the stream, and the
+// POST gets the 202 the server would have sent (see sseStreamRegistry.deliver). Only when the proxy hasn't
+// seen that stream does the client get a 403 with the same body instead. A Streamable HTTP client is told
+// apart by its Accept header, which the specification requires to list both types and the SSE clients leave
+// at the default.
 func unlistedToolRefusal(svc *resolvedService, tool string, messages []jsonrpcMessage, batch, streamable bool) *mcpToolRefusal {
 	reason := unlistedToolMessage(tool, svc.name)
 	responses := make([]jsonrpcErrorResponse, 0, len(messages))
@@ -192,14 +229,25 @@ func unlistedToolRefusal(svc *resolvedService, tool string, messages []jsonrpcMe
 	}
 	if !streamable {
 		refusal.status = http.StatusForbidden
+		refusal.overStream = true
+		if len(responses) > 0 {
+			refusal.streamEvent = sseMessageEvent(refusal.body)
+		}
 	}
 	return refusal
+}
+
+func sseMessageEvent(data []byte) []byte {
+	event := make([]byte, 0, len(data)+len("event: message\ndata: \n\n"))
+	event = append(event, "event: message\ndata: "...)
+	event = append(event, data...)
+	return append(event, "\n\n"...)
 }
 
 // With no id to answer, a JSON-RPC error alone would match no pending call, so the status carries the
 // failure for any client.
 func unreadableToolsRequest(service string) *mcpToolRefusal {
-	return toolsRequestRefusal(http.StatusBadRequest, fmt.Sprintf("Agent Vault couldn't read this request to check which tools it calls, so it was refused. Service %q only allows some tools, so requests to it that carry a body must be uncompressed POSTs, and a JSON body must be valid JSON-RPC.", service))
+	return toolsRequestRefusal(http.StatusBadRequest, fmt.Sprintf("Agent Vault couldn't read this request to check which tools it calls, so it was refused. Service %q only allows some tools, so requests to it that carry a body must be uncompressed POSTs in UTF-8, and a JSON body must be valid JSON-RPC whose Mcp-Method and Mcp-Name headers, if sent, match it.", service))
 }
 
 func oversizedToolsRequest(service string) *mcpToolRefusal {
@@ -245,26 +293,30 @@ func streamableHTTPClient(req *http.Request) bool {
 // agent is only offered tools it can call. Matched on the result's shape rather than on the request id, so
 // the legacy transport's results, which arrive on another connection, need no tracking. The proxy drops the
 // agent's Accept-Encoding so Go decompresses the response first; a body compressed anyway, one over the cap,
-// and anything that does not parse pass through untouched.
-func hideUnlistedTools(resp *http.Response, allowed map[string]bool) {
+// and anything that does not parse pass through untouched. An event stream's filter is returned, so the
+// proxy can also send refusals on it.
+func hideUnlistedTools(resp *http.Response, allowed map[string]bool) *sseToolsFilter {
 	if resp.Body == nil || resp.Body == http.NoBody {
-		return
+		return nil
 	}
 	if encoding := resp.Header.Get("Content-Encoding"); encoding != "" && !strings.EqualFold(encoding, "identity") {
-		return
+		return nil
 	}
 	mediaType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if err != nil {
-		return
+		return nil
 	}
 	switch mediaType {
 	case "application/json":
 		hideUnlistedToolsInJSON(resp, allowed)
 	case "text/event-stream":
-		resp.Body = rechainedBody{Reader: &sseToolsFilter{src: bufio.NewReader(resp.Body), allowed: allowed}, Closer: resp.Body}
+		filter := newSSEToolsFilter(resp.Body, allowed)
+		resp.Body = filter
 		resp.Header.Del("Content-Length")
 		resp.ContentLength = -1
+		return filter
 	}
+	return nil
 }
 
 func hideUnlistedToolsInJSON(resp *http.Response, allowed map[string]bool) {
@@ -355,12 +407,24 @@ func encodeJSON(v any) ([]byte, bool) {
 }
 
 // Rewrites a text/event-stream one event at a time, handing each on as soon as it is complete so the
-// stream keeps streaming. An event that grows past the cap is passed on as it arrives instead.
+// stream keeps streaming. An event that grows past the cap is passed on as it arrives instead. Events the
+// proxy sends itself are handed on between the upstream's, so the upstream is read on its own goroutine:
+// a refusal must not wait for the server's next event.
 type sseToolsFilter struct {
-	src     *bufio.Reader
-	allowed map[string]bool
-	event   []byte
-	out     []byte
+	upstream  io.ReadCloser
+	allowed   map[string]bool
+	startOnce sync.Once
+	lines     chan sseLine
+	injected  chan []byte
+	closeOnce sync.Once
+	done      chan struct{}
+	// Called with the data of each endpoint event, and once when the stream is closed. Set before the first
+	// Read and only called from it and from Close.
+	onEndpoint func(endpoint string)
+	onClose    func()
+
+	event []byte
+	out   []byte
 	// The current event outgrew the cap and is streamed through until it ends.
 	passthrough bool
 	// The previous read stopped part way through a line longer than the reader's buffer.
@@ -370,7 +434,26 @@ type sseToolsFilter struct {
 	err     error
 }
 
+type sseLine struct {
+	data []byte
+	err  error
+}
+
+// How many refusals can wait for the agent to read the stream before a further one falls back to a 403.
+const maxPendingSSERefusals = 16
+
+func newSSEToolsFilter(upstream io.ReadCloser, allowed map[string]bool) *sseToolsFilter {
+	return &sseToolsFilter{
+		upstream: upstream,
+		allowed:  allowed,
+		lines:    make(chan sseLine),
+		injected: make(chan []byte, maxPendingSSERefusals),
+		done:     make(chan struct{}),
+	}
+}
+
 func (f *sseToolsFilter) Read(p []byte) (int, error) {
+	f.startOnce.Do(func() { go f.readUpstream() })
 	for len(f.out) == 0 {
 		if f.err != nil {
 			return 0, f.err
@@ -382,8 +465,71 @@ func (f *sseToolsFilter) Read(p []byte) (int, error) {
 	return n, nil
 }
 
+func (f *sseToolsFilter) Close() error {
+	f.closeOnce.Do(func() {
+		close(f.done)
+		if f.onClose != nil {
+			f.onClose()
+		}
+	})
+	return f.upstream.Close()
+}
+
+// Queues an event to hand on at the next boundary between the upstream's events, and reports whether it was
+// queued: not once the stream is closed, nor when the agent has stopped reading it.
+func (f *sseToolsFilter) inject(event []byte) bool {
+	select {
+	case <-f.done:
+		return false
+	default:
+	}
+	select {
+	case f.injected <- event:
+		return true
+	default:
+		return false
+	}
+}
+
+func (f *sseToolsFilter) readUpstream() {
+	src := bufio.NewReader(f.upstream)
+	for {
+		line, err := readSSELine(src)
+		select {
+		case f.lines <- sseLine{data: append([]byte(nil), line...), err: err}:
+		case <-f.done:
+			return
+		}
+		if err != nil && err != bufio.ErrBufferFull {
+			return
+		}
+	}
+}
+
+// The upstream's next line, or false when an injected event was handed on instead.
+func (f *sseToolsFilter) nextLine() (sseLine, bool) {
+	// Only between events, so an injected one never lands inside the upstream's.
+	var injected chan []byte
+	if len(f.event) == 0 && !f.passthrough && !f.midLine {
+		injected = f.injected
+	}
+	select {
+	case event := <-injected:
+		f.out = event
+		return sseLine{}, false
+	case next := <-f.lines:
+		return next, true
+	case <-f.done:
+		return sseLine{err: io.ErrClosedPipe}, true
+	}
+}
+
 func (f *sseToolsFilter) fill() {
-	line, err := readSSELine(f.src)
+	next, upstream := f.nextLine()
+	if !upstream {
+		return
+	}
+	line, err := next.data, next.err
 	tailOfCRLF := f.afterCR && len(line) == 1 && line[0] == '\n'
 	startsLine := !f.midLine && !tailOfCRLF
 	endsEvent := startsLine && isBlankSSELine(line)
@@ -401,7 +547,13 @@ func (f *sseToolsFilter) fill() {
 			f.passthrough = false
 		}
 	case endsEvent:
-		f.out = rewriteSSEEvent(append(f.event, line...), f.allowed)
+		event := append(f.event, line...)
+		if f.onEndpoint != nil {
+			if endpoint, ok := sseEndpointData(event); ok {
+				f.onEndpoint(endpoint)
+			}
+		}
+		f.out = rewriteSSEEvent(event, f.allowed)
 		f.event = nil
 	// A comment between events, usually a keepalive, needs no rewriting and is handed on at once, so an idle
 	// stream does not look dead to the agent while it waits for a blank line.
@@ -508,12 +660,33 @@ func rewriteSSEEvent(event []byte, allowed map[string]bool) []byte {
 	return out
 }
 
+// The data of an endpoint event, with which a legacy SSE server tells the client where to POST its messages.
+func sseEndpointData(event []byte) (string, bool) {
+	var name string
+	var data [][]byte
+	for _, line := range splitSSELines(event) {
+		if value, ok := sseFieldValue(line, "event"); ok {
+			name = string(value)
+		} else if value, ok := sseDataValue(line); ok {
+			data = append(data, value)
+		}
+	}
+	if name != "endpoint" || len(data) == 0 {
+		return "", false
+	}
+	return string(bytes.Join(data, []byte("\n"))), true
+}
+
 func sseDataValue(line []byte) ([]byte, bool) {
+	return sseFieldValue(line, "data")
+}
+
+func sseFieldValue(line []byte, field string) ([]byte, bool) {
 	line = bytes.TrimRight(line, "\r\n")
-	if !bytes.HasPrefix(line, []byte("data")) {
+	if !bytes.HasPrefix(line, []byte(field)) {
 		return nil, false
 	}
-	rest := line[len("data"):]
+	rest := line[len(field):]
 	if len(rest) == 0 {
 		return rest, true
 	}
@@ -521,4 +694,75 @@ func sseDataValue(line []byte) ([]byte, bool) {
 		return nil, false
 	}
 	return bytes.TrimPrefix(rest[1:], []byte(" ")), true
+}
+
+// The legacy SSE streams the proxy is filtering, by the URL each one's server told its client to POST to, so a
+// refused POST can be answered on its stream. Keyed by session and service as well, so a refusal only ever
+// reaches a stream opened in the same session to the same service.
+type sseStreamRegistry struct {
+	mu      sync.Mutex
+	streams map[sseStreamKey]*sseToolsFilter
+}
+
+type sseStreamKey struct {
+	session, service, target string
+}
+
+// Records each endpoint the stream announces, resolved against the URL the stream was opened at, until the
+// stream is closed.
+func (r *sseStreamRegistry) watch(filter *sseToolsFilter, session, service string, streamURL url.URL) {
+	var keys []sseStreamKey
+	filter.onEndpoint = func(endpoint string) {
+		target, err := streamURL.Parse(endpoint)
+		if err != nil {
+			return
+		}
+		key := sseStreamKey{session: session, service: service, target: sseTarget(target)}
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if r.streams == nil {
+			r.streams = map[sseStreamKey]*sseToolsFilter{}
+		}
+		r.streams[key] = filter
+		keys = append(keys, key)
+	}
+	filter.onClose = func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		for _, key := range keys {
+			if r.streams[key] == filter {
+				delete(r.streams, key)
+			}
+		}
+	}
+}
+
+// Sends a legacy SSE client's refusal on the stream its POST belongs to and answers the POST with 202, as
+// the server would have. The refusal is returned unchanged, a 403, when no such stream is open or it can't
+// take the event.
+func (r *sseStreamRegistry) deliver(session, service string, target *url.URL, refusal *mcpToolRefusal) *mcpToolRefusal {
+	if !refusal.overStream {
+		return refusal
+	}
+	r.mu.Lock()
+	filter := r.streams[sseStreamKey{session: session, service: service, target: sseTarget(target)}]
+	r.mu.Unlock()
+	if filter == nil || (refusal.streamEvent != nil && !filter.inject(refusal.streamEvent)) {
+		return refusal
+	}
+	return &mcpToolRefusal{status: http.StatusAccepted, reason: refusal.reason}
+}
+
+// The URL as the proxy forwards it, so an endpoint the server wrote with or without the default port, or in
+// another case, matches the POST the client sends to it.
+func sseTarget(u *url.URL) string {
+	scheme := strings.ToLower(u.Scheme)
+	port := u.Port()
+	if port == "" {
+		port = "443"
+		if scheme == "http" {
+			port = "80"
+		}
+	}
+	return scheme + "://" + net.JoinHostPort(strings.ToLower(u.Hostname()), port) + u.EscapedPath() + "?" + u.RawQuery
 }

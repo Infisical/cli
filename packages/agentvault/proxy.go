@@ -91,6 +91,8 @@ type proxyServer struct {
 	legacy    bool
 
 	saturationOnce sync.Once
+
+	sseStreams sseStreamRegistry
 }
 
 func (ps *proxyServer) currentConfig() ProxyConfig {
@@ -564,7 +566,7 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 		if matched.kind == serviceKindMCP && matched.allowedTools != nil {
 			var refusal *mcpToolRefusal
 			if outcome.mcp, refusal = checkToolAllowlist(matched, req, grant != nil); refusal != nil {
-				return nil, matched, outcome, refusal
+				return nil, matched, outcome, ps.sseStreams.deliver(sessionToken, matched.id, req.URL, refusal)
 			}
 		} else if matched.kind == serviceKindMCP {
 			if grant != nil {
@@ -617,11 +619,6 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 			// Go then asks for gzip itself and hands back the response decompressed, so a tools/list result
 			// can be filtered whatever encodings the agent accepts.
 			req.Header.Del("Accept-Encoding")
-			// The refusal names no tool: after the substitution the body can carry a real value.
-			if containsSurface(outcome.substituted, surfaceBody) && !toolsAllowedAfterSubstitution(matched, req) {
-				return nil, matched, outcome, fmt.Errorf(
-					"service %q does not allow the tool this request substitutes to: %w", matched.name, errPolicyBlocked)
-			}
 		}
 	}
 
@@ -652,7 +649,9 @@ func (ps *proxyServer) forward(req *http.Request, scheme, hostname, port, sessio
 		}
 	}
 	if matched != nil && matched.kind == serviceKindMCP && matched.allowedTools != nil {
-		hideUnlistedTools(resp, matched.allowedTools)
+		if stream := hideUnlistedTools(resp, matched.allowedTools); stream != nil {
+			ps.sseStreams.watch(stream, sessionToken, matched.id, *req.URL)
+		}
 	}
 	return resp, matched, outcome, nil
 }

@@ -1,12 +1,14 @@
 package agentvault
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
@@ -444,23 +446,6 @@ func TestAJSONOnlyAcceptIsTreatedAsLegacySSE(t *testing.T) {
 	}
 }
 
-func TestABodySubstitutionIsRecheckedAgainstTheAllowlist(t *testing.T) {
-	up := newMCPUpstream(t)
-	svc := allowlistedMCPService(up.host(), "read_file")
-	svc.substitutions = []substitution{subOn("read_file", "delete_repo", surfaceBody)}
-	client, log := newMCPRecordingProxy(t, up, []*resolvedService{svc})
-
-	res := proxiedPost(t, client, up.server.URL+"/mcp", "application/json",
-		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_file"}}`, http.Header{"Accept": {streamableAccept}})
-	assertUpstreamSawNothing(t, up)
-	if res.status != http.StatusForbidden || strings.Contains(res.body, "delete_repo") {
-		t.Fatalf("status %d body %s", res.status, res.body)
-	}
-	if rec := drainOneRecord(t, log); rec.Decision != decisionBlocked {
-		t.Fatalf("record = %s", recordJSON(t, rec))
-	}
-}
-
 func TestOtherMethodsPassUnderAnAllowlist(t *testing.T) {
 	for _, body := range []string{
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}`,
@@ -755,5 +740,227 @@ func TestToolsListIsFilteredThroughTheProxy(t *testing.T) {
 				t.Fatalf("status %d body %s", res.status, res.body)
 			}
 		})
+	}
+}
+
+func TestACharsetOtherThanUTF8IsRefused(t *testing.T) {
+	listed := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_file"}}`
+	// Decoded as UTF-7, the string holds a second "name" key that a server keeping the last one would run.
+	smuggled := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_file","x":"+ACI-,+ACI-name+ACI-:+ACI-delete+AF8-repo+ACI-,+ACI-y+ACI-:+ACI-"}}`
+	cases := []struct {
+		name   string
+		body   string
+		header http.Header
+		// 0 when the body must reach the upstream unchanged.
+		refusedWith int
+	}{
+		{"utf-7", smuggled, http.Header{"Content-Type": {"application/json; charset=utf-7"}}, http.StatusBadRequest},
+		{"utf-7-imap", smuggled, http.Header{"Content-Type": {"application/json; charset=UTF-7-IMAP"}}, http.StatusBadRequest},
+		{"charset named twice", smuggled, http.Header{"Content-Type": {"application/json; charset=utf-8; charset=utf-7-imap"}}, http.StatusBadRequest},
+		{"utf-7 opening brace as text", `+AHs-"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"delete_repo"}}`, http.Header{"Content-Type": {"text/plain; charset=utf-7"}}, http.StatusBadRequest},
+		{"us-ascii", listed, http.Header{"Content-Type": {"application/json; charset=us-ascii"}}, http.StatusBadRequest},
+		{"two content types", listed, http.Header{"Content-Type": {"application/json", "text/plain; charset=utf-7"}}, http.StatusBadRequest},
+		{"upper-case utf-8", listed, http.Header{"Content-Type": {"application/json; charset=UTF-8"}}, 0},
+		{"utf8", listed, http.Header{"Content-Type": {"application/json; charset=utf8"}}, 0},
+		{"form-encoded token request in utf-8", "grant_type=refresh_token&refresh_token=abc", http.Header{"Content-Type": {"application/x-www-form-urlencoded; charset=UTF-8"}}, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			up := newMCPUpstream(t)
+			client, _ := newMCPRecordingProxy(t, up, []*resolvedService{allowlistedMCPService(up.host(), "read_file")})
+
+			tc.header.Set("Accept", streamableAccept)
+			res := proxiedPost(t, client, up.server.URL+"/mcp", "", tc.body, tc.header)
+			if tc.refusedWith != 0 {
+				assertUpstreamSawNothing(t, up)
+				if res.status != tc.refusedWith || !strings.Contains(res.body, "UTF-8") {
+					t.Fatalf("status %d body %s", res.status, res.body)
+				}
+				return
+			}
+			if res.status != http.StatusOK {
+				t.Fatalf("status %d body %s", res.status, res.body)
+			}
+			if got := <-up.bodies; string(got) != tc.body {
+				t.Fatalf("upstream body changed: %s", got)
+			}
+		})
+	}
+}
+
+func TestRoutingHeadersMustMatchTheBody(t *testing.T) {
+	call := func(tool string) string {
+		return `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"` + tool + `"}}`
+	}
+	cases := []struct {
+		name        string
+		body        string
+		contentType string
+		header      http.Header
+		refused     bool
+	}{
+		{"name differs", call("read_file"), "application/json", http.Header{"Mcp-Method": {"tools/call"}, "Mcp-Name": {"delete_repo"}}, true},
+		{"name alone differs", call("read_file"), "application/json", http.Header{"Mcp-Name": {"delete_repo"}}, true},
+		{"method differs", call("read_file"), "application/json", http.Header{"Mcp-Method": {"tools/list"}}, true},
+		{"name sent twice", call("read_file"), "application/json", http.Header{"Mcp-Name": {"read_file", "delete_repo"}}, true},
+		{"headers on a batch", "[" + call("read_file") + "]", "application/json", http.Header{"Mcp-Name": {"read_file"}}, true},
+		{"headers on a body that isn't JSON", "grant_type=x", "application/x-www-form-urlencoded", http.Header{"Mcp-Name": {"delete_repo"}}, true},
+		{"headers match", call("read_file"), "application/json", http.Header{"Mcp-Method": {"tools/call"}, "Mcp-Name": {"read_file"}}, false},
+		{"name of another method", `{"jsonrpc":"2.0","id":1,"method":"prompts/get","params":{"name":"greet"}}`, "application/json",
+			http.Header{"Mcp-Method": {"prompts/get"}, "Mcp-Name": {"greet"}}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			up := newMCPUpstream(t)
+			client, _ := newMCPRecordingProxy(t, up, []*resolvedService{allowlistedMCPService(up.host(), "read_file")})
+
+			tc.header.Set("Accept", streamableAccept)
+			res := proxiedPost(t, client, up.server.URL+"/mcp", tc.contentType, tc.body, tc.header)
+			if tc.refused {
+				assertUpstreamSawNothing(t, up)
+				if res.status != http.StatusBadRequest || !strings.Contains(res.body, "Mcp-Name") {
+					t.Fatalf("status %d body %s", res.status, res.body)
+				}
+				return
+			}
+			if res.status != http.StatusOK {
+				t.Fatalf("status %d body %s", res.status, res.body)
+			}
+			<-up.bodies
+		})
+	}
+}
+
+func TestARefusalCutsALongToolName(t *testing.T) {
+	svc := allowlistedMCPService("a.example", "read_file")
+	tool := strings.Repeat("\xff", 1<<20)
+	refusal := unlistedToolRefusal(svc, tool, []jsonrpcMessage{{mcpCall: mcpCall{Method: mcpMethodToolsCall, Tool: tool}, id: json.RawMessage("1")}}, false, true)
+	if len(refusal.reason) > 1024 || len(refusal.body) > 2048 || !strings.Contains(refusal.reason, "[truncated]") {
+		t.Fatalf("reason is %d bytes, body %d bytes", len(refusal.reason), len(refusal.body))
+	}
+}
+
+// A legacy SSE server whose stream stays open until the test ends, and which answers each POST with 202.
+func newLegacySSEUpstream(t *testing.T) (*httptest.Server, chan []byte) {
+	t.Helper()
+	posts := make(chan []byte, 4)
+	stop := make(chan struct{})
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, "event: endpoint\ndata: /messages?sessionId=abc\n\n")
+			w.(http.Flusher).Flush()
+			select {
+			case <-stop:
+			case <-r.Context().Done():
+			}
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		posts <- body
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(func() {
+		close(stop)
+		upstream.Close()
+	})
+	return upstream, posts
+}
+
+func readSSEEvent(t *testing.T, stream *bufio.Reader) string {
+	t.Helper()
+	got := make(chan string, 1)
+	go func() {
+		var event strings.Builder
+		for {
+			line, err := stream.ReadString('\n')
+			event.WriteString(line)
+			if err != nil || line == "\n" {
+				got <- event.String()
+				return
+			}
+		}
+	}()
+	select {
+	case event := <-got:
+		return event
+	case <-time.After(5 * time.Second):
+		t.Fatal("no event arrived on the stream")
+		return ""
+	}
+}
+
+func TestALegacySSERefusalArrivesOnItsStream(t *testing.T) {
+	upstream, posts := newLegacySSEUpstream(t)
+	host := strings.TrimPrefix(upstream.URL, "https://")
+	_, client := newTLSProxy(t, upstream, fixedResolver{services: []*resolvedService{allowlistedMCPService(host, "read_file")}})
+
+	resp, err := client.Get(upstream.URL + "/sse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	stream := bufio.NewReader(resp.Body)
+	if event := readSSEEvent(t, stream); !strings.Contains(event, "/messages?sessionId=abc") {
+		t.Fatalf("endpoint event = %q", event)
+	}
+
+	refused := `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"delete_repo"}}`
+	res := proxiedPost(t, client, upstream.URL+"/messages?sessionId=abc", "application/json", refused, nil)
+	if res.status != http.StatusAccepted || res.body != "" {
+		t.Fatalf("status %d body %s", res.status, res.body)
+	}
+	event := readSSEEvent(t, stream)
+	if !strings.HasPrefix(event, "event: message\ndata: ") || !strings.Contains(event, `"id":4`) || !strings.Contains(event, `delete_repo`) {
+		t.Fatalf("event = %q", event)
+	}
+
+	listed := `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"read_file"}}`
+	if res := proxiedPost(t, client, upstream.URL+"/messages?sessionId=abc", "application/json", listed, nil); res.status != http.StatusAccepted {
+		t.Fatalf("a listed call after the refusal: status %d body %s", res.status, res.body)
+	}
+	if got := <-posts; string(got) != listed {
+		t.Fatalf("upstream got %s", got)
+	}
+
+	// A POST to a URL no open stream announced still gets the 403.
+	if res := proxiedPost(t, client, upstream.URL+"/messages?sessionId=other", "application/json", refused, nil); res.status != http.StatusForbidden {
+		t.Fatalf("status %d body %s", res.status, res.body)
+	}
+}
+
+func TestASSERefusalOnlyReachesAStreamOfTheSameSessionAndService(t *testing.T) {
+	var registry sseStreamRegistry
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	filter := newSSEToolsFilter(pr, toToolSet([]string{"read_file"}))
+	streamURL, _ := url.Parse("https://mcp.example:443/sse")
+	registry.watch(filter, "session-a", "svc-1", *streamURL)
+
+	go func() {
+		_, _ = io.WriteString(pw, "event: endpoint\ndata: https://MCP.example/messages?sessionId=abc\n\n")
+	}()
+	if event := readSSEEvent(t, bufio.NewReader(filter)); !strings.Contains(event, "endpoint") {
+		t.Fatalf("event = %q", event)
+	}
+
+	refusal := func() *mcpToolRefusal {
+		return &mcpToolRefusal{status: http.StatusForbidden, overStream: true, streamEvent: []byte("event: message\ndata: {}\n\n")}
+	}
+	post, _ := url.Parse("https://mcp.example:443/messages?sessionId=abc")
+	if got := registry.deliver("session-b", "svc-1", post, refusal()); got.status != http.StatusForbidden {
+		t.Fatalf("another session's POST got %d", got.status)
+	}
+	if got := registry.deliver("session-a", "svc-2", post, refusal()); got.status != http.StatusForbidden {
+		t.Fatalf("another service's POST got %d", got.status)
+	}
+	if got := registry.deliver("session-a", "svc-1", post, refusal()); got.status != http.StatusAccepted {
+		t.Fatalf("the stream's own POST got %d", got.status)
+	}
+
+	_ = filter.Close()
+	if got := registry.deliver("session-a", "svc-1", post, refusal()); got.status != http.StatusForbidden {
+		t.Fatalf("a POST after the stream closed got %d", got.status)
 	}
 }

@@ -186,11 +186,10 @@ func parseJSONRPCMessages(body []byte) ([]jsonrpcMessage, bool) {
 			if err != nil {
 				return nil, false
 			}
+			// Every element of a batch is a message object. Anything else, a nested array included, is one
+			// no server should run, and one the check would otherwise not look inside.
 			if elem != json.Delim('{') {
-				if err := skipJSONValue(dec, elem); err != nil {
-					return nil, false
-				}
-				continue
+				return nil, false
 			}
 			message, ok, err := readJSONRPCMessage(dec)
 			if err != nil {
