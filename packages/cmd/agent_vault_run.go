@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"cmp"
+	"context"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
@@ -13,11 +14,14 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/agentvault"
@@ -26,6 +30,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/telemetry"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/fatih/color"
+	"github.com/go-resty/resty/v2"
 	"github.com/google/uuid"
 	"github.com/mattn/go-isatty"
 	"github.com/posthog/posthog-go"
@@ -57,6 +62,13 @@ var agentVaultProxyHTTPClient = &http.Client{
 // The endpoint is unauthenticated plain HTTP, so whatever answers at that address is bounded before
 // it is read. A certificate and three short fields are a couple of kilobytes.
 const agentVaultCaResponseLimit = 1 << 20
+
+// Bound the revoke, which otherwise waits on retries against an unreachable Infisical. An operator who
+// interrupted the run is waiting at the terminal, so that revoke gives up sooner.
+const (
+	agentVaultInterruptRevokeTimeout = 10 * time.Second
+	agentVaultExitRevokeTimeout      = 30 * time.Second
+)
 
 type agentVaultProxyCa struct {
 	ProxyID     string `json:"proxyId"`
@@ -110,6 +122,14 @@ neither flag is passed, the run stops and asks which you meant.
 
 The proxy's certificate authority is fetched from the proxy on every run and trusted for the agent. Pass
 --ca-fingerprint to abort if the served certificate does not match the proxy's fingerprint from Infisical.
+
+The skills in the session's access bundle are installed when the agent starts, into
+~/.agents/skills, where Codex, OpenCode and OpenClaw find them. If ~/.claude (or $CLAUDE_CONFIG_DIR) or
+~/.hermes (or $HERMES_HOME) exists, each skill is also linked into its skills folder for Claude Code or
+Hermes, and for Claude Code whenever the agent is claude. Pass --skills-dir to install them into another
+folder instead, with no links, or --no-skills to start without them. Installed skills stay after the agent
+exits, and folders of your own with a skill's name are left alone. Restart the agent to pick up changes to
+them. If they cannot be installed, the agent starts without them.
 
 Unlike 'secrets agent-proxy run', this command does not sandbox the agent: it sets environment variables
 and starts the process.`,
@@ -277,6 +297,11 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		}
 	}
 
+	skillsDir, noSkills, err := resolveAgentVaultRunSkills(cmd)
+	if err != nil {
+		util.HandleError(err)
+	}
+
 	ttl, _ := cmd.Flags().GetString("ttl")
 	label, err := resolveAgentVaultSessionLabel(cmd, sessionToken, tokenSource)
 	if err != nil {
@@ -418,35 +443,173 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 
 	printAgentVaultRunSummary(proxyAddr, caResp, servedFingerprint, minted, tokenSource, bundleSource)
 
+	if exitCode, interrupted := runAgentVaultRunSkillsStep(noSkills,
+		func(ctx context.Context) {
+			if minted == nil {
+				useAgentVaultSessionTokenDomain()
+			}
+			skillsHTTPClient, clientErr := newAgentVaultSkillsHTTPClient()
+			if clientErr != nil {
+				util.PrintWarning(fmt.Sprintf("Starting without skills: %v.", clientErr))
+				return
+			}
+			skillsClient := &agentVaultSkillsClient{httpClient: skillsHTTPClient, sessionToken: sessionToken, retryUnauthorized: minted != nil}
+			installAgentVaultRunSkills(ctx, skillsClient, agentvault.InstallOptions{Dir: skillsDir, ForceClaude: agentVaultRunStartsClaude(args)})
+		},
+		func(ctx context.Context) {
+			revokeAgentVaultRunSession(ctx, cmd, minted, keepSession, "The run was interrupted", true)
+		}); interrupted {
+		os.Exit(exitCode)
+	}
+
 	exitCode := runAgentVaultChild(args, env)
 
-	if minted != nil && !keepSession {
-		// Never resolve the identity the usual way here: a long run would exit on the expiry check, or open the
-		// login wizard on a terminal nobody is watching.
-		httpClient, clientErr := util.GetRestyClientWithCustomHeaders()
-		token, tokenErr := revocationToken(cmd)
-		switch {
-		case clientErr != nil || tokenErr != nil:
-			util.PrintWarning(fmt.Sprintf(
-				"The agent exited but its session could not be revoked (%v). Revoke it in Infisical.",
-				cmp.Or(clientErr, tokenErr)))
-		default:
-			httpClient.SetAuthToken(token)
-			if revokeErr := api.CallRevokeAgentVaultSession(httpClient, minted.ID); revokeErr != nil {
-				util.PrintWarning(fmt.Sprintf("The agent exited but its session could not be revoked (%v). Revoke it in Infisical.", revokeErr))
-			} else {
-				fmt.Fprintln(os.Stderr, color.HiBlackString("session revoked"))
-			}
-		}
-	}
+	revokeAgentVaultRunSession(context.Background(), cmd, minted, keepSession, "The agent exited", false)
 	os.Exit(exitCode)
 }
 
-func revocationToken(cmd *cobra.Command) (string, error) {
+// resolveAgentVaultRunSkills returns the folder to install the session's skills into, empty for
+// ~/.agents/skills, and whether --no-skills skips them.
+func resolveAgentVaultRunSkills(cmd *cobra.Command) (dir string, skip bool, err error) {
+	dir, _ = cmd.Flags().GetString("skills-dir")
+	if cmd.Flags().Changed("skills-dir") && strings.TrimSpace(dir) == "" {
+		return "", false, fmt.Errorf("--skills-dir was given but is empty; pass a folder, or drop the flag to install into ~/.agents/skills")
+	}
+	skip, _ = cmd.Flags().GetBool("no-skills")
+	if skip && cmd.Flags().Changed("skills-dir") {
+		return "", false, fmt.Errorf("--skills-dir was given with --no-skills, which installs no skills; drop one of the two")
+	}
+	if dir, err = expandAgentVaultHomeDir(dir); err != nil {
+		return "", false, err
+	}
+	return dir, skip, nil
+}
+
+// A quoted or flag=value path reaches us with its "~" unexpanded by the shell.
+func expandAgentVaultHomeDir(dir string) (string, error) {
+	if dir != "~" && !strings.HasPrefix(dir, "~/") && !strings.HasPrefix(dir, "~"+string(filepath.Separator)) {
+		return dir, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("unable to expand ~ in --skills-dir: %w", err)
+	}
+	return filepath.Join(home, dir[1:]), nil
+}
+
+func agentVaultRunStartsClaude(args []string) bool {
+	switch telemetryAgentName(args) {
+	case "claude", "claude.exe", "claude.cmd", "claude.bat":
+		return true
+	}
+	return false
+}
+
+// runAgentVaultRunSkillsStep runs install unless skip is set. The signals are the ones the agent step forwards
+// to the agent; when one interrupts the step, onInterrupt runs with a context that a second signal cancels, and
+// the step returns the exit code a shell reports for the last signal received.
+func runAgentVaultRunSkillsStep(skip bool, install func(context.Context), onInterrupt func(context.Context)) (exitCode int, interrupted bool) {
+	if skip {
+		return 0, false
+	}
+	interruptCtx, abortCtx, stopSignals := notifyAgentVaultTerminationSignals()
+	interrupted = prepareAgentVaultRunSkills(interruptCtx, install, func() { onInterrupt(abortCtx) })
+	stopSignals()
+	if !interrupted {
+		return 0, false
+	}
+	for _, ctx := range []context.Context{abortCtx, interruptCtx} {
+		var received agentVaultReceivedSignal
+		if errors.As(context.Cause(ctx), &received) {
+			return agentVaultSignalExitCode(received.signal), true
+		}
+	}
+	return agentVaultSignalExitCode(os.Interrupt), true
+}
+
+type agentVaultReceivedSignal struct{ signal os.Signal }
+
+func (r agentVaultReceivedSignal) Error() string { return "received " + r.signal.String() }
+
+// notifyAgentVaultTerminationSignals cancels interruptCtx on the first termination signal and abortCtx on the
+// second. Signals stay caught until stop so that a second Ctrl-C during the revoke cuts it short with its warning
+// instead of killing the process silently; a third gets the default handling.
+func notifyAgentVaultTerminationSignals() (interruptCtx, abortCtx context.Context, stop func()) {
+	interruptCtx, cancelInterrupt := context.WithCancelCause(context.Background())
+	abortCtx, cancelAbort := context.WithCancelCause(context.Background())
+	sigCh := make(chan os.Signal, 2)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
+	done := make(chan struct{})
+	go func() {
+		for _, cancel := range []context.CancelCauseFunc{cancelInterrupt, cancelAbort} {
+			select {
+			case sig := <-sigCh:
+				cancel(agentVaultReceivedSignal{signal: sig})
+			case <-done:
+				return
+			}
+		}
+		signal.Stop(sigCh)
+	}()
+	var once sync.Once
+	return interruptCtx, abortCtx, func() {
+		once.Do(func() {
+			signal.Stop(sigCh)
+			close(done)
+		})
+	}
+}
+
+func agentVaultSignalExitCode(sig os.Signal) int {
+	if s, ok := sig.(syscall.Signal); ok {
+		return 128 + int(s)
+	}
+	return 128 + int(syscall.SIGINT)
+}
+
+func revokeAgentVaultRunSession(parent context.Context, cmd *cobra.Command, minted *api.AgentVaultSession, keepSession bool, event string, interrupted bool) {
+	if minted == nil || keepSession {
+		return
+	}
+	timeout, loginPolicy := agentVaultExitRevokeTimeout, util.DefaultRetryPolicy()
+	if interrupted {
+		timeout, loginPolicy = agentVaultInterruptRevokeTimeout, util.BestEffortRetryPolicy()
+	}
+	// Never resolve the identity the usual way here: a long run would exit on the expiry check, or open the
+	// login wizard on a terminal nobody is watching.
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	httpClient, clientErr := util.GetRestyClientWithCustomHeaders()
+	token, tokenErr := revocationToken(ctx, cmd, loginPolicy)
+	switch {
+	case clientErr != nil || tokenErr != nil:
+		util.PrintWarning(fmt.Sprintf(
+			"%s but its session could not be revoked (%v). Revoke it in Infisical.",
+			event, cmp.Or(clientErr, tokenErr)))
+	default:
+		httpClient.SetAuthToken(token)
+		if revokeErr := api.CallRevokeAgentVaultSession(ctx, httpClient, minted.ID); revokeErr != nil {
+			util.PrintWarning(fmt.Sprintf("%s but its session could not be revoked (%v). Revoke it in Infisical.", event, revokeErr))
+		} else {
+			fmt.Fprintln(os.Stderr, color.HiBlackString("session revoked"))
+		}
+	}
+}
+
+func revocationToken(ctx context.Context, cmd *cobra.Command, loginPolicy util.RetryPolicy) (string, error) {
 	clientID, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-id", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME}, "")
 	clientSecret, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-secret", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME}, "")
 	if clientID != "" && clientSecret != "" {
-		loginResp, err := util.UniversalAuthLogin(clientID, clientSecret)
+		httpClient, err := util.GetRestyClientWithPolicy(loginPolicy)
+		if err != nil {
+			return "", err
+		}
+		// CallUniversalAuthLogin takes no context, and a login that never answers would hold an exiting run open.
+		httpClient.OnBeforeRequest(func(_ *resty.Client, req *resty.Request) error {
+			req.SetContext(ctx)
+			return nil
+		})
+		loginResp, err := api.CallUniversalAuthLogin(httpClient, api.UniversalAuthLoginRequest{ClientId: clientID, ClientSecret: clientSecret})
 		if err != nil {
 			return "", err
 		}
@@ -684,6 +847,8 @@ func init() {
 	agentVaultRunCmd.Flags().String("no-proxy", "", "additional comma-separated hosts to bypass the proxy (always merged with localhost,127.0.0.1)")
 	agentVaultRunCmd.Flags().String("ca-file", "", "where to write the certificate authority fetched from the proxy; an output path, not a CA to trust (default: "+filepath.Join(defaultDataDirHelp(), "ca-<proxy-id>.pem")+")")
 	agentVaultRunCmd.Flags().Bool("no-ca-trust", false, "skip writing the certificate authority and setting the trust variables, for a host that already trusts this proxy's CA (a pinned fingerprint is still checked)")
+	agentVaultRunCmd.Flags().String("skills-dir", "", "install the session's skills into this `folder` instead of ~/.agents/skills, without linking them for Claude Code or Hermes")
+	agentVaultRunCmd.Flags().Bool("no-skills", false, "start the agent without installing the session's skills")
 	agentVaultRunCmd.Flags().String("client-id", "", "universal auth client id of the machine identity that mints the session (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_ID)")
 	agentVaultRunCmd.Flags().String("client-secret", "", "universal auth client secret of that machine identity (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET)")
 

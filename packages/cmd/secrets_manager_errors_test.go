@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -10,6 +11,8 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/util"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
@@ -334,5 +337,23 @@ func TestErrorOutputFormat(t *testing.T) {
 	_ = export.Flags().Set("output-file", "json")
 	if got := errorOutputFormat(export); got != "" {
 		t.Errorf("export's -o is a file name, not a format: got %q", got)
+	}
+}
+
+// The request ID comes from the response body, and the default console log format prints messages as
+// they are, so a crafted ID must not reach the terminal as escape sequences or a forged log line.
+func TestExitWithErrorLogsASanitizedRequestID(t *testing.T) {
+	var logged bytes.Buffer
+	oldLogger, oldExit := log.Logger, exitProcess
+	log.Logger = zerolog.New(zerolog.ConsoleWriter{Out: &logged, NoColor: true}).Level(zerolog.DebugLevel)
+	exitProcess = func(int) {}
+	t.Cleanup(func() { log.Logger, exitProcess = oldLogger, oldExit })
+	captureStderr(t)
+
+	crafted := &api.APIError{StatusCode: 404, Name: "NotFound", ReqId: "req-1\x1b[2J\nERR forged line"}
+	exitWithError(&cobra.Command{}, errProjectNotFound(testScope, crafted))
+	if strings.Contains(logged.String(), "\x1b") || strings.Count(strings.TrimSpace(logged.String()), "\n") != 0 ||
+		!strings.Contains(logged.String(), "request ID: req-1[2JERR forged line") {
+		t.Errorf("logged %q", logged.String())
 	}
 }

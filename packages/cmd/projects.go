@@ -4,6 +4,7 @@ Copyright (c) 2026 Infisical Inc.
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -168,7 +169,8 @@ func secretsManagerHTTPClientRejecting(cmd *cobra.Command, what string, rejectSe
 	}
 
 	isServiceToken := token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER
-	if rejectServiceTokens && isServiceToken && !cmd.Flags().Changed("token") {
+	ignoredServiceToken := rejectServiceTokens && isServiceToken && !cmd.Flags().Changed("token")
+	if ignoredServiceToken {
 		log.Debug().Msgf("Ignoring the service token from %s, which can't %s", token.Source, what)
 		token, isServiceToken = nil, false
 	}
@@ -179,6 +181,26 @@ func secretsManagerHTTPClientRejecting(cmd *cobra.Command, what string, rejectSe
 
 	if token != nil {
 		httpClient.SetAuthToken(token.Token)
+		return httpClient
+	}
+
+	// The login below opens a browser and waits, which hangs a script or an agent: without a terminal,
+	// or when it asked for -o json or yaml, a missing or expired session is an error instead. So is one
+	// behind an ignored service token: whoever set INFISICAL_TOKEN expected it to be used, not a login.
+	if ignoredServiceToken || !stdinIsTerminal() || errorOutputFormat(cmd) != "" {
+		details, err := util.GetCurrentLoggedInUserDetails(true)
+		if err != nil && !errors.Is(err, util.ErrUserNotLoggedIn) {
+			util.HandleError(err, "Unable to get your login details")
+		}
+		// A profile whose keyring credentials are gone is just as logged out as having no profile.
+		if err != nil || !details.IsUserLoggedIn || details.LoginExpired {
+			if ignoredServiceToken {
+				exitWithError(cmd, errServiceTokenUnsupported(what, "the one in INFISICAL_TOKEN can't be used, so pass a machine identity access token with --token, or log in",
+					util.NextStep{Purpose: "To log in", Command: "infisical login"}))
+			}
+			exitWithError(cmd, errAuthRequired(err))
+		}
+		httpClient.SetAuthToken(details.UserCredentials.JTWToken)
 		return httpClient
 	}
 
@@ -212,9 +234,10 @@ func addProjectsOutputFlag(cmd *cobra.Command, outputDescription string) {
 }
 
 // printProjectsTip prints a hint to stderr unless --silent is set.
+// Tips and notices repeat names from the backend, such as a project's, so they're redacted like errors.
 func printProjectsTip(cmd *cobra.Command, tip string) {
 	if silent, _ := cmd.Flags().GetBool("silent"); !silent {
-		util.PrintlnStderr(tip)
+		util.PrintlnStderr(util.RedactCredentials(tip))
 	}
 }
 

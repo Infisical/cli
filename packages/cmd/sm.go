@@ -46,7 +46,8 @@ var confirmedUnderSecretsManager = map[string]func(cmd *cobra.Command, args []st
 // deleteProject resolves the project a delete acts on, in the order the deletes themselves use
 // (--project-slug, --projectId, INFISICAL_PROJECT_ID, then the workspace file), so the question can
 // name it. id is empty when --project-slug chose it. ok is false when nothing resolves; the command
-// then reports that itself.
+// then reports that itself. A workspace file that names no project is the exception: the command
+// would send the delete with an empty project ID instead of failing, so it stops here.
 func deleteProject(cmd *cobra.Command) (phrase, id string, ok bool) {
 	if slug, _ := cmd.Flags().GetString("project-slug"); slug != "" {
 		return "in project " + util.SuggestedValue(slug, "project-slug"), "", true
@@ -62,7 +63,11 @@ func deleteProject(cmd *cobra.Command) (phrase, id string, ok bool) {
 		return "", "", false
 	}
 	workspace, err := util.GetWorkSpaceFromFilePath(filepath.Dir(file))
-	if err != nil || workspace.WorkspaceId == "" {
+	if err != nil {
+		return "", "", false
+	}
+	if workspace.WorkspaceId == "" {
+		exitWithError(cmd, errProjectNotLinked())
 		return "", "", false
 	}
 	return fmt.Sprintf("in project %s (from %s)", util.SuggestedValue(workspace.WorkspaceId, "project-id"), file), workspace.WorkspaceId, true

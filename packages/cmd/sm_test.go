@@ -424,6 +424,42 @@ func TestDescribeDeletesWithoutAProject(t *testing.T) {
 	}
 }
 
+// A workspace file with no project ID doesn't make the deletes fail: they would send the request with
+// an empty project. So the question can't be skipped there; the command stops with project_not_linked.
+func TestDeletesStopOnAWorkspaceFileWithoutAProject(t *testing.T) {
+	t.Setenv(util.INFISICAL_PROJECT_ID_NAME, "")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME), []byte("secrets-management:\n  project-id: \"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	type stopped struct{}
+	stderr := captureStderr(t)
+	oldExit := exitProcess
+	exitProcess = func(int) { panic(stopped{}) }
+	t.Cleanup(func() { exitProcess = oldExit })
+
+	for path, describe := range confirmedUnderSecretsManager {
+		stderr.Reset()
+		cmd := findCommand(t, smPath(strings.Fields(path)))
+		exited := func() (exited bool) {
+			defer func() {
+				if r := recover(); r != nil {
+					if _, ok := r.(stopped); !ok {
+						panic(r)
+					}
+					exited = true
+				}
+			}()
+			describe(cmd, []string{"API_KEY"})
+			return false
+		}()
+		if !exited || !strings.Contains(stderr.String(), "No project is selected") {
+			t.Errorf("%s: exited=%v stderr=%q", path, exited, stderr.String())
+		}
+	}
+}
+
 // From a linked directory, the question names the workspace file the project came from.
 func TestDescribeDeletesNamesTheWorkspaceFile(t *testing.T) {
 	t.Setenv(util.INFISICAL_PROJECT_ID_NAME, "")

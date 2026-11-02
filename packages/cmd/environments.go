@@ -4,7 +4,9 @@ Copyright (c) 2026 Infisical Inc.
 package cmd
 
 import (
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/api"
@@ -200,7 +202,7 @@ func (t environmentsTarget) printEnvironment(cmd *cobra.Command, environment api
 
 func printSuccessNotice(cmd *cobra.Command, message string) {
 	if silent, _ := cmd.Flags().GetBool("silent"); !silent {
-		util.PrintSuccessMessageStderr(message)
+		util.PrintSuccessMessageStderr(util.RedactCredentials(message))
 	}
 }
 
@@ -217,14 +219,14 @@ func runEnvironmentsGet(cmd *cobra.Command, args []string) {
 
 	if len(args) == 1 {
 		slug := args[0]
-		if environment, ok := target.pending(slug); ok {
-			exitWithError(cmd, errEnvironmentPending(slug, environment.DeleteAfter, target.scope))
-		}
+		listed := target.existing(cmd, slug)
 		environment, err := api.CallGetEnvironmentBySlug(target.client, target.project.ID, slug)
+		var apiErr *api.APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+			environment, err = api.Environment{ID: listed.ID, Name: listed.Name, Slug: listed.Slug, ProjectID: target.project.ID}, nil
+		}
 		if err != nil {
-			exitWithError(cmd, classifyAPIError(err, target.scope, func(cause error) *util.CLIError {
-				return errEnvironmentNotFound(slug, target.scope, cause)
-			}), "Unable to get the environment")
+			exitWithError(cmd, classifyAPIError(err, target.scope, nil), "Unable to get the environment")
 		}
 		target.printEnvironment(cmd, environment, "")
 		Telemetry.CaptureEvent("cli-command:environments get", posthog.NewProperties().Set("version", util.CLI_VERSION))

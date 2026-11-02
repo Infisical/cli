@@ -42,7 +42,23 @@ var (
 	// A credential pasted into a flag the CLI didn't expect still never reaches a suggestion.
 	credentialFlagValue = regexp.MustCompile(`(--(?:token|client-secret|client-id|password|passphrase)[= ])\S+`)
 	credentialLooking   = regexp.MustCompile(`\b(?:st\.[A-Za-z0-9._-]+|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9._-]+)`)
+	// Third-party token formats that would otherwise pass as a secret name or slug. Each is matched by
+	// its prefix and length, so names that only start the same way (npm_config_registry) still print.
+	knownTokenFormat = regexp.MustCompile(`\b(?:gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}|[rs]k_(?:live|test)_[A-Za-z0-9]{10,}|xox[abprs]-[A-Za-z0-9-]{10,}|glpat-[A-Za-z0-9_-]{20,}|npm_[A-Za-z0-9]{36}|(?:AKIA|ASIA)[0-9A-Z]{16}|sk-[A-Za-z0-9_-]{20,})\b`)
 )
+
+func isKnownToken(match string) bool {
+	return !strings.HasPrefix(match, "sk-") || strings.ToLower(match) != match
+}
+
+func containsKnownToken(value string) bool {
+	for _, match := range knownTokenFormat.FindAllString(value, -1) {
+		if isKnownToken(match) {
+			return true
+		}
+	}
+	return false
+}
 
 const maxSuggestedValueLength = 64
 
@@ -61,7 +77,7 @@ func isSuggestable(value string) bool {
 	if parsed, err := uuid.Parse(value); err == nil {
 		return parsed.String() == strings.ToLower(value)
 	}
-	if value == "" || len(value) > maxSuggestedValueLength {
+	if value == "" || len(value) > maxSuggestedValueLength || containsKnownToken(value) {
 		return false
 	}
 	return suggestableSlug.MatchString(value) || suggestableSecretKey.MatchString(value) || suggestablePath.MatchString(value)
@@ -76,9 +92,17 @@ func SuggestedDomain(domain string) string {
 	return domain
 }
 
-func scrubSuggestedCommand(command string) string {
-	command = credentialFlagValue.ReplaceAllString(command, "$1<redacted>")
-	return credentialLooking.ReplaceAllString(command, "<redacted>")
+// RedactCredentials hides anything credential-shaped in text the CLI prints. Messages need it as
+// much as suggestions: some repeat what the backend said or what a project is named.
+func RedactCredentials(text string) string {
+	text = credentialFlagValue.ReplaceAllString(text, "$1<redacted>")
+	text = credentialLooking.ReplaceAllString(text, "<redacted>")
+	return knownTokenFormat.ReplaceAllStringFunc(text, func(match string) string {
+		if isKnownToken(match) {
+			return "<redacted>"
+		}
+		return match
+	})
 }
 
 type cliErrorBody struct {
@@ -94,9 +118,9 @@ type cliErrorBody struct {
 func WriteCLIError(w io.Writer, err *CLIError, outputFormat string) {
 	switch outputFormat {
 	case OUTPUT_FORMAT_JSON, OUTPUT_FORMAT_YAML:
-		body := cliErrorBody{Code: err.Code, Message: SanitizeDisplay(err.Message), Next: []string{}}
+		body := cliErrorBody{Code: err.Code, Message: RedactCredentials(SanitizeDisplay(err.Message)), Next: []string{}}
 		for _, step := range err.Next {
-			body.Next = append(body.Next, scrubSuggestedCommand(step.Command))
+			body.Next = append(body.Next, RedactCredentials(step.Command))
 		}
 		var apiErr *api.APIError
 		if errors.As(err.Cause, &apiErr) {
@@ -113,9 +137,9 @@ func WriteCLIError(w io.Writer, err *CLIError, outputFormat string) {
 			_, _ = w.Write(out)
 		}
 	default:
-		fmt.Fprintln(w, SanitizeDisplay(err.Message))
+		fmt.Fprintln(w, RedactCredentials(SanitizeDisplay(err.Message)))
 		for _, step := range err.Next {
-			fmt.Fprintf(w, "%s, run: %s\n", SanitizeDisplay(step.Purpose), scrubSuggestedCommand(step.Command))
+			fmt.Fprintf(w, "%s, run: %s\n", RedactCredentials(SanitizeDisplay(step.Purpose)), RedactCredentials(step.Command))
 		}
 	}
 }
