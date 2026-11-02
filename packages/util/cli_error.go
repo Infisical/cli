@@ -92,10 +92,12 @@ func SuggestedDomain(domain string) string {
 	return domain
 }
 
-func scrubSuggestedCommand(command string) string {
-	command = credentialFlagValue.ReplaceAllString(command, "$1<redacted>")
-	command = credentialLooking.ReplaceAllString(command, "<redacted>")
-	return knownTokenFormat.ReplaceAllStringFunc(command, func(match string) string {
+// redactCredentials hides anything credential-shaped in text the CLI prints. Messages need it as
+// much as suggestions: some repeat what the backend said or what a project is named.
+func redactCredentials(text string) string {
+	text = credentialFlagValue.ReplaceAllString(text, "$1<redacted>")
+	text = credentialLooking.ReplaceAllString(text, "<redacted>")
+	return knownTokenFormat.ReplaceAllStringFunc(text, func(match string) string {
 		if isKnownToken(match) {
 			return "<redacted>"
 		}
@@ -116,9 +118,9 @@ type cliErrorBody struct {
 func WriteCLIError(w io.Writer, err *CLIError, outputFormat string) {
 	switch outputFormat {
 	case OUTPUT_FORMAT_JSON, OUTPUT_FORMAT_YAML:
-		body := cliErrorBody{Code: err.Code, Message: SanitizeDisplay(err.Message), Next: []string{}}
+		body := cliErrorBody{Code: err.Code, Message: redactCredentials(SanitizeDisplay(err.Message)), Next: []string{}}
 		for _, step := range err.Next {
-			body.Next = append(body.Next, scrubSuggestedCommand(step.Command))
+			body.Next = append(body.Next, redactCredentials(step.Command))
 		}
 		var apiErr *api.APIError
 		if errors.As(err.Cause, &apiErr) {
@@ -135,9 +137,9 @@ func WriteCLIError(w io.Writer, err *CLIError, outputFormat string) {
 			_, _ = w.Write(out)
 		}
 	default:
-		fmt.Fprintln(w, SanitizeDisplay(err.Message))
+		fmt.Fprintln(w, redactCredentials(SanitizeDisplay(err.Message)))
 		for _, step := range err.Next {
-			fmt.Fprintf(w, "%s, run: %s\n", SanitizeDisplay(step.Purpose), scrubSuggestedCommand(step.Command))
+			fmt.Fprintf(w, "%s, run: %s\n", redactCredentials(SanitizeDisplay(step.Purpose)), redactCredentials(step.Command))
 		}
 	}
 }
