@@ -52,7 +52,7 @@ With `-o json`, the same error is JSON on stderr:
 - `code` is stable snake_case. Codes are added, never renamed or removed.
 - A suggested command is complete and runnable, and uses the full product name.
 - A suggested command never contains a token or a secret value. Only interpolate values that are valid UUIDs or slugs, and write secret values as `<value>`.
-- The same goes for the message: name something the user typed with `quoted(value, kind)`, which prints `<kind>` for anything that isn't a safe identifier, so a credential pasted in the wrong place never reaches a log.
+- The same goes for the message: name something the user typed with `quoted(value, kind)`, which prints `<kind>` for anything that isn't a safe identifier, so a credential pasted in the wrong place never reaches a log. Well-known token formats that would otherwise pass as a name (`ghp_...`, `sk_live_...`, `xoxb-...`, `AKIA...`) are recognized by prefix and length and treated the same way. To cover a new one, add it to `knownTokenFormat` in `packages/util/cli_error.go`.
 - If no command can fix the error, the first sentence says what to do instead.
 - The exit code stays `1`.
 

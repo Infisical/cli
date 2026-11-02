@@ -42,7 +42,23 @@ var (
 	// A credential pasted into a flag the CLI didn't expect still never reaches a suggestion.
 	credentialFlagValue = regexp.MustCompile(`(--(?:token|client-secret|client-id|password|passphrase)[= ])\S+`)
 	credentialLooking   = regexp.MustCompile(`\b(?:st\.[A-Za-z0-9._-]+|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9._-]+)`)
+	// Third-party token formats that would otherwise pass as a secret name or slug. Each is matched by
+	// its prefix and length, so names that only start the same way (npm_config_registry) still print.
+	knownTokenFormat = regexp.MustCompile(`\b(?:gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}|[rs]k_(?:live|test)_[A-Za-z0-9]{10,}|xox[abprs]-[A-Za-z0-9-]{10,}|glpat-[A-Za-z0-9_-]{20,}|npm_[A-Za-z0-9]{36}|(?:AKIA|ASIA)[0-9A-Z]{16}|sk-[A-Za-z0-9_-]{20,})\b`)
 )
+
+func isKnownToken(match string) bool {
+	return !strings.HasPrefix(match, "sk-") || strings.ToLower(match) != match
+}
+
+func containsKnownToken(value string) bool {
+	for _, match := range knownTokenFormat.FindAllString(value, -1) {
+		if isKnownToken(match) {
+			return true
+		}
+	}
+	return false
+}
 
 const maxSuggestedValueLength = 64
 
@@ -61,7 +77,7 @@ func isSuggestable(value string) bool {
 	if parsed, err := uuid.Parse(value); err == nil {
 		return parsed.String() == strings.ToLower(value)
 	}
-	if value == "" || len(value) > maxSuggestedValueLength {
+	if value == "" || len(value) > maxSuggestedValueLength || containsKnownToken(value) {
 		return false
 	}
 	return suggestableSlug.MatchString(value) || suggestableSecretKey.MatchString(value) || suggestablePath.MatchString(value)
@@ -78,7 +94,13 @@ func SuggestedDomain(domain string) string {
 
 func scrubSuggestedCommand(command string) string {
 	command = credentialFlagValue.ReplaceAllString(command, "$1<redacted>")
-	return credentialLooking.ReplaceAllString(command, "<redacted>")
+	command = credentialLooking.ReplaceAllString(command, "<redacted>")
+	return knownTokenFormat.ReplaceAllStringFunc(command, func(match string) string {
+		if isKnownToken(match) {
+			return "<redacted>"
+		}
+		return match
+	})
 }
 
 type cliErrorBody struct {
