@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
-	"github.com/Infisical/infisical-merge/packages/gateway-v2/winrm"
 	"github.com/Infisical/infisical-merge/packages/pam"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mongodb"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
@@ -28,6 +27,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/sync/semaphore"
 )
 
 // ForwardMode represents the type of forwarding
@@ -162,9 +162,10 @@ type Gateway struct {
 	pamSessionsMu sync.Mutex
 
 	// MongoDB proxy registry: one topology per session, shared across connections
-	mongoProxies   map[string]*mongoProxyEntry
-	mongoProxiesMu sync.Mutex
-	pkcs11Module   Pkcs11Module
+	mongoProxies     map[string]*mongoProxyEntry
+	mongoProxiesMu   sync.Mutex
+	pkcs11Module     Pkcs11Module
+	pkcs11BodyBudget *semaphore.Weighted
 
 	activeChannels       atomic.Int64
 	directActiveChannels atomic.Int64
@@ -215,6 +216,7 @@ func NewGateway(config *GatewayConfig) (*Gateway, error) {
 		pamSessions:           make(map[string][]*pamSessionEntry),
 		mongoProxies:          make(map[string]*mongoProxyEntry),
 		pkcs11Module:          pkcs11Module,
+		pkcs11BodyBudget:      newPkcs11BodyBudget(),
 	}, nil
 }
 
@@ -465,10 +467,12 @@ func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 		}
 		if g.pkcs11Module != nil {
 			capabilities[CapabilityPkcs11] = true
+			capabilities[CapabilityPkcs11MlDsa] = g.pkcs11Module.SupportsMlDsa()
 		}
 		capabilities[CapabilitySupportedAccountTypes] = pam.GetSupportedResourceTypes()
 		capabilities[CapabilityClickhouseNativeProtocol] = true
 		capabilities[CapabilityCertificateScan] = true
+		capabilities[CapabilityWindowsCertificateScan] = true
 		req := api.GatewayHeartbeatRequest{Capabilities: capabilities}
 		if err := api.CallGatewayHeartBeatV2(g.httpClient, req); err != nil {
 			log.Warn().Msgf("Heartbeat failed: %v", err)
@@ -523,9 +527,6 @@ func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 
 func (g *Gateway) Start(ctx context.Context) error {
 	log.Info().Msgf("Starting gateway")
-
-	// Bound WinRM HTTP response bodies before serving.
-	winrm.InstallHTTPResponseCap()
 
 	errCh := make(chan error, 1)
 	listenerFatal := make(chan error, 1)
@@ -1259,7 +1260,7 @@ func (g *Gateway) handleGatewayConnection(conn net.Conn, onHandshakeSettled func
 		return
 	} else if forwardConfig.Mode == ForwardModePkcs11 {
 		log.Info().Msg("Starting PKCS#11 handler")
-		if err := servePkcs11OverTLS(g.ctx, tlsConn, reader, g.pkcs11Module); err != nil {
+		if err := servePkcs11OverTLS(g.ctx, tlsConn, reader, g.pkcs11Module, g.pkcs11BodyBudget); err != nil {
 			log.Error().Err(err).Msg("PKCS#11 handler ended with error")
 		} else {
 			log.Info().Msg("PKCS#11 handler completed")
