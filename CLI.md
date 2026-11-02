@@ -69,6 +69,7 @@ With `-o json`, the same error is JSON on stderr:
 | `auth_required` | No session, or the token is invalid or expired (401, or 403 `TokenError`) |
 | `permission_denied` | The role doesn't allow the action (403) |
 | `project_not_linked` | No `--projectId`, no `INFISICAL_PROJECT_ID`, and no `.infisical.yaml` |
+| `project_config_invalid` | The directory's `.infisical.yaml` (or a legacy `.infisical.json`) exists but can't be read. Suggests `infisical init` |
 | `project_not_found` | The project doesn't exist or isn't visible (404) |
 | `project_type_not_supported` | A project of another product was passed to a `secrets-manager` command |
 | `environment_not_found` | The environment slug doesn't exist in the project (404) |

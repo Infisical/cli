@@ -215,7 +215,7 @@ func runProjectsList(cmd *cobra.Command, args []string) {
 
 	projects, err := api.CallListProjects(projectsHTTPClient(cmd), secretManagerProjectType)
 	if err != nil {
-		util.HandleError(err, "Unable to list projects")
+		exitWithError(cmd, classifyAPIError(err, errorScope{}, nil), "Unable to list projects")
 	}
 
 	if outputFormat != "" {
@@ -276,7 +276,7 @@ func resolveProjectID(cmd *cobra.Command) string {
 	}
 	workspaceFile, err := util.GetWorkSpaceFromFilePath(filepath.Dir(configFile))
 	if err != nil {
-		util.HandleError(err, fmt.Sprintf("Unable to read the project config at %s", configFile))
+		exitWithError(cmd, errProjectConfigInvalid(configFile, err))
 	}
 	return workspaceFile.WorkspaceId
 }

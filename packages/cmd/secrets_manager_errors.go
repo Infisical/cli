@@ -29,6 +29,7 @@ const (
 	errCodeInvalidFlagValue        = "invalid_flag_value"
 	errCodeInvalidArgument         = "invalid_argument"
 	errCodeServiceTokenUnsupported = "service_token_not_supported"
+	errCodeProjectConfigInvalid    = "project_config_invalid"
 	errCodeProjectDeleteProtected  = "project_delete_protected"
 	errCodeSecretExists            = "secret_exists"
 	errCodeSecretNotFound          = "secret_not_found"
@@ -44,6 +45,7 @@ var errorCodes = []string{
 	errCodeFolderNotFound, errCodeNothingToUpdate, errCodeConfirmationRequired, errCodeConfirmationDeclined,
 	errCodeEnvironmentExists, errCodeEnvironmentPending, errCodeProjectRequired, errCodeInvalidFlagValue,
 	errCodeProjectDeleteProtected, errCodeInvalidArgument, errCodeServiceTokenUnsupported,
+	errCodeProjectConfigInvalid,
 }
 
 const secretsManagerPrefix = "infisical " + secretsManagerCommandName
@@ -211,6 +213,12 @@ func errServiceTokenUnsupported(what, alternative string, next util.NextStep) *u
 	return &util.CLIError{Code: errCodeServiceTokenUnsupported,
 		Message: fmt.Sprintf("Service tokens can't %s: %s.", what, alternative),
 		Next:    []util.NextStep{next}}
+}
+
+func errProjectConfigInvalid(path string, cause error) *util.CLIError {
+	return &util.CLIError{Code: errCodeProjectConfigInvalid, Cause: cause,
+		Message: fmt.Sprintf("The project config at %s can't be read (%s).", util.SanitizeDisplay(path), util.SanitizeDisplay(cause.Error())),
+		Next:    []util.NextStep{{Purpose: "To link this directory to a project again", Command: "infisical init"}}}
 }
 
 func errSecretRepeated(name string) *util.CLIError {

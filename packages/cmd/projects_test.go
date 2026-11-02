@@ -18,6 +18,7 @@ type fakeProjectsAPI struct {
 	protected   bool
 	notMember   bool
 	denyCreate  bool
+	expired     bool
 	mu          sync.Mutex
 	requests    []string
 }
@@ -43,6 +44,9 @@ func (f *fakeProjectsAPI) serve(t *testing.T) {
 			"orgId": "org-1", "hasDeleteProtection": f.protected,
 			"environments": []map[string]string{{"id": "e1", "name": "Development", "slug": "dev"}}}
 		switch {
+		case f.expired:
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"UnauthorizedError","message":"Token expired","reqId":"req-test"}`))
 		case f.notMember && strings.HasPrefix(r.URL.Path, "/api/v1/projects/"):
 			w.WriteHeader(http.StatusForbidden)
 			_, _ = w.Write([]byte(`{"error":"ProjectMembershipNotFound","message":"You are not a member of this project with ID ` + testProjectID + `.","reqId":"req-test"}`))
@@ -162,6 +166,13 @@ func TestProjectsGetByIDErrors(t *testing.T) {
 	stderr, _, exited = runProjects(t, fake, "get", "-o", "json")
 	if !exited || errorCode(t, stderr) != errCodeProjectNotLinked || len(fake.requests) != 0 {
 		t.Errorf("no project: exited=%v requests=%v stderr=%s", exited, fake.requests, stderr)
+	}
+}
+
+func TestProjectsListErrors(t *testing.T) {
+	stderr, stdout, exited := runProjects(t, &fakeProjectsAPI{expired: true}, "list", "-o", "json")
+	if !exited || errorCode(t, stderr) != errCodeAuthRequired || stdout != "" {
+		t.Errorf("exited=%v stdout=%q stderr=%s", exited, stdout, stderr)
 	}
 }
 
