@@ -43,6 +43,10 @@ type RetryPolicy struct {
 	// once, letting POST and PATCH retry like idempotent methods. Set it only where a replay
 	// cannot double-apply a write.
 	ReplaySafe bool
+
+	// StatusOnly retries only the status codes the server answered with, never a transport error, for a
+	// caller whose connect timeout is its answer to an unreachable server.
+	StatusOnly bool
 }
 
 // DefaultRetryPolicy suits one-shot commands where a user or script is waiting on the result.
@@ -138,7 +142,7 @@ func shouldRetryRequest(policy RetryPolicy, res *resty.Response, err error) bool
 	}
 
 	if err != nil {
-		if !isRetryableTransportError(err) {
+		if policy.StatusOnly || !isRetryableTransportError(err) {
 			return false
 		}
 

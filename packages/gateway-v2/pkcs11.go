@@ -13,6 +13,8 @@ type Pkcs11Module interface {
 
 	FindPrivateKeys(slotLabel string, pin []byte, keyLabel string) ([]KeyInfo, error)
 
+	SupportsMlDsa() bool
+
 	Finalize() error
 }
 
@@ -77,6 +79,9 @@ const (
 	KeyAlgorithmRSA4096 = "RSA_4096"
 	KeyAlgorithmECCP256 = "ECC_P256"
 	KeyAlgorithmECCP384 = "ECC_P384"
+	KeyAlgorithmMLDSA44 = "ML_DSA_44"
+	KeyAlgorithmMLDSA65 = "ML_DSA_65"
+	KeyAlgorithmMLDSA87 = "ML_DSA_87"
 )
 
 const CapabilityPkcs11 = "pkcs11"
