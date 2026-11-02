@@ -202,7 +202,7 @@ func (t environmentsTarget) printEnvironment(cmd *cobra.Command, environment api
 
 func printSuccessNotice(cmd *cobra.Command, message string) {
 	if silent, _ := cmd.Flags().GetBool("silent"); !silent {
-		util.PrintSuccessMessageStderr(message)
+		util.PrintSuccessMessageStderr(util.RedactCredentials(message))
 	}
 }
 

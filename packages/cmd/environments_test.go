@@ -8,14 +8,18 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/Infisical/infisical-merge/packages/models"
 	"github.com/Infisical/infisical-merge/packages/telemetry"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/spf13/cobra"
+	"github.com/zalando/go-keyring"
 )
 
 const testEnvironmentID = "0a6c2f4e-1b3d-4e5f-8a9b-0c1d2e3f4a5b"
@@ -28,6 +32,7 @@ const testDeleteAfter = "2026-11-13T12:00:00.000Z"
 type fakeEnvironmentsAPI struct {
 	projectType string
 	missing     bool // GET /v1/projects/:id is a 404
+	projectName string
 	oldBackend  bool // no GET /v1/projects/:id/environments/slug/:slug route, as before backend v0.161.9
 	mu          sync.Mutex
 	requests    []string
@@ -64,8 +69,12 @@ func (f *fakeEnvironmentsAPI) serve(t *testing.T) {
 			if projectType == "" {
 				projectType = secretManagerProjectType
 			}
+			projectName := f.projectName
+			if projectName == "" {
+				projectName = "payments-api"
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"project": map[string]any{
-				"id": testProjectID, "name": "payments-api", "slug": "payments-api", "type": projectType,
+				"id": testProjectID, "name": projectName, "slug": "payments-api", "type": projectType,
 				"environments": []map[string]string{
 					{"id": "e1", "name": "Development", "slug": "dev"},
 					{"id": testEnvironmentID, "name": "Staging", "slug": "staging"},
@@ -232,6 +241,87 @@ func TestSecretsManagerHTTPClientNeverLogsInNonInteractively(t *testing.T) {
 		if !exited || !strings.Contains(stderr.String(), errCodeAuthRequired) && !strings.Contains(stderr.String(), "You're not logged in") {
 			t.Errorf("terminal=%v args=%v: exited=%v stderr=%q", c.terminal, c.args, exited, stderr.String())
 		}
+	}
+}
+
+// A saved profile whose keyring credentials are gone is reported as auth_required too, not as a
+// plain-text error that a script reading -o json can't parse.
+func TestSecretsManagerHTTPClientProfileWithoutCredentials(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv(util.INFISICAL_TOKEN_NAME, "")
+	if err := os.MkdirAll(filepath.Join(home, util.CONFIG_FOLDER_NAME), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	keyring.MockInit()
+	if err := util.WriteConfigFile(&models.ConfigFile{ActiveProfile: "acme", Profiles: []models.Profile{{Name: "acme", Email: "dev@example.com"}}}); err != nil {
+		t.Fatal(err)
+	}
+	fakeTerminal(t, false, "", errors.New("must not prompt"))
+	stderr := captureStderr(t)
+	oldExit := exitProcess
+	exitProcess = func(int) { panic(exitCalled{}) }
+	t.Cleanup(func() { exitProcess = oldExit })
+
+	list, _, err := buildProjectsCmd().Find([]string{"list"})
+	if err != nil || list.ParseFlags([]string{"-o", "json"}) != nil {
+		t.Fatal(err)
+	}
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				if _, ok := r.(exitCalled); !ok {
+					panic(r)
+				}
+			}
+		}()
+		secretsManagerHTTPClient(list, "list projects")
+	}()
+	if !strings.Contains(stderr.String(), `"code":"auth_required"`) {
+		t.Errorf("stderr=%q", stderr.String())
+	}
+}
+
+// A service token in INFISICAL_TOKEN is set aside by commands that can't use it. With no session to
+// fall back to, that's service_token_not_supported, even at a terminal, instead of a browser login.
+func TestSecretsManagerHTTPClientIgnoredServiceTokenWithoutSession(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv(util.INFISICAL_TOKEN_NAME, "st.fake.service.token")
+	fakeTerminal(t, true, "", errors.New("must not prompt"))
+	stderr := captureStderr(t)
+	oldExit := exitProcess
+	exitProcess = func(int) { panic(exitCalled{}) }
+	t.Cleanup(func() { exitProcess = oldExit })
+
+	list, _, err := buildProjectsCmd().Find([]string{"list"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exited := func() (exited bool) {
+		defer func() {
+			if r := recover(); r != nil {
+				if _, ok := r.(exitCalled); !ok {
+					panic(r)
+				}
+				exited = true
+			}
+		}()
+		secretsManagerHTTPClient(list, "list or create projects")
+		return false
+	}()
+	if !exited || !strings.Contains(stderr.String(), "Service tokens can't list or create projects: the one in INFISICAL_TOKEN can't be used") ||
+		strings.Contains(stderr.String(), "st.fake") {
+		t.Errorf("exited=%v stderr=%q", exited, stderr.String())
+	}
+}
+
+// Tips and notices repeat names from the backend, so a token in a project's name is redacted.
+func TestEnvironmentsNoticesRedactCredentials(t *testing.T) {
+	token := "ghp" + "_" + strings.Repeat("aB3", 12)
+	stderr, _, exited := runEnvironments(t, &fakeEnvironmentsAPI{projectName: "app " + token}, "create", "qa2", "--projectId", testProjectID)
+	if exited || strings.Contains(stderr, token) || !strings.Contains(stderr, "Created environment") {
+		t.Errorf("exited=%v stderr=%q", exited, stderr)
 	}
 }
 
