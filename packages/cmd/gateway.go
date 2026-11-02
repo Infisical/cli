@@ -452,7 +452,7 @@ var gatewayStartCmd = &cobra.Command{
 
 		gatewayInstance.SetToken(accessToken.Load().(string))
 
-		Telemetry.CaptureEvent("cli-command:gateway-v2", posthog.NewProperties().Set("version", util.CLI_VERSION))
+		Telemetry.CaptureEventAsync("cli-command:gateway-v2", posthog.NewProperties().Set("version", util.CLI_VERSION))
 
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)

@@ -12,9 +12,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
@@ -106,30 +104,8 @@ func aclGrantArgs(rules []AccessRule) (string, error) {
 	return sb.String(), nil
 }
 
-// maxWinRMReadBytes caps bytes read from a host, bounding one that streams an endless body; command
-// responses are tiny, so this never limits real use.
-const maxWinRMReadBytes = 32 * 1024 * 1024
-
-// limitedConn fails the read once maxWinRMReadBytes are consumed; the winrm library reads bodies unbounded.
-type limitedConn struct {
-	net.Conn
-	remaining int64
-}
-
-func (c *limitedConn) Read(p []byte) (int, error) {
-	if c.remaining <= 0 {
-		return 0, fmt.Errorf("winrm response exceeded %d bytes", maxWinRMReadBytes)
-	}
-	if int64(len(p)) > c.remaining {
-		p = p[:c.remaining]
-	}
-	n, err := c.Conn.Read(p)
-	c.remaining -= int64(n)
-	return n, err
-}
-
-// boundedDial returns a dialer whose connection carries the operation deadline and read cap, since the
-// library issues its HTTP request without a context.
+// boundedDial returns a dialer whose connection carries the operation deadline, since the library issues its
+// HTTP request without a context. The library itself caps each response body.
 func boundedDial(ctx context.Context) func(network, addr string) (net.Conn, error) {
 	return func(network, addr string) (net.Conn, error) {
 		conn, err := (&net.Dialer{Timeout: 30 * time.Second}).DialContext(ctx, network, addr)
@@ -139,57 +115,8 @@ func boundedDial(ctx context.Context) func(network, addr string) (net.Conn, erro
 		if deadline, ok := ctx.Deadline(); ok {
 			_ = conn.SetDeadline(deadline)
 		}
-		return &limitedConn{Conn: conn, remaining: maxWinRMReadBytes}, nil
+		return conn, nil
 	}
-}
-
-type roundTripperFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
-
-// cappedBody fails the read once maxWinRMReadBytes have been consumed.
-type cappedBody struct {
-	io.ReadCloser
-	remaining int64
-}
-
-func (c *cappedBody) Read(p []byte) (int, error) {
-	if c.remaining <= 0 {
-		return 0, fmt.Errorf("winrm response exceeded %d bytes", maxWinRMReadBytes)
-	}
-	if int64(len(p)) > c.remaining {
-		p = p[:c.remaining]
-	}
-	n, err := c.ReadCloser.Read(p)
-	c.remaining -= int64(n)
-	return n, err
-}
-
-// winrmSOAPPath is the WS-Management endpoint every WinRM request targets; the response cap keys off it
-// so only WinRM traffic is bounded.
-const winrmSOAPPath = "/wsman"
-
-var installHTTPResponseCapOnce sync.Once
-
-// InstallHTTPResponseCap bounds response reads on the HTTP (NTLM message-sealing) transport, which uses
-// masterzen's Encryption. That transport uses a bare *http.Client with no hook for a custom transport, so
-// wrapping http.DefaultTransport is the only way to cap it without forking the library. The wrapper only
-// caps requests to the WinRM WS-Management path ("/wsman") and passes every other request through unchanged,
-// so it does not affect any other use of the default transport. Call once at startup, before serving.
-func InstallHTTPResponseCap() {
-	installHTTPResponseCapOnce.Do(func() {
-		base := http.DefaultTransport
-		http.DefaultTransport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-			resp, err := base.RoundTrip(req)
-			if err != nil || resp == nil || resp.Body == nil {
-				return resp, err
-			}
-			if req.URL != nil && req.URL.Path == winrmSOAPPath {
-				resp.Body = &cappedBody{ReadCloser: resp.Body, remaining: maxWinRMReadBytes}
-			}
-			return resp, nil
-		})
-	})
 }
 
 // pinnedServerName returns the name to verify a pinned cert against: its first DNS SAN, else its
@@ -283,11 +210,10 @@ func newClient(ctx context.Context, creds Credentials, gate *stdinGate) (*winrm.
 	} else {
 		// HTTP transport: NTLM message sealing provides confidentiality without a server certificate.
 		// Confidentiality here depends on the encrypted session being established: masterzen's Encryption
-		// falls back to unencrypted NTLM if sealing setup fails, and that fallback uses its own transport
-		// (not http.DefaultTransport), so it cannot be intercepted without forking the library. An active
-		// MITM that forces the setup to fail could therefore read a delivery in cleartext. Use HTTPS when
+		// falls back to unencrypted NTLM if sealing setup fails, so an active MITM that forces the setup
+		// to fail could read a delivery in cleartext. Use HTTPS when
 		// the gateway-to-host segment is not trusted.
-		enc, err := winrm.NewEncryption("ntlm")
+		enc, err := winrm.NewEncryptionWithDial("ntlm", boundedDial(ctx))
 		if err != nil {
 			return nil, fmt.Errorf("%w: failed to initialize NTLM message encryption: %v", ErrConnect, err)
 		}
@@ -728,15 +654,48 @@ func RunCommand(
 		return CommandResult{}, err
 	}
 
+	run, err := runScript(ctx, creds, buildCommandScript(command, nonce), timeout, maxCommandOutputBytes)
+	if err != nil {
+		return CommandResult{}, err
+	}
+	if run.timedOut {
+		return CommandResult{}, fmt.Errorf("command timed out after %s", timeout)
+	}
+
+	result := CommandResult{
+		Stderr:    normalizePowerShellStderr(run.stderr.String()),
+		Truncated: run.stdoutWriter.truncated || run.stderrWriter.truncated,
+	}
+
+	code, remaining, stated := takeCommandTrailer(run.stdout.String(), nonce)
+	result.Stdout = remaining
+	if !stated {
+		// Truncation drops the head, so fall back to the retained tail.
+		code, _, stated = takeCommandTrailer(string(run.stdoutWriter.tail), nonce)
+	}
+
+	result.ExitCode, result.Stderr = resolveCommandOutcome(code, stated, result.Stderr)
+
+	return result, nil
+}
+
+type scriptRun struct {
+	stdout, stderr             bytes.Buffer
+	stdoutWriter, stderrWriter *limitedBuffer
+	timedOut                   bool
+}
+
+// runScript keeps the output read so far when the timeout fires, so callers can use partial results.
+func runScript(ctx context.Context, creds Credentials, script string, timeout time.Duration, stdoutLimit int) (*scriptRun, error) {
 	encoded := winrm.Powershell(commandBootstrap)
 	if encoded == "" {
-		return CommandResult{}, errors.New("failed to encode the command")
+		return nil, errors.New("failed to encode the command")
 	}
-	payload := base64.StdEncoding.EncodeToString(utf16LEBytes(buildCommandScript(command, nonce)))
+	payload := base64.StdEncoding.EncodeToString(utf16LEBytes(script))
 
-	client, clientErr := newClient(ctx, creds, newStdinGate())
-	if clientErr != nil {
-		return CommandResult{}, clientErr
+	client, err := newClient(ctx, creds, newStdinGate())
+	if err != nil {
+		return nil, err
 	}
 
 	runCtx := ctx
@@ -746,33 +705,17 @@ func RunCommand(
 		defer cancel()
 	}
 
-	var stdout, stderr bytes.Buffer
-	stdoutWriter := &limitedBuffer{buf: &stdout, limit: maxCommandOutputBytes}
-	stderrWriter := &limitedBuffer{buf: &stderr, limit: maxCommandOutputBytes}
-
-	_, runErr := client.RunWithContextWithInput(runCtx, encoded, stdoutWriter, stderrWriter, strings.NewReader(payload))
-	if runErr != nil {
+	run := &scriptRun{}
+	run.stdoutWriter = &limitedBuffer{buf: &run.stdout, limit: stdoutLimit}
+	run.stderrWriter = &limitedBuffer{buf: &run.stderr, limit: maxCommandOutputBytes}
+	if _, runErr := client.RunWithContextWithInput(runCtx, encoded, run.stdoutWriter, run.stderrWriter, strings.NewReader(payload)); runErr != nil {
 		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
-			return CommandResult{}, fmt.Errorf("command timed out after %s", timeout)
+			run.timedOut = true
+			return run, nil
 		}
-		return CommandResult{}, wrapTransportError(runErr)
+		return nil, wrapTransportError(runErr)
 	}
-
-	result := CommandResult{
-		Stderr:    normalizePowerShellStderr(stderr.String()),
-		Truncated: stdoutWriter.truncated || stderrWriter.truncated,
-	}
-
-	code, remaining, stated := takeCommandTrailer(stdout.String(), nonce)
-	result.Stdout = remaining
-	if !stated {
-		// Truncation drops the head, so fall back to the retained tail.
-		code, _, stated = takeCommandTrailer(string(stdoutWriter.tail), nonce)
-	}
-
-	result.ExitCode, result.Stderr = resolveCommandOutcome(code, stated, result.Stderr)
-
-	return result, nil
+	return run, nil
 }
 
 // escapePowerShellSingleQuotes escapes a value for a PowerShell single-quoted string by doubling the single quote.

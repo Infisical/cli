@@ -20,7 +20,7 @@ const (
 	vectorIVHex      = "aabbccddeeff001122334455"
 	vectorAADHex     = "38d8f3b86fbbd1061f9d2a8bd91e6c49c51b6231936a7ecfc21c56e129f37a1c"
 	vectorIVBase64   = "qrvM3e7/ABEiM0RV"
-	vectorCiphertext = "PLRwxBbgu+W68Br1N9gY1oUy8wjJxQClAtBh0NfJS1UcWOCPn3laS615sIqwFONhPIPNWRI3CA+a5tUJ7aoim0sQkE4d9gzou2mc/AWiCdToVBJPtdumA9jIzh3yAI81YPwcoDXEVnq2+7ooNNJShGdLX95itbrna/t4nFKRKSSgNzbH23eMtSMcSo72puk/2iwh4sVbTKzC2kwvbf1U6Mgd21zkIq2jDKKwhcT6mTfjPivW4FzmmkspQVMoWwANRX+QVyXzrMipZfoq5N/UcUI6rCvRUkqg+3ST5GVMelW0mjOO"
+	vectorCiphertext = "PLRwxBbgu+W68Br1N9gY1oUy8wjJxQClAtBh0NfJS1UcWOCPn3laS615sIqwFONhPIPNWRI3CA+a5tUJ7aoim0sQkE4d9gzou2mc/AWiCdToVBJPtdumA9jIzh3yAI81YPwcoDXEVnq2+7ooNNJShGdLX95itbrna/t4nFKRKSSgNzbH23eMtSMcSo72puk/2iwh4sVbTKzC2kwvbf1U6Mgd21zkIq2jDKKwhcT6mTfjPivW4FzmmkspQVMoWwANRX+QVyXzrMipZfoq5N/UcUI6/VTBSsIZvF08UTnPeIW+yM1I5hHCoi0WQT6QRe0bdx5+BvGuvJQB"
 )
 
 // The uploaded object is IV ‖ ciphertext ‖ tag. The 12-byte IV encodes without padding, so the object's base64
@@ -33,7 +33,7 @@ var vectorContext = struct{ sessionID, chunkID string }{
 }
 
 func vectorRecords() []sessionLogRecord {
-	service, bundle := "github", "code-review"
+	service, bundle, serviceType := "github", "code-review", serviceKindHTTP
 	return []sessionLogRecord{{
 		Ts:           "2026-09-16T10:31:04.221Z",
 		Seq:          1,
@@ -46,6 +46,7 @@ func vectorRecords() []sessionLogRecord {
 		Decision:     decisionBrokered,
 		Service:      &service,
 		AccessBundle: &bundle,
+		ServiceType:  &serviceType,
 	}}
 }
 

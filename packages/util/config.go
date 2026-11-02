@@ -30,7 +30,7 @@ func ConfigFileExists() bool {
 }
 
 func WorkspaceConfigFileExistsInCurrentPath() bool {
-	for _, fileName := range []string{INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_WORKSPACE_CONFIG_FILE_NAME} {
+	for _, fileName := range []string{INFISICAL_WORKSPACE_CONFIG_FILE_NAME, LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME} {
 		if _, err := os.Stat(fileName); err == nil {
 			return true
 		} else {
@@ -65,66 +65,19 @@ func GetDomainFromFile() (domain string, valid bool) {
 }
 
 func GetWorkSpaceFromFilePath(configFileDir string) (models.WorkspaceConfigFile, error) {
-	yamlConfigFilePath := filepath.Join(configFileDir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME)
-	jsonConfigFilePath := filepath.Join(configFileDir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+	yamlConfigFilePath := filepath.Join(configFileDir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+	jsonConfigFilePath := filepath.Join(configFileDir, LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 
 	// the yaml file takes precedence over the legacy json file when both exist
 	if workspaceConfigFile, exists, err := readWorkspaceConfigYamlIfExists(yamlConfigFilePath); exists {
-		if err == nil {
-			RemindToRemoveLegacyWorkspaceConfig(configFileDir)
-		}
 		return workspaceConfigFile, err
 	}
 
 	if _, err := os.Stat(jsonConfigFilePath); os.IsNotExist(err) {
-		return models.WorkspaceConfigFile{}, fmt.Errorf("no %s or %s found in %s", INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_WORKSPACE_CONFIG_FILE_NAME, configFileDir)
+		return models.WorkspaceConfigFile{}, fmt.Errorf("no %s or %s found in %s", INFISICAL_WORKSPACE_CONFIG_FILE_NAME, LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME, configFileDir)
 	}
 
-	workspaceConfigFile, err := GetWorkspaceConfigByPath(jsonConfigFilePath)
-	if err != nil {
-		return models.WorkspaceConfigFile{}, err
-	}
-
-	createWorkspaceConfigYamlFromLegacy(jsonConfigFilePath, yamlConfigFilePath)
-
-	return workspaceConfigFile, nil
-}
-
-func createWorkspaceConfigYamlFromLegacy(jsonConfigFilePath string, yamlConfigFilePath string) bool {
-	if err := convertLegacyWorkspaceConfigToYaml(jsonConfigFilePath, yamlConfigFilePath); err != nil {
-		log.Debug().Err(err).Msgf("createWorkspaceConfigYamlFromLegacy: unable to create [path=%s], using the legacy [path=%s]", yamlConfigFilePath, jsonConfigFilePath)
-		return false
-	}
-
-	if workspaceConfigMessagesEnabled {
-		PrintlnStderr(fmt.Sprintf("Created %s from the legacy %s (commit it if this project is under version control).", yamlConfigFilePath, jsonConfigFilePath))
-	}
-	RemindToRemoveLegacyWorkspaceConfig(filepath.Dir(jsonConfigFilePath))
-	return true
-}
-
-var legacyWorkspaceConfigReminderShown bool
-
-var workspaceConfigMessagesEnabled bool
-
-func EnableWorkspaceConfigMessages() {
-	workspaceConfigMessagesEnabled = true
-}
-
-func RemindToRemoveLegacyWorkspaceConfig(configFileDir string) {
-	if legacyWorkspaceConfigReminderShown || !workspaceConfigMessagesEnabled {
-		return
-	}
-	if absDir, err := filepath.Abs(configFileDir); err == nil {
-		configFileDir = absDir
-	}
-	jsonConfigFilePath := filepath.Join(configFileDir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
-	if _, err := os.Stat(jsonConfigFilePath); err != nil {
-		return
-	}
-
-	legacyWorkspaceConfigReminderShown = true
-	PrintWarning(fmt.Sprintf("Both %s and %s exist in %s. %s takes precedence, so the legacy %s is no longer used and you can remove it.", INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_WORKSPACE_CONFIG_FILE_NAME, configFileDir, INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, jsonConfigFilePath))
+	return GetWorkspaceConfigByPath(jsonConfigFilePath)
 }
 
 func readWorkspaceConfigYamlIfExists(path string) (workspaceConfigFile models.WorkspaceConfigFile, exists bool, err error) {
@@ -154,86 +107,65 @@ func readWorkspaceConfigYaml(path string) (models.WorkspaceConfigFile, error) {
 	return workspaceConfigFromYaml(workspaceConfigFileYaml), nil
 }
 
-func convertLegacyWorkspaceConfigToYaml(jsonConfigFilePath string, yamlConfigFilePath string) error {
-	if _, err := os.Stat(yamlConfigFilePath); err == nil {
-		return fmt.Errorf("convertLegacyWorkspaceConfigToYaml: %s already exists", yamlConfigFilePath)
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("convertLegacyWorkspaceConfigToYaml: unable to check %s [err=%s]", yamlConfigFilePath, err)
-	}
-
-	legacyWorkspaceConfig, err := GetWorkspaceConfigByPath(jsonConfigFilePath)
-	if err != nil {
-		return err
-	}
-
-	yamlConfigFileAsBytes, err := yaml.Marshal(workspaceConfigToYaml(legacyWorkspaceConfig))
-	if err != nil {
-		return fmt.Errorf("convertLegacyWorkspaceConfigToYaml: unable to marshal yaml [err=%s]", err)
-	}
-
-	// written atomically so a partially written .infisical.yaml is never left behind
-	if err := WriteFileAtomic(yamlConfigFilePath, yamlConfigFileAsBytes, 0600); err != nil {
-		return fmt.Errorf("convertLegacyWorkspaceConfigToYaml: unable to create %s [err=%s]", yamlConfigFilePath, err)
-	}
-
-	if _, err := readWorkspaceConfigYaml(yamlConfigFilePath); err != nil {
-		os.Remove(yamlConfigFilePath)
-		return err
-	}
-
-	return nil
-}
-
-func workspaceConfigToYaml(workspaceConfig models.WorkspaceConfigFile) models.WorkspaceConfigFileYaml {
-	var workspaceConfigYaml models.WorkspaceConfigFileYaml
-	workspaceConfigYaml.Version = INFISICAL_WORKSPACE_CONFIG_YAML_VERSION
-	workspaceConfigYaml.General.Domain = workspaceConfig.Domain
-	workspaceConfigYaml.SecretsManagement.ProjectID = workspaceConfig.WorkspaceId
-	workspaceConfigYaml.SecretsManagement.DefaultEnvironment = workspaceConfig.DefaultEnvironment
-	workspaceConfigYaml.SecretsManagement.DefaultSecretPath = workspaceConfig.DefaultSecretPath
-	workspaceConfigYaml.SecretsManagement.Mappings.GitBranchToEnvironment = workspaceConfig.GitBranchToEnvironmentMapping
-	return workspaceConfigYaml
-}
-
+// workspaceConfigFromYaml accepts both the current keys and the deprecated default-environment /
+// default-secret-path / mappings ones. Each field is resolved on its own: environment wins over
+// default-environment and secret-path wins over default-secret-path when set, and overrides.git-branch replaces
+// the mappings when present, so a partial migration keeps the deprecated value for whichever field has not been
+// moved yet.
 func workspaceConfigFromYaml(workspaceConfigYaml models.WorkspaceConfigFileYaml) models.WorkspaceConfigFile {
-	return models.WorkspaceConfigFile{
-		WorkspaceId:                   workspaceConfigYaml.SecretsManagement.ProjectID,
-		DefaultEnvironment:            workspaceConfigYaml.SecretsManagement.DefaultEnvironment,
-		GitBranchToEnvironmentMapping: workspaceConfigYaml.SecretsManagement.Mappings.GitBranchToEnvironment,
-		DefaultSecretPath:             workspaceConfigYaml.SecretsManagement.DefaultSecretPath,
+	secretsManagement := workspaceConfigYaml.SecretsManagement
+	workspaceConfigFile := models.WorkspaceConfigFile{
+		WorkspaceId:                   secretsManagement.ProjectID,
+		DefaultEnvironment:            secretsManagement.DefaultEnvironment,
+		GitBranchToEnvironmentMapping: secretsManagement.Mappings.GitBranchToEnvironment,
+		DefaultSecretPath:             secretsManagement.DefaultSecretPath,
 		Domain:                        workspaceConfigYaml.General.Domain,
 	}
+
+	if secretsManagement.Environment != "" {
+		workspaceConfigFile.DefaultEnvironment = secretsManagement.Environment
+	}
+
+	if secretsManagement.SecretPath != "" {
+		workspaceConfigFile.DefaultSecretPath = secretsManagement.SecretPath
+	}
+
+	if len(secretsManagement.Overrides.GitBranch) > 0 {
+		workspaceConfigFile.GitBranchToEnvironmentMapping = gitBranchMapFromOverrides(secretsManagement.Overrides.GitBranch)
+	}
+
+	return workspaceConfigFile
+}
+
+// gitBranchMapFromOverrides builds the in-memory branch map from the git-branch overrides list. Entries
+// without a branch are skipped, and the first entry for a branch wins.
+func gitBranchMapFromOverrides(gitBranchOverrides []models.GitBranchEnvironmentOverride) map[string]string {
+	if len(gitBranchOverrides) == 0 {
+		return nil
+	}
+	branchToEnvironment := make(map[string]string, len(gitBranchOverrides))
+	for _, override := range gitBranchOverrides {
+		if override.Branch == "" {
+			continue
+		}
+		if _, exists := branchToEnvironment[override.Branch]; exists {
+			continue
+		}
+		branchToEnvironment[override.Branch] = override.Environment
+	}
+	return branchToEnvironment
 }
 
 // findWorkspaceConfigFileInDir looks for a .infisical.yaml (or legacy .infisical.json) in exactly
 // the given directory, without walking up. The YAML file takes precedence.
 func findWorkspaceConfigFileInDir(dir string) (string, bool) {
-	for _, fileName := range []string{INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_WORKSPACE_CONFIG_FILE_NAME} {
+	for _, fileName := range []string{INFISICAL_WORKSPACE_CONFIG_FILE_NAME, LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME} {
 		path := filepath.Join(dir, fileName)
 		if _, err := os.Stat(path); err == nil {
 			return path, true
 		}
 	}
 	return "", false
-}
-
-// ResolveWorkspaceConfigFile returns the path of the workspace config file a command will read.
-// With an explicit projectConfigDir (the --project-config-dir flag) only that directory is
-// considered, matching GetWorkSpaceFromFilePath. Otherwise it walks up from the current directory.
-func ResolveWorkspaceConfigFile(projectConfigDir string) (string, error) {
-	if projectConfigDir == "" {
-		return FindWorkspaceConfigFile()
-	}
-
-	path, found := findWorkspaceConfigFileInDir(projectConfigDir)
-	if !found {
-		return "", fmt.Errorf("no %s or %s found in %s", INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_WORKSPACE_CONFIG_FILE_NAME, projectConfigDir)
-	}
-
-	if absPath, err := filepath.Abs(path); err == nil {
-		path = absPath
-	}
-	return path, nil
 }
 
 // FindWorkspaceConfigFile searches for a .infisical.yaml (or legacy .infisical.json) file in the current directory
@@ -260,7 +192,7 @@ func FindWorkspaceConfigFile() (string, error) {
 	}
 
 	// file not found
-	return "", fmt.Errorf("file not found: %s or %s", INFISICAL_NEW_WORKSPACE_CONFIG_FILE_NAME, INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
+	return "", fmt.Errorf("file not found: %s or %s", INFISICAL_WORKSPACE_CONFIG_FILE_NAME, LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
 
 }
 

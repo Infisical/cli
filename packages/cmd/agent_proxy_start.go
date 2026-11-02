@@ -48,7 +48,7 @@ func runAgentProxyStart(cmd *cobra.Command, args []string) {
 	}
 
 	Telemetry.SetActor(telemetry.IdentityClaimsFromToken(loginResp.AccessToken))
-	Telemetry.CaptureEvent("cli-command:agent-proxy start", posthog.NewProperties().
+	Telemetry.CaptureEventAsync("cli-command:agent-proxy start", posthog.NewProperties().
 		Set("version", util.CLI_VERSION).
 		Set("unmatchedHost", unmatchedHost).
 		Set("pollInterval", pollInterval).

@@ -16,6 +16,10 @@ var errPolicyBlocked = errors.New("blocked by service policy")
 var errBodyUnreadable = errors.New("could not read the request body")
 
 func checkServicePolicy(svc *resolvedService, req *http.Request) error {
+	// First, so the refusal names what the agent's owner can fix rather than a method or path rule.
+	if svc.personalValuesMissing {
+		return fmt.Errorf("service %q needs your personal values, which aren't set up yet: %w. Set them up on access bundle %q. It can take a few minutes to apply.", svc.name, errPolicyBlocked, svc.accessBundleName)
+	}
 	if !svc.allowsMethod(req.Method) {
 		return fmt.Errorf("service %q does not allow %s: %w", svc.name, truncateLogged(req.Method, maxLoggedMethodLen), errPolicyBlocked)
 	}

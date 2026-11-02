@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/semaphore"
 )
 
 type pkcs11RequestEnvelope struct {
@@ -53,9 +54,12 @@ type pkcs11ErrorBody struct {
 	Message string          `json:"message"`
 }
 
-const pkcs11RequestDeadline = 30 * time.Second
+const (
+	pkcs11RequestDeadline = 30 * time.Second
+	pkcs11BodyBudgetWait  = 10 * time.Second
+)
 
-func servePkcs11OverTLS(ctx context.Context, conn *tls.Conn, reader *bufio.Reader, module Pkcs11Module) error {
+func servePkcs11OverTLS(ctx context.Context, conn *tls.Conn, reader *bufio.Reader, module Pkcs11Module, bodyBudget *semaphore.Weighted) error {
 	_ = conn.SetDeadline(time.Now().Add(pkcs11RequestDeadline))
 
 	if module == nil {
@@ -86,7 +90,7 @@ func servePkcs11OverTLS(ctx context.Context, conn *tls.Conn, reader *bufio.Reade
 	log.Debug().Str("path", req.URL.Path).Int64("contentLength", req.ContentLength).Msg("pkcs11: request received")
 
 	rw := newBufferedResponseWriter()
-	servePkcs11Mux(module).ServeHTTP(rw, req)
+	servePkcs11Mux(module, bodyBudget).ServeHTTP(rw, req.WithContext(ctx))
 	if err := rw.writeTo(conn); err != nil {
 		return fmt.Errorf("failed to write response: %w", err)
 	}
@@ -146,19 +150,26 @@ func (b *bufferedResponseWriter) writeTo(conn *tls.Conn) error {
 	return nil
 }
 
-func servePkcs11Mux(module Pkcs11Module) *http.ServeMux {
+func servePkcs11Mux(module Pkcs11Module, bodyBudget *semaphore.Weighted) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/test", wrapPkcs11(module, handleTest))
-	mux.HandleFunc("/v1/generate-key-pair", wrapPkcs11(module, handleGenerateKeyPair))
-	mux.HandleFunc("/v1/sign", wrapPkcs11(module, handleSign))
-	mux.HandleFunc("/v1/get-public-key", wrapPkcs11(module, handleGetPublicKey))
-	mux.HandleFunc("/v1/find-keys", wrapPkcs11(module, handleFindKeys))
+	mux.HandleFunc("/v1/test", wrapPkcs11(module, bodyBudget, handleTest))
+	mux.HandleFunc("/v1/generate-key-pair", wrapPkcs11(module, bodyBudget, handleGenerateKeyPair))
+	mux.HandleFunc("/v1/sign", wrapPkcs11(module, bodyBudget, handleSign))
+	mux.HandleFunc("/v1/get-public-key", wrapPkcs11(module, bodyBudget, handleGetPublicKey))
+	mux.HandleFunc("/v1/find-keys", wrapPkcs11(module, bodyBudget, handleFindKeys))
 	return mux
 }
 
 type pkcs11Handler func(module Pkcs11Module, env *pkcs11RequestEnvelope) (any, error)
 
-const maxPkcs11RequestBodyBytes = 256 * 1024
+const (
+	maxPkcs11RequestBodyBytes  = 24 * 1024 * 1024
+	maxPkcs11InFlightBodyBytes = 64 * 1024 * 1024
+)
+
+func newPkcs11BodyBudget() *semaphore.Weighted {
+	return semaphore.NewWeighted(maxPkcs11InFlightBodyBytes)
+}
 
 func zeroBytes(b []byte) {
 	for i := range b {
@@ -196,7 +207,7 @@ func safeMessageForCode(code Pkcs11ErrorCode) string {
 	return "Operation failed"
 }
 
-func wrapPkcs11(module Pkcs11Module, fn pkcs11Handler) http.HandlerFunc {
+func wrapPkcs11(module Pkcs11Module, bodyBudget *semaphore.Weighted, fn pkcs11Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if r.Body != nil {
@@ -213,6 +224,19 @@ func wrapPkcs11(module Pkcs11Module, fn pkcs11Handler) http.HandlerFunc {
 			writeErrorResponse(w, http.StatusRequestEntityTooLarge, Pkcs11ErrBadRequest, "Request body too large")
 			return
 		}
+		bodyWeight := r.ContentLength
+		if bodyWeight <= 0 {
+			bodyWeight = maxPkcs11RequestBodyBytes
+		}
+		budgetCtx, cancelBudgetWait := context.WithTimeout(r.Context(), pkcs11BodyBudgetWait)
+		err := bodyBudget.Acquire(budgetCtx, bodyWeight)
+		cancelBudgetWait()
+		if err != nil {
+			log.Warn().Int64("contentLength", r.ContentLength).Msg("pkcs11: too many requests in flight")
+			writeErrorResponse(w, http.StatusServiceUnavailable, Pkcs11ErrDriverUnavailable, "The gateway is busy with other HSM requests")
+			return
+		}
+		defer bodyBudget.Release(bodyWeight)
 		r.Body = http.MaxBytesReader(w, r.Body, maxPkcs11RequestBodyBytes)
 		var env pkcs11RequestEnvelope
 		if err := json.NewDecoder(r.Body).Decode(&env); err != nil {
@@ -275,7 +299,7 @@ type keyRefParams struct {
 const (
 	maxKeyLabelLen   = 256
 	maxKeyIDBytes    = 128
-	maxSignDataBytes = 64 * 1024
+	maxSignDataBytes = 16 * 1024 * 1024
 )
 
 func handleTest(module Pkcs11Module, env *pkcs11RequestEnvelope) (any, error) {

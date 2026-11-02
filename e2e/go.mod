@@ -22,7 +22,7 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/compose v0.40.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.40.0
 	github.com/testcontainers/testcontainers-go/modules/redis v0.40.0
-	golang.org/x/crypto v0.57.0
+	golang.org/x/crypto v0.58.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -350,14 +350,14 @@ require (
 	go4.org v0.0.0-20230225012048-214862532bf5 // indirect
 	golang.org/x/exp v0.0.0-20250408133849-7e4ce0ab07d0 // indirect
 	golang.org/x/mod v0.41.0 // indirect
-	golang.org/x/net v0.60.0 // indirect
+	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/sync v0.23.0 // indirect
-	golang.org/x/sys v0.48.0 // indirect
-	golang.org/x/term v0.46.0 // indirect
-	golang.org/x/text v0.42.0 // indirect
+	golang.org/x/sync v0.24.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
+	golang.org/x/term v0.47.0 // indirect
+	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
-	golang.org/x/tools v0.49.0 // indirect
+	golang.org/x/tools v0.51.0 // indirect
 	google.golang.org/api v0.267.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
@@ -389,3 +389,5 @@ replace github.com/Infisical/infisical-merge => ../
 replace github.com/ClickHouse/ch-go => github.com/Infisical/ch-go v0.74.1-0.20261002151420-508f99a1ef44
 
 replace github.com/zalando/go-keyring => github.com/Infisical/go-keyring v1.0.2
+
+replace github.com/masterzen/winrm => github.com/Infisical/winrm v0.0.0-20261023194427-b255ce1c3d5e
