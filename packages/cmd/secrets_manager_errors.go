@@ -303,7 +303,7 @@ func exitWithError(cmd *cobra.Command, err error, messages ...string) {
 		// The text format has no room for the request ID, which support asks for.
 		var apiErr *api.APIError
 		if errors.As(cliErr.Cause, &apiErr) && apiErr.ReqId != "" {
-			log.Debug().Msgf("request ID: %s", apiErr.ReqId)
+			log.Debug().Msgf("request ID: %s", util.SanitizeDisplay(apiErr.ReqId))
 		}
 		util.WriteCLIError(util.GetStderrWriter(), cliErr, errorOutputFormat(cmd))
 		exitProcess(1)
