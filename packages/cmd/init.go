@@ -159,7 +159,7 @@ infisical init --project-id <project-id>`,
 		filteredWorkspaces, workspaceNames := util.GetWorkspacesInOrganization(workspaceResponse, selectedOrgID, selectedSubOrgName)
 
 		prompt := promptui.Select{
-			Label: "Select the secret management project to link this directory to",
+			Label: promptLabel("Select the secret management project to link this directory to"),
 			Items: workspaceNames,
 			Size:  7,
 		}
@@ -226,7 +226,7 @@ func offerDirectoryProfileBinding(profileName string) {
 	}
 
 	prompt := promptui.Select{
-		Label: fmt.Sprintf("Bind this directory to profile '%s'? Commands run here will then select it automatically. Select[Yes/No]", profileName),
+		Label: promptLabel(fmt.Sprintf("Bind this directory to profile '%s'? Commands run here will then select it automatically. Select[Yes/No]", profileName)),
 		Items: []string{"No", "Yes"},
 	}
 	_, result, err := prompt.Run()
@@ -302,7 +302,7 @@ func pickOrganization(httpClient *resty.Client, label string, username string) (
 	labels := util.BuildOrgRootLabels(orgs, subOrgsByOrgID)
 
 	prompt1 := promptui.Select{
-		Label: label,
+		Label: promptLabel(label),
 		Items: labels,
 		Size:  7,
 	}
@@ -321,7 +321,7 @@ func pickOrganization(httpClient *resty.Client, label string, username string) (
 	// Second prompt: root org itself or one of its sub-orgs
 	subItems, subLabels := util.BuildSubOrgPickerItems(selectedOrg.ID, selectedOrg.Name, subs)
 	prompt2 := promptui.Select{
-		Label: fmt.Sprintf("Select the root or sub-organization within %s", selectedOrg.Name),
+		Label: promptLabel(fmt.Sprintf("Select the root or sub-organization within %s", selectedOrg.Name)),
 		Items: subLabels,
 		Size:  7,
 	}
@@ -365,7 +365,7 @@ func writeWorkspaceFile(selectedWorkspace models.Workspace, showMessages bool) e
 
 func shouldOverrideWorkspacePrompt() (bool, error) {
 	prompt := promptui.Select{
-		Label: "A workspace config file already exists here. Would you like to override? Select[Yes/No]",
+		Label: promptLabel("A workspace config file already exists here. Would you like to override? Select[Yes/No]"),
 		Items: []string{"No", "Yes"},
 	}
 	_, result, err := prompt.Run()

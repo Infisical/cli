@@ -610,7 +610,7 @@ func overrideDefaultHooksPath(managedHook string) (bool, error) {
 
 	options := []string{YES, NO}
 	optionsPrompt := promptui.Select{
-		Label: fmt.Sprintf("Your hooks path is set to [%s] but needs to be [.git/hooks] for automatic configuration. Would you like to switch? ", managedHook),
+		Label: promptLabel(fmt.Sprintf("Your hooks path is set to [%s] but needs to be [.git/hooks] for automatic configuration. Would you like to switch? ", managedHook)),
 		Items: options,
 		Size:  2,
 	}
