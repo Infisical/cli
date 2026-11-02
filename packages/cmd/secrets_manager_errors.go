@@ -86,9 +86,11 @@ func (s errorScope) envFlag() string {
 	return " --env " + util.SuggestedValue(s.Environment, "env")
 }
 
+// secretScopeFlags repeats the folder even when it is /, because INFISICAL_SECRET_PATH or
+// .infisical.yaml would otherwise choose it when the suggestion runs.
 func (s errorScope) secretScopeFlags() string {
 	path := ""
-	if s.SecretPath != "" && s.SecretPath != "/" {
+	if s.SecretPath != "" {
 		path = " --path " + util.SuggestedValue(s.SecretPath, "path")
 	}
 	secretType := ""
@@ -204,7 +206,7 @@ func errFlagRequired(flag, value string) *util.CLIError {
 
 func errInvalidSecretType(secretType string) *util.CLIError {
 	return &util.CLIError{Code: errCodeInvalidFlagValue,
-		Message: fmt.Sprintf("--type must be %q or %q, not %q.", util.SECRET_TYPE_SHARED, util.SECRET_TYPE_PERSONAL, util.SanitizeDisplay(secretType))}
+		Message: fmt.Sprintf("--type must be %q or %q, not %s.", util.SECRET_TYPE_SHARED, util.SECRET_TYPE_PERSONAL, quoted(secretType, "type"))}
 }
 
 // errServiceTokenUnsupported names what the command can't do with a service token, the alternative

@@ -507,6 +507,27 @@ func TestSecretWriteRejectsAnUnknownType(t *testing.T) {
 		if strings.Contains(stderr, "<nil>") || !strings.Contains(stderr, `--type must be "shared" or "personal", not "team".`) {
 			t.Errorf("%s: %q", action, stderr)
 		}
+		pasted := "test secret value"
+		stderr, _, _ = runUnderSecretsManager(t, build, "secrets", action, "A=1", "--type", pasted, "--projectId", testProjectID)
+		if strings.Contains(stderr, pasted) || !strings.Contains(stderr, "not <type>.") {
+			t.Errorf("%s: a pasted --type value reached the error: %q", action, stderr)
+		}
+	}
+}
+
+// With a token, create and update fall back to .infisical.yaml like the other secrets-manager
+// commands, so with no project anywhere they say so with project_not_linked.
+func TestSecretWriteWithATokenAndNoProject(t *testing.T) {
+	build := func() *cobra.Command {
+		secretsCmd := buildSecretsCmd()
+		namespaceSecretsCmd(secretsCmd)
+		return secretsCmd
+	}
+	for _, action := range []string{"create", "update"} {
+		stderr, _, exited := runUnderSecretsManager(t, build, "secrets", action, "A=1", "-o", "json")
+		if !exited || errorCode(t, stderr) != errCodeProjectNotLinked {
+			t.Errorf("%s: exited=%v stderr=%s", action, exited, stderr)
+		}
 	}
 }
 
@@ -534,6 +555,17 @@ func TestSecretWriteErrorMapsToCodes(t *testing.T) {
 
 // Running the suggestion for a refused personal write must act on the personal override, never on the
 // shared secret with the same name.
+// INFISICAL_SECRET_PATH or .infisical.yaml would choose another folder when the suggestion runs, so
+// the root folder is repeated too.
+func TestSecretWriteSuggestionKeepsTheRootFolder(t *testing.T) {
+	scope := errorScope{ProjectID: testProjectID, Environment: "dev", SecretPath: "/"}
+	var cliErr *util.CLIError
+	errors.As(secretWriteError(&util.SecretWriteConflict{Mode: util.SecretWriteCreateOnly, Keys: []string{"A"}}, util.SecretWriteCreateOnly, scope), &cliErr)
+	if cliErr == nil || !strings.HasSuffix(cliErr.Next[0].Command, "=<value> --env dev --path / --projectId "+testProjectID) {
+		t.Errorf("got %+v", cliErr)
+	}
+}
+
 func TestSecretWriteSuggestionKeepsThePersonalType(t *testing.T) {
 	scope := errorScope{ProjectID: testProjectID, Environment: "dev", SecretType: util.SECRET_TYPE_PERSONAL}
 	for _, mode := range []util.SecretWriteMode{util.SecretWriteCreateOnly, util.SecretWriteUpdateOnly} {

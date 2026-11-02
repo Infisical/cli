@@ -39,7 +39,7 @@ func GetPlainTextSecretsViaServiceToken(fullServiceToken string, environment str
 
 	serviceTokenDetails, err := api.CallGetServiceTokenDetailsV2(httpClient)
 	if err != nil {
-		return nil, fmt.Errorf("unable to get service token details. [err=%v]", err)
+		return nil, fmt.Errorf("unable to get service token details. [err=%w]", err)
 	}
 
 	// if multiple scopes are there then user needs to specify which environment and secret path
@@ -556,10 +556,36 @@ func GetEnvelopmentBasedOnGitBranch(workspaceFile models.WorkspaceConfigFile) st
 	}
 }
 
+func isYAMLSecretsFile(fileName string) bool {
+	return strings.HasSuffix(fileName, ".yaml") || strings.HasSuffix(fileName, ".yml")
+}
+
+// repeatedDotenvKey is the first key that appears twice in a .env file, read the way parseSecrets
+// reads it, or "" when there's none.
+func repeatedDotenvKey(content string) string {
+	seen := map[string]bool{}
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") {
+			continue
+		}
+		key, _, found := strings.Cut(line, "=")
+		if !found {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		if seen[key] {
+			return key
+		}
+		seen[key] = true
+	}
+	return ""
+}
+
 func parseSecrets(fileName string, content string) (map[string]string, error) {
 	secrets := make(map[string]string)
 
-	if strings.HasSuffix(fileName, ".yaml") || strings.HasSuffix(fileName, ".yml") {
+	if isYAMLSecretsFile(fileName) {
 		// Handle YAML secrets
 		var yamlData map[string]interface{}
 		if err := yaml.Unmarshal([]byte(content), &yamlData); err != nil {
@@ -665,6 +691,13 @@ func WriteRawSecrets(mode SecretWriteMode, secretArgs []string, secretType strin
 				PrintErrorMessageAndExit("File does not exist")
 			}
 			return nil, fmt.Errorf("unable to process file [err=%v]", err)
+		}
+
+		// parseSecrets keeps the last of repeated .env keys, as set always has. YAML rejects them itself.
+		if mode != SecretWriteUpsert && !isYAMLSecretsFile(file) {
+			if key := repeatedDotenvKey(string(content)); key != "" {
+				return nil, &SecretWriteRepeated{Key: key}
+			}
 		}
 
 		parsedSecrets, err := parseSecrets(file, string(content))

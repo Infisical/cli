@@ -142,6 +142,12 @@ func projectsHTTPClient(cmd *cobra.Command) *resty.Client {
 // environment when there is one, and with the logged-in user's session otherwise. what names what a
 // service token can't do, for a command marked serviceTokenUnsupported.
 func secretsManagerHTTPClient(cmd *cobra.Command, what string) *resty.Client {
+	return secretsManagerHTTPClientRejecting(cmd, what, rejectsServiceTokens(cmd))
+}
+
+// secretsManagerHTTPClientRejecting is secretsManagerHTTPClient for a request whose route rejects
+// service tokens even though the command's other routes accept them, such as projects get by slug.
+func secretsManagerHTTPClientRejecting(cmd *cobra.Command, what string, rejectServiceTokens bool) *resty.Client {
 	token, err := util.GetInfisicalToken(cmd)
 	if err != nil {
 		util.HandleError(err, "Unable to parse flag")
@@ -152,11 +158,12 @@ func secretsManagerHTTPClient(cmd *cobra.Command, what string) *resty.Client {
 		util.HandleError(err, "Unable to get resty client with custom headers")
 	}
 
-	if ignoresEnvServiceToken(cmd, token) {
+	isServiceToken := token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER
+	if rejectServiceTokens && isServiceToken && !cmd.Flags().Changed("token") {
 		log.Debug().Msgf("Ignoring the service token from %s, which can't %s", token.Source, what)
-		token = nil
+		token, isServiceToken = nil, false
 	}
-	if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER && rejectsServiceTokens(cmd) {
+	if rejectServiceTokens && isServiceToken {
 		exitWithError(cmd, errServiceTokenUnsupported(what, "pass a machine identity access token with --token, or log in",
 			util.NextStep{Purpose: "To log in", Command: "infisical login"}))
 	}
@@ -285,12 +292,14 @@ func runProjectsGetBySlug(cmd *cobra.Command, slug, outputFormat string) {
 	if cmd.Flags().Changed("projectId") {
 		exitWithError(cmd, errProjectSlugAndID())
 	}
-	if token, _ := util.GetInfisicalToken(cmd); token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER {
+	// Only a service token passed with --token is refused; one in INFISICAL_TOKEN is ignored in favor of
+	// the login session, as the other project commands do.
+	if token, _ := util.GetInfisicalToken(cmd); token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER && cmd.Flags().Changed("token") {
 		exitWithError(cmd, errServiceTokenUnsupported("look up a project by slug", "pass --projectId instead, or use a machine identity access token",
 			util.NextStep{Purpose: "To get the project by its ID", Command: secretsManagerPrefix + " projects get --projectId <project-id>"}))
 	}
 
-	project := secretsManagerProjectBySlug(cmd, projectsHTTPClient(cmd), slug)
+	project := secretsManagerProjectBySlug(cmd, secretsManagerHTTPClientRejecting(cmd, "look up a project by slug", true), slug)
 	if outputFormat != "" {
 		printFormattedOutput(outputFormat, project.ProjectDetails)
 	} else {

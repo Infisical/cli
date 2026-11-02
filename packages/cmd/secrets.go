@@ -253,6 +253,13 @@ func runSecretsWrite(cmd *cobra.Command, args []string, mode util.SecretWriteMod
 
 	var secretOperations []models.SecretSetOperation
 	if token != nil && (token.Type == util.SERVICE_TOKEN_IDENTIFIER || token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER) {
+		// set has always required --projectId with a token. create and update also read .infisical.yaml,
+		// like every other secrets-manager command.
+		if projectId == "" && mode != util.SecretWriteUpsert {
+			if projectId = resolveProjectID(cmd); projectId == "" {
+				exitWithError(cmd, errProjectNotLinked())
+			}
+		}
 		if projectId == "" {
 			util.PrintErrorMessageAndExit("When using service tokens or machine identities, you must set the --projectId flag")
 		}
