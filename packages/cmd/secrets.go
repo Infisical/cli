@@ -200,8 +200,11 @@ func runSecretsWrite(cmd *cobra.Command, args []string, mode util.SecretWriteMod
 	secretsPath := util.ResolveSecretPath(cmd)
 
 	secretType, err := cmd.Flags().GetString("type")
-	if err != nil || (secretType != util.SECRET_TYPE_SHARED && secretType != util.SECRET_TYPE_PERSONAL) {
+	if err != nil {
 		util.HandleError(err, "Unable to parse secret type")
+	}
+	if secretType != util.SECRET_TYPE_SHARED && secretType != util.SECRET_TYPE_PERSONAL {
+		exitWithError(cmd, errInvalidSecretType(secretType))
 	}
 
 	outputFormat, err := cmd.Flags().GetString("output")

@@ -157,7 +157,8 @@ func secretsManagerHTTPClient(cmd *cobra.Command, what string) *resty.Client {
 		token = nil
 	}
 	if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER && rejectsServiceTokens(cmd) {
-		util.PrintErrorMessageAndExit(fmt.Sprintf("Service tokens can't %s. Pass a machine identity access token with --token, or log in with [infisical login].", what))
+		exitWithError(cmd, errServiceTokenUnsupported(what, "pass a machine identity access token with --token, or log in",
+			util.NextStep{Purpose: "To log in", Command: "infisical login"}))
 	}
 
 	if token != nil {
@@ -237,12 +238,14 @@ func runProjectsGet(cmd *cobra.Command, args []string) {
 
 	projectID := resolveProjectID(cmd)
 	if projectID == "" {
-		util.PrintErrorMessageAndExit("Please either run infisical init to connect to a project, or pass in project id with --projectId flag (see [infisical secrets-manager projects list])")
+		exitWithError(cmd, errProjectNotLinked())
 	}
 
 	project, err := api.CallGetProject(projectsHTTPClient(cmd), projectID)
 	if err != nil {
-		util.HandleError(err, "Unable to get the project")
+		exitWithError(cmd, classifyAPIError(err, errorScope{ProjectID: projectID}, func(cause error) *util.CLIError {
+			return errProjectNotFound(errorScope{ProjectID: projectID}, cause)
+		}), "Unable to get the project")
 	}
 	if project.Type != "" && project.Type != secretManagerProjectType {
 		exitWithError(cmd, errProjectTypeNotSupported(project.Name, project.Type))
@@ -283,7 +286,8 @@ func runProjectsGetBySlug(cmd *cobra.Command, slug, outputFormat string) {
 		exitWithError(cmd, errProjectSlugAndID())
 	}
 	if token, _ := util.GetInfisicalToken(cmd); token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER {
-		util.PrintErrorMessageAndExit("Service tokens can't look up a project by slug. Pass --projectId instead, or use a machine identity access token.")
+		exitWithError(cmd, errServiceTokenUnsupported("look up a project by slug", "pass --projectId instead, or use a machine identity access token",
+			util.NextStep{Purpose: "To get the project by its ID", Command: secretsManagerPrefix + " projects get --projectId <project-id>"}))
 	}
 
 	project := secretsManagerProjectBySlug(cmd, projectsHTTPClient(cmd), slug)

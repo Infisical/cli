@@ -75,6 +75,7 @@ With `-o json`, the same error is JSON on stderr:
 | `environment_exists` | `environments create` (or `update --slug`) with a slug an active environment has. Nothing is written |
 | `environment_pending_deletion` | The slug belongs to an environment pending deletion, which keeps it until the grace period ends. Suggests `delete --force` |
 | `invalid_flag_value` | A flag is missing or was given a value the command can't use, such as an empty `--name`. Nothing is sent |
+| `service_token_not_supported` | A service token was used with a command whose API routes reject service tokens. Suggests the alternative that works |
 | `invalid_argument` | An argument the command can't use, such as the same secret name given twice to `secrets create`. Nothing is written |
 | `project_delete_protected` | `projects delete` on a project with delete protection on, read from its settings. Nothing is deleted |
 | `project_required` | A delete ran without `--projectId`. Deletes never use `INFISICAL_PROJECT_ID` or `.infisical.yaml` |

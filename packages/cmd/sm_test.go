@@ -492,6 +492,24 @@ func TestSecretsCreateAndUpdateTakeSetFlags(t *testing.T) {
 	}
 }
 
+func TestSecretWriteRejectsAnUnknownType(t *testing.T) {
+	build := func() *cobra.Command {
+		secretsCmd := buildSecretsCmd()
+		namespaceSecretsCmd(secretsCmd)
+		return secretsCmd
+	}
+	for _, action := range []string{"set", "create", "update"} {
+		stderr, _, exited := runUnderSecretsManager(t, build, "secrets", action, "A=1", "--type", "team", "--projectId", testProjectID, "-o", "json")
+		if !exited || errorCode(t, stderr) != errCodeInvalidFlagValue {
+			t.Errorf("%s -o json: exited=%v stderr=%s", action, exited, stderr)
+		}
+		stderr, _, _ = runUnderSecretsManager(t, build, "secrets", action, "A=1", "--type", "team", "--projectId", testProjectID)
+		if strings.Contains(stderr, "<nil>") || !strings.Contains(stderr, `--type must be "shared" or "personal", not "team".`) {
+			t.Errorf("%s: %q", action, stderr)
+		}
+	}
+}
+
 func TestSecretWriteErrorMapsToCodes(t *testing.T) {
 	scope := errorScope{ProjectID: testProjectID, Environment: "dev", SecretPath: "/app", SecretType: util.SECRET_TYPE_SHARED}
 	cases := map[util.SecretWriteMode]string{util.SecretWriteCreateOnly: errCodeSecretExists, util.SecretWriteUpdateOnly: errCodeSecretNotFound}

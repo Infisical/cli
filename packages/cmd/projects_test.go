@@ -148,6 +148,31 @@ func TestProjectsNotAMember(t *testing.T) {
 	}
 }
 
+// The --projectId path reports the same codes as the slug path.
+func TestProjectsGetByIDErrors(t *testing.T) {
+	stderr, _, exited := runProjects(t, &fakeProjectsAPI{}, "get", "--projectId", "00000000-0000-4000-8000-000000000000", "-o", "json")
+	if !exited || errorCode(t, stderr) != errCodeProjectNotFound {
+		t.Errorf("unknown ID: exited=%v stderr=%s", exited, stderr)
+	}
+	stderr, _, exited = runProjects(t, &fakeProjectsAPI{notMember: true}, "get", "--projectId", testProjectID, "-o", "json")
+	if !exited || errorCode(t, stderr) != errCodeProjectNotFound {
+		t.Errorf("not a member: exited=%v stderr=%s", exited, stderr)
+	}
+	fake := &fakeProjectsAPI{}
+	stderr, _, exited = runProjects(t, fake, "get", "-o", "json")
+	if !exited || errorCode(t, stderr) != errCodeProjectNotLinked || len(fake.requests) != 0 {
+		t.Errorf("no project: exited=%v requests=%v stderr=%s", exited, fake.requests, stderr)
+	}
+}
+
+func TestProjectsGetBySlugRejectsServiceTokens(t *testing.T) {
+	fake := &fakeProjectsAPI{}
+	stderr, _, exited := runProjects(t, fake, "get", "payments-api", "--token", "st.fake.service.token", "-o", "json")
+	if !exited || errorCode(t, stderr) != errCodeServiceTokenUnsupported || len(fake.requests) != 0 || strings.Contains(stderr, "st.fake") {
+		t.Errorf("exited=%v requests=%v stderr=%s", exited, fake.requests, stderr)
+	}
+}
+
 func TestProjectsCreate(t *testing.T) {
 	stderr, stdout, exited := runProjects(t, &fakeProjectsAPI{}, "create", "--name", "Payments API")
 	if exited || !strings.Contains(stderr, "Created project Payments API") || strings.Contains(stdout, "Created project") {

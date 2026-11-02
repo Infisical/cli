@@ -28,6 +28,7 @@ const (
 	errCodeProjectRequired         = "project_required"
 	errCodeInvalidFlagValue        = "invalid_flag_value"
 	errCodeInvalidArgument         = "invalid_argument"
+	errCodeServiceTokenUnsupported = "service_token_not_supported"
 	errCodeProjectDeleteProtected  = "project_delete_protected"
 	errCodeSecretExists            = "secret_exists"
 	errCodeSecretNotFound          = "secret_not_found"
@@ -42,7 +43,7 @@ var errorCodes = []string{
 	errCodeProjectTypeNotSupported, errCodeEnvironmentNotFound, errCodeSecretExists, errCodeSecretNotFound,
 	errCodeFolderNotFound, errCodeNothingToUpdate, errCodeConfirmationRequired, errCodeConfirmationDeclined,
 	errCodeEnvironmentExists, errCodeEnvironmentPending, errCodeProjectRequired, errCodeInvalidFlagValue,
-	errCodeProjectDeleteProtected, errCodeInvalidArgument,
+	errCodeProjectDeleteProtected, errCodeInvalidArgument, errCodeServiceTokenUnsupported,
 }
 
 const secretsManagerPrefix = "infisical " + secretsManagerCommandName
@@ -197,6 +198,19 @@ func errEmptyFlag(flag string) *util.CLIError {
 func errFlagRequired(flag, value string) *util.CLIError {
 	return &util.CLIError{Code: errCodeInvalidFlagValue,
 		Message: fmt.Sprintf("--%s is required: pass %s.", flag, value)}
+}
+
+func errInvalidSecretType(secretType string) *util.CLIError {
+	return &util.CLIError{Code: errCodeInvalidFlagValue,
+		Message: fmt.Sprintf("--type must be %q or %q, not %q.", util.SECRET_TYPE_SHARED, util.SECRET_TYPE_PERSONAL, util.SanitizeDisplay(secretType))}
+}
+
+// errServiceTokenUnsupported names what the command can't do with a service token, the alternative
+// that works, and the command for it.
+func errServiceTokenUnsupported(what, alternative string, next util.NextStep) *util.CLIError {
+	return &util.CLIError{Code: errCodeServiceTokenUnsupported,
+		Message: fmt.Sprintf("Service tokens can't %s: %s.", what, alternative),
+		Next:    []util.NextStep{next}}
 }
 
 func errSecretRepeated(name string) *util.CLIError {
