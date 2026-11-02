@@ -143,6 +143,9 @@ func dialSocks5(t *testing.T, addr string, outer *tls.Config, user, password, ho
 	if ip := net.ParseIP(host); ip != nil && ip.To4() != nil {
 		req = append(req, socks5AtypIPv4)
 		req = append(req, ip.To4()...)
+	} else if ip != nil {
+		req = append(req, socks5AtypIPv6)
+		req = append(req, ip.To16()...)
 	} else {
 		req = append(req, socks5AtypDomain, byte(len(host)))
 		req = append(req, host...)
@@ -644,5 +647,123 @@ func TestSocks5ForwardsAPlainHTTPExtensionMethod(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK || string(body) != "method=PROPFIND" {
 		t.Fatalf("status=%d body=%q, want 200 method=PROPFIND", resp.StatusCode, body)
+	}
+}
+
+// loginSocks5 opens TLS to the proxy and signs in, and returns the connection ready for a request.
+func loginSocks5(t *testing.T, f *socks5Fixture) net.Conn {
+	t.Helper()
+	conn, err := tls.Dial("tcp", f.addr, f.outerTLS())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	frame := []byte{5, 1, socks5MethodUserPass, 1, 1, 'x', byte(len(testSocks5Token))}
+	frame = append(frame, testSocks5Token...)
+	if _, err := conn.Write(frame); err != nil {
+		t.Fatal(err)
+	}
+	var replies [4]byte
+	if _, err := io.ReadFull(conn, replies[:]); err != nil {
+		t.Fatal(err)
+	}
+	if replies[3] != socks5AuthStatusOK {
+		t.Fatalf("login refused: %v", replies)
+	}
+	return conn
+}
+
+func TestSocks5RefusesAClientOfferingNoPassword(t *testing.T) {
+	f := newSocks5Fixture(t, resolverFunc(func() (*resolveResult, error) { return &resolveResult{SessionID: "s1"}, nil }), nil)
+	conn, err := tls.Dial("tcp", f.addr, f.outerTLS())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := conn.Write([]byte{5, 1, 0x00}); err != nil {
+		t.Fatal(err)
+	}
+	var method [2]byte
+	if _, err := io.ReadFull(conn, method[:]); err != nil {
+		t.Fatal(err)
+	}
+	if method != [2]byte{5, socks5MethodNone} {
+		t.Fatalf("method selection = %v, want [5 0xff]", method)
+	}
+}
+
+func TestSocks5RefusesBindWithCommandNotSupported(t *testing.T) {
+	f := newSocks5Fixture(t, resolverFunc(func() (*resolveResult, error) { return &resolveResult{SessionID: "s1"}, nil }), nil)
+	conn := loginSocks5(t, f)
+	if _, err := conn.Write([]byte{5, 0x02, 0, socks5AtypIPv4, 127, 0, 0, 1, 0, 80}); err != nil {
+		t.Fatal(err)
+	}
+	var reply [10]byte
+	if _, err := io.ReadFull(conn, reply[:]); err != nil {
+		t.Fatal(err)
+	}
+	if reply[1] != socks5RepCmdUnsup {
+		t.Fatalf("reply = %#x, want %#x", reply[1], socks5RepCmdUnsup)
+	}
+}
+
+func TestSocks5IgnoresTheClientsServerName(t *testing.T) {
+	f := newSocks5Fixture(t, resolverFunc(func() (*resolveResult, error) { return &resolveResult{SessionID: "s1"}, nil }), nil)
+	conn, err := tls.Dial("tcp", f.addr, &tls.Config{ServerName: "evil.example", InsecureSkipVerify: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	leaf := conn.ConnectionState().PeerCertificates[0]
+	if len(leaf.DNSNames) != 0 || len(leaf.IPAddresses) != 1 || !leaf.IPAddresses[0].Equal(net.ParseIP("127.0.0.1")) {
+		t.Fatalf("leaf names = %v %v, want only the --socks5-tls-name 127.0.0.1", leaf.DNSNames, leaf.IPAddresses)
+	}
+}
+
+func TestSocks5RefusesAnInvalidHostName(t *testing.T) {
+	f := newSocks5Fixture(t, resolverFunc(func() (*resolveResult, error) {
+		return &resolveResult{SessionID: "s1", Services: []*resolvedService{bearerService("*.example.com")}}, nil
+	}), nil)
+	for _, host := range []string{"x/.example.com", "a b.example.com", "x\r\nInjected: 1.example.com"} {
+		conn, _, rep := dialSocks5(t, f.addr, f.outerTLS(), "x", testSocks5Token, host, 443)
+		if conn != nil {
+			conn.Close()
+			t.Fatalf("%q: tunnel opened, want a refusal", host)
+		}
+		if rep != socks5RepFailure {
+			t.Fatalf("%q: reply = %#x, want %#x", host, rep, socks5RepFailure)
+		}
+	}
+}
+
+func TestSocks5BrokersARequestToAnIPv6Target(t *testing.T) {
+	listener, err := net.Listen("tcp", "[::1]:0")
+	if err != nil {
+		t.Skipf("no IPv6 loopback: %v", err)
+	}
+	upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprintf(w, "injected=%s", r.Header.Get("X-Injected"))
+	}))
+	upstream.Listener = listener
+	upstream.StartTLS()
+	t.Cleanup(upstream.Close)
+	u, _ := url.Parse(upstream.URL)
+	port, _ := strconv.Atoi(u.Port())
+
+	f := newSocks5Fixture(t, resolverFunc(func() (*resolveResult, error) {
+		return &resolveResult{SessionID: "s1", Services: []*resolvedService{bearerService("[::1]:" + u.Port())}}, nil
+	}), func(ps *proxyServer, _ *Socks5Options, _ *socks5Server) {
+		pool := x509.NewCertPool()
+		pool.AddCert(upstream.Certificate())
+		transport := newUpstreamTransport()
+		transport.TLSClientConfig = &tls.Config{RootCAs: pool}
+		ps.transport = transport
+	})
+
+	status, body := f.get(t, "::1", uint16(port))
+	if status != http.StatusOK || body != "injected=s3cr3t" {
+		t.Fatalf("status=%d body=%s, want the injected credential", status, body)
 	}
 }

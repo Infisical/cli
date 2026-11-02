@@ -157,8 +157,18 @@ func FuzzSocks5Request(f *testing.F) {
 		if req.host == "" || req.port == 0 || req.cmd != socks5CmdConnect {
 			t.Fatalf("accepted an incomplete request: %+v", req)
 		}
-		if consumed := len(data) - r.Len(); consumed > len(data) {
-			t.Fatal("read past the input")
+		// A parser that read one byte too many would eat the start of the tunnel's own traffic.
+		frame := 4 + 2
+		switch data[3] {
+		case socks5AtypIPv4:
+			frame += 4
+		case socks5AtypIPv6:
+			frame += 16
+		case socks5AtypDomain:
+			frame += 1 + int(data[4])
+		}
+		if consumed := len(data) - r.Len(); consumed != frame {
+			t.Fatalf("consumed %d bytes, want the %d-byte request", consumed, frame)
 		}
 	})
 }

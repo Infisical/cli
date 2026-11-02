@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"golang.org/x/net/http/httpguts"
 )
 
 // Socks5Options turns on a TLS-wrapped SOCKS5 listener beside the HTTP one, for clients such as E2B that
@@ -312,7 +313,6 @@ func (s *socks5Server) handle(raw net.Conn) {
 		return
 	}
 
-	_ = raw.SetDeadline(time.Time{})
 	_, err = s.ps.cache.get(sessionToken)
 	_ = raw.SetDeadline(time.Now().Add(s.stepTimeout))
 	if err != nil {
@@ -336,6 +336,12 @@ func (s *socks5Server) handle(raw net.Conn) {
 			_ = writeSocks5Reply(conn, rep)
 		}
 		log.Debug().Err(err).Str("door", "socks5").Str("remote", remote).Msg("agent-vault: SOCKS5 request refused")
+		return
+	}
+	// The HTTP door gets this check from net/http before a target reaches the matcher or the leaf minting.
+	if !httpguts.ValidHostHeader(req.host) {
+		_ = writeSocks5Reply(conn, socks5RepFailure)
+		log.Debug().Str("door", "socks5").Str("remote", remote).Msg("agent-vault: SOCKS5 request refused, the host isn't a valid host name")
 		return
 	}
 	hostname, port, err := checkedTarget(req.host, strconv.Itoa(int(req.port)))
