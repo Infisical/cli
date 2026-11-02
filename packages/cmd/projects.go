@@ -73,6 +73,7 @@ infisical secrets-manager projects get`,
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.MaximumNArgs(1),
 		Run:                   runProjectsGet,
+		Annotations:           serviceTokenUnsupportedWithArgs,
 	}
 	getCmd.Flags().String("projectId", "", "project id (falls back to INFISICAL_PROJECT_ID, then .infisical.yaml or a legacy .infisical.json)")
 	getCmd.Flags().String("token", "", "Get the project using a machine identity access token")
@@ -124,14 +125,22 @@ const serviceTokenAnnotation = "infisical.serviceToken"
 // annotation rather than a list of command paths so it holds under every alias of the command.
 var serviceTokenUnsupported = map[string]string{serviceTokenAnnotation: "unsupported"}
 
+// serviceTokenUnsupportedWithArgs marks a command that accepts service tokens on its own but not when
+// given a positional target, such as projects get <slug>, whose lookup route rejects them.
+var serviceTokenUnsupportedWithArgs = map[string]string{serviceTokenAnnotation: "unsupported-with-args"}
+
 func rejectsServiceTokens(cmd *cobra.Command) bool {
 	return cmd.Annotations[serviceTokenAnnotation] == "unsupported"
 }
 
+func rejectsServiceTokensFor(cmd *cobra.Command, args []string) bool {
+	return rejectsServiceTokens(cmd) || (cmd.Annotations[serviceTokenAnnotation] == "unsupported-with-args" && len(args) > 0)
+}
+
 // Reports whether cmd will skip token and use the login session instead,
 // so the root command doesn't warn that the token overrides the session.
-func ignoresEnvServiceToken(cmd *cobra.Command, token *models.TokenDetails) bool {
-	return token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER && !cmd.Flags().Changed("token") && rejectsServiceTokens(cmd)
+func ignoresEnvServiceToken(cmd *cobra.Command, args []string, token *models.TokenDetails) bool {
+	return token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER && !cmd.Flags().Changed("token") && rejectsServiceTokensFor(cmd, args)
 }
 
 func projectsHTTPClient(cmd *cobra.Command) *resty.Client {

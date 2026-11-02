@@ -8,6 +8,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/Infisical/infisical-merge/packages/models"
+	"github.com/Infisical/infisical-merge/packages/util"
 )
 
 // fakeProjectsAPI answers GET /v1/projects/slug/:slug, GET /v1/projects/:id, DELETE /v1/projects/:id
@@ -246,5 +249,28 @@ func TestProjectsDeleteSendsWhatWasAskedFor(t *testing.T) {
 func TestProjectsDeleteRejectsServiceTokens(t *testing.T) {
 	if !rejectsServiceTokens(findCommand(t, smPath([]string{"projects", "delete"}))) {
 		t.Error("projects delete should be marked serviceTokenUnsupported")
+	}
+}
+
+// The root's "session is being overwritten" warning and the slug lookup must agree on when a service
+// token from INFISICAL_TOKEN is set aside: only for projects get <slug>, never for a lookup by ID, and
+// never for one passed with --token.
+func TestProjectsGetIgnoresAnEnvServiceTokenOnlyForASlug(t *testing.T) {
+	envToken := &models.TokenDetails{Type: util.SERVICE_TOKEN_IDENTIFIER, Token: "st.a.b.c", Source: "INFISICAL_TOKEN environment variable"}
+	get, _, err := buildProjectsCmd().Find([]string{"get"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ignoresEnvServiceToken(get, []string{"payments-api"}, envToken) {
+		t.Error("projects get <slug> should use the session, so the root must not warn about the token")
+	}
+	if ignoresEnvServiceToken(get, nil, envToken) {
+		t.Error("projects get by ID still accepts service tokens")
+	}
+	if err := get.ParseFlags([]string{"--token", "st.a.b.c"}); err != nil {
+		t.Fatal(err)
+	}
+	if ignoresEnvServiceToken(get, []string{"payments-api"}, envToken) {
+		t.Error("a service token passed with --token is refused, not ignored")
 	}
 }
