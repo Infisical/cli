@@ -35,6 +35,8 @@ type APIError struct {
 	StatusCode        int      `json:"statusCode"`
 	ErrorMessage      string   `json:"message,omitempty"`
 	ReqId             string   `json:"reqId,omitempty"`
+	// Infisical sets it only on its route-not-found body, which tells a missing route from a missing resource.
+	DocumentationURL string `json:"documentationUrl,omitempty"`
 }
 
 func (e APIError) Error() string {
@@ -107,6 +109,13 @@ func NewAPIErrorWithResponse(operation string, res *resty.Response, additionalCo
 
 	if details != nil {
 		apiError.Details = details
+	}
+
+	var documented struct {
+		DocumentationURL string `json:"documentationUrl"`
+	}
+	if json.Unmarshal(res.Body(), &documented) == nil {
+		apiError.DocumentationURL = documented.DocumentationURL
 	}
 
 	if res.StatusCode() == 403 || res.StatusCode() == 401 {
