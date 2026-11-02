@@ -285,7 +285,11 @@ func (ps *proxyServer) serveIntercepted(conn net.Conn, t tunnel, leaf tls.Certif
 	_ = conn.SetDeadline(time.Now().Add(tlsHandshakeTimeout))
 	first, err := buffered.reader.Peek(1)
 	if err != nil {
-		// Nothing arrived: a protocol where the server speaks first, such as SMTP or MySQL.
+		if errors.Is(err, io.EOF) {
+			ps.warnNotWebTraffic(t, "the client closed the connection without sending anything")
+			return
+		}
+		// Nothing arrived in time: a protocol where the server speaks first, such as SMTP or MySQL.
 		ps.warnNotWebTraffic(t, "the client sent nothing")
 		return
 	}

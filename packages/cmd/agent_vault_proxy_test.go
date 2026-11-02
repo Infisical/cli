@@ -197,6 +197,7 @@ func TestAgentVaultProxyListenHostTakesAHostOnly(t *testing.T) {
 		{"127.0.0.1:17323", "", true},
 		{"[::1]:17323", "", true},
 		{"localhost:80", "", true},
+		{"http://127.0.0.1", "", true},
 	} {
 		t.Run(tc.value, func(t *testing.T) {
 			in, err := readProxyInputs(t, nil, "--listen-host", tc.value)
@@ -260,7 +261,10 @@ func TestAgentVaultProxySocks5Validation(t *testing.T) {
 		{"port 0", nil, []string{"--socks5-port", "0", "--socks5-tls-name", "p.example.com"}, "must be between 1 and 65535"},
 		{"port out of range", nil, []string{"--socks5-port", "70000", "--socks5-tls-name", "p.example.com"}, "must be between 1 and 65535"},
 		{"port from env not a number", map[string]string{"INFISICAL_AGENT_VAULT_SOCKS5_PORT": "x"}, nil, "must be a whole number"},
-		{"same port as HTTP", nil, []string{"--socks5-port", "17323", "--socks5-tls-name", "p.example.com"}, "can't be the same port"},
+		{"same port as HTTP", nil, []string{"--socks5-port", "17323", "--socks5-tls-name", "p.example.com"}, "--socks5-port and --port can't be the same port"},
+		{"same port as HTTP from env", map[string]string{"INFISICAL_AGENT_VAULT_PORT": "1080"}, []string{"--socks5-port", "1080", "--socks5-tls-name", "p.example.com"}, "--socks5-port and INFISICAL_AGENT_VAULT_PORT can't be the same port"},
+		{"TLS name with a scheme", nil, []string{"--socks5-port", "1080", "--socks5-tls-name", "https://p.example.com"}, "without a scheme such as https://"},
+		{"TLS name and own certificate", nil, []string{"--socks5-port", "1080", "--socks5-tls-name", "p.example.com", "--socks5-tls-cert", certPEM, "--socks5-tls-key", keyPEM}, "pass --socks5-tls-name or --socks5-tls-cert and --socks5-tls-key, not both"},
 		{"no TLS name and no certificate", nil, []string{"--socks5-port", "1080"}, "needs --socks5-tls-name"},
 		{"TLS name with a port", nil, []string{"--socks5-port", "1080", "--socks5-tls-name", "p.example.com:1080"}, "takes a host only"},
 		{"wildcard TLS name", nil, []string{"--socks5-port", "1080", "--socks5-tls-name", "*.example.com"}, "must be a DNS name or an IP address"},

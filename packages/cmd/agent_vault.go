@@ -116,6 +116,7 @@ type agentVaultProxyInputs struct {
 	proxyToken string
 	dataDir    string
 	port       int
+	portSource string
 	listenHost string
 	ownCa      *agentvault.OwnCa
 	socks5     *agentvault.Socks5Options
@@ -146,7 +147,7 @@ func readAgentVaultProxyInputs(cmd *cobra.Command) (agentVaultProxyInputs, error
 	if port < 0 || port > 65535 {
 		return in, fmt.Errorf("%s must be between 0 and 65535, got %d. 0 asks for any free port", portSource, port)
 	}
-	in.port = port
+	in.port, in.portSource = port, portSource
 
 	listenHost, listenHostSource, err := agentVaultFlagOrEnv(cmd, "listen-host", "INFISICAL_AGENT_VAULT_LISTEN_HOST")
 	if err != nil {
@@ -233,7 +234,7 @@ func readAgentVaultSocks5Inputs(cmd *cobra.Command, in *agentVaultProxyInputs) (
 		return nil, fmt.Errorf("%s must be between 1 and 65535, got %d", portSource, port)
 	}
 	if port == in.port {
-		return nil, fmt.Errorf("%s and --port can't be the same port (%d)", portSource, port)
+		return nil, fmt.Errorf("%s and %s can't be the same port (%d)", portSource, in.portSource, port)
 	}
 
 	opts := &agentvault.Socks5Options{Port: port, AllowPrivateDestinations: allowPrivate}
@@ -242,6 +243,9 @@ func readAgentVaultSocks5Inputs(cmd *cobra.Command, in *agentVaultProxyInputs) (
 		return nil, errors.New("--socks5-tls-cert and --socks5-tls-key go together")
 	}
 	if tlsCert != "" {
+		if tlsName != "" {
+			return nil, fmt.Errorf("pass %s or %s and %s, not both", tlsNameSource, tlsCertSource, tlsKeySource)
+		}
 		if tlsKeySource == "--socks5-tls-key" && strings.Contains(tlsKey, "-----BEGIN ") {
 			in.warnings = append(in.warnings, "--socks5-tls-key is visible in the process list; prefer the env var INFISICAL_AGENT_VAULT_SOCKS5_TLS_KEY")
 		}
@@ -282,6 +286,9 @@ func socks5TLSName(raw, source string) (string, error) {
 // in, and refuses a value that also names a port, since the port has a flag of its own.
 func hostOnly(raw, source string) (string, error) {
 	host := strings.TrimSpace(raw)
+	if strings.Contains(host, "://") {
+		return "", fmt.Errorf("%s takes a host only, without a scheme such as https://, got %q", source, raw)
+	}
 	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
 		host = host[1 : len(host)-1]
 	}
