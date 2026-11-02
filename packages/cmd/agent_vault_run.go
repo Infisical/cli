@@ -378,7 +378,7 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		}
 		httpClient.SetAuthToken(identity)
 
-		created, mintErr := api.CallCreateAgentVaultSession(httpClient, api.CreateAgentVaultSessionRequest{AccessBundles: accessBundles, TTL: ttl})
+		created, mintErr := api.CallCreateAgentVaultSession(httpClient, api.CreateAgentVaultSessionRequest{AccessBundle: accessBundles[0], TTL: ttl})
 		if mintErr != nil {
 			util.HandleError(mintErr, "Unable to mint an Agent Vault session")
 		}

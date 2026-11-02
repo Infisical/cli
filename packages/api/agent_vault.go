@@ -174,8 +174,8 @@ func CallCreateAgentVaultSessionLogChunk(ctx context.Context, httpClient *resty.
 }
 
 type CreateAgentVaultSessionRequest struct {
-	AccessBundles []string `json:"accessBundles"`
-	TTL           string   `json:"ttl"`
+	AccessBundle string `json:"accessBundle"`
+	TTL          string `json:"ttl"`
 }
 
 type AgentVaultSession struct {
