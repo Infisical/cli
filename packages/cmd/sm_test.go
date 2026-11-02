@@ -436,3 +436,74 @@ func TestDescribeDeletesNamesTheWorkspaceFile(t *testing.T) {
 		t.Errorf("%+v", action)
 	}
 }
+
+// Under secrets-manager, `get` without names lists and create/update join the upsert `set`, which is
+// hidden. The top-level `infisical secrets` keeps its old shape.
+func TestSecretsManagerSecretsShape(t *testing.T) {
+	for _, prefix := range []string{secretsManagerCommandName, secretsManagerAlias} {
+		for _, action := range []string{"create", "update"} {
+			if cmd, _, err := RootCmd.Find([]string{prefix, "secrets", action}); err != nil || cmd.Name() != action {
+				t.Errorf("%s secrets %s should exist: %v", prefix, action, err)
+			}
+		}
+		get, _, _ := RootCmd.Find([]string{prefix, "secrets", "get"})
+		if err := get.Args(get, nil); err != nil {
+			t.Errorf("%s secrets get should accept no names: %v", prefix, err)
+		}
+	}
+
+	for _, action := range []string{"create", "update"} {
+		if cmd, _, _ := RootCmd.Find([]string{"secrets", action}); cmd.Name() == action {
+			t.Errorf("top-level secrets %s must not be added", action)
+		}
+	}
+	topGet := findCommand(t, []string{"secrets", "get"})
+	if topGet.Args(topGet, nil) == nil {
+		t.Error("top-level secrets get must still require names")
+	}
+	if findCommand(t, []string{"secrets", "set"}).Hidden {
+		t.Error("top-level secrets set must stay visible")
+	}
+}
+
+// create and update read the same flags as set, through the same code. Only the descriptions differ.
+func TestSecretsCreateAndUpdateTakeSetFlags(t *testing.T) {
+	withoutUsage := func(signatures map[string]string) map[string]string {
+		for flag, signature := range signatures {
+			parts := strings.SplitN(signature, "|", 4)
+			signatures[flag] = strings.Join(parts[:3], "|")
+		}
+		return signatures
+	}
+	set := withoutUsage(flagSignature(findCommand(t, smPath([]string{"secrets", "set"})).LocalFlags()))
+	for _, action := range []string{"create", "update"} {
+		got := withoutUsage(flagSignature(findCommand(t, smPath([]string{"secrets", action})).LocalFlags()))
+		for flag, signature := range set {
+			if got[flag] != signature {
+				t.Errorf("secrets %s --%s: got %q, set has %q", action, flag, got[flag], signature)
+			}
+		}
+		for flag := range got {
+			if _, ok := set[flag]; !ok {
+				t.Errorf("secrets %s has --%s, which set doesn't", action, flag)
+			}
+		}
+	}
+}
+
+func TestSecretWriteConflictMapsToCodes(t *testing.T) {
+	scope := errorScope{ProjectID: testProjectID, Environment: "dev", SecretPath: "/app"}
+	cases := map[util.SecretWriteMode]string{util.SecretWriteCreateOnly: errCodeSecretExists, util.SecretWriteUpdateOnly: errCodeSecretNotFound}
+	for mode, code := range cases {
+		err := secretWriteConflict(&util.SecretWriteConflict{Mode: mode, Keys: []string{"A", "B"}}, scope)
+		var cliErr *util.CLIError
+		if !errors.As(err, &cliErr) || cliErr.Code != code || !strings.Contains(cliErr.Message, `"A", "B"`) ||
+			!strings.Contains(cliErr.Next[0].Command, "--env dev --path /app --projectId "+testProjectID) {
+			t.Errorf("mode %d: got %+v", mode, err)
+		}
+	}
+	other := errors.New("network down")
+	if secretWriteConflict(other, scope) != other {
+		t.Error("other errors must pass through unchanged, so set prints them as before")
+	}
+}

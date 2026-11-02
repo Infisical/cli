@@ -265,6 +265,17 @@ type CreateProjectResponse struct {
 	Project ProjectDetails `json:"project"`
 }
 
+// ProjectSettings adds what a delete has to respect to ProjectDetails. It is a separate type so
+// `projects get -o json` keeps its shape.
+type ProjectSettings struct {
+	ProjectDetails
+	HasDeleteProtection bool `json:"hasDeleteProtection"`
+}
+
+type DeleteProjectResponse struct {
+	Project ProjectDetails `json:"project"`
+}
+
 // Environment is a project environment as the /v1/projects/:projectId/environments endpoints return
 // it. DeleteAfter is set once it is soft-deleted, and is when it will be permanently deleted.
 type Environment struct {

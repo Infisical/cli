@@ -705,6 +705,11 @@
     "slug": "|string|",
     "token": "|string|"
   },
+  "infisical secrets-manager project delete": {
+    "output": "o|string|",
+    "token": "|string|",
+    "yes": "y|bool|false"
+  },
   "infisical secrets-manager project get": {
     "output": "o|string|",
     "projectId": "|string|",
@@ -721,6 +726,11 @@
     "output": "o|string|",
     "slug": "|string|",
     "token": "|string|"
+  },
+  "infisical secrets-manager projects delete": {
+    "output": "o|string|",
+    "token": "|string|",
+    "yes": "y|bool|false"
   },
   "infisical secrets-manager projects get": {
     "output": "o|string|",
@@ -804,6 +814,18 @@
     "tags": "t|string|",
     "unmatched-host": "|string|allow"
   },
+  "infisical secrets-manager secrets create": {
+    "env": "|string|dev",
+    "file": "|string|",
+    "output": "o|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "show-values": "|bool|false",
+    "tag": "|stringArray|[]",
+    "tags": "t|string|",
+    "token": "|string|",
+    "type": "|string|shared"
+  },
   "infisical secrets-manager secrets delete": {
     "env": "|string|dev",
     "output": "o|string|",
@@ -867,6 +889,18 @@
     "token": "|string|"
   },
   "infisical secrets-manager secrets set": {
+    "env": "|string|dev",
+    "file": "|string|",
+    "output": "o|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "show-values": "|bool|false",
+    "tag": "|stringArray|[]",
+    "tags": "t|string|",
+    "token": "|string|",
+    "type": "|string|shared"
+  },
+  "infisical secrets-manager secrets update": {
     "env": "|string|dev",
     "file": "|string|",
     "output": "o|string|",
@@ -1048,6 +1082,11 @@
     "slug": "|string|",
     "token": "|string|"
   },
+  "infisical sm project delete": {
+    "output": "o|string|",
+    "token": "|string|",
+    "yes": "y|bool|false"
+  },
   "infisical sm project get": {
     "output": "o|string|",
     "projectId": "|string|",
@@ -1064,6 +1103,11 @@
     "output": "o|string|",
     "slug": "|string|",
     "token": "|string|"
+  },
+  "infisical sm projects delete": {
+    "output": "o|string|",
+    "token": "|string|",
+    "yes": "y|bool|false"
   },
   "infisical sm projects get": {
     "output": "o|string|",
@@ -1147,6 +1191,18 @@
     "tags": "t|string|",
     "unmatched-host": "|string|allow"
   },
+  "infisical sm secrets create": {
+    "env": "|string|dev",
+    "file": "|string|",
+    "output": "o|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "show-values": "|bool|false",
+    "tag": "|stringArray|[]",
+    "tags": "t|string|",
+    "token": "|string|",
+    "type": "|string|shared"
+  },
   "infisical sm secrets delete": {
     "env": "|string|dev",
     "output": "o|string|",
@@ -1210,6 +1266,18 @@
     "token": "|string|"
   },
   "infisical sm secrets set": {
+    "env": "|string|dev",
+    "file": "|string|",
+    "output": "o|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "show-values": "|bool|false",
+    "tag": "|stringArray|[]",
+    "tags": "t|string|",
+    "token": "|string|",
+    "type": "|string|shared"
+  },
+  "infisical sm secrets update": {
     "env": "|string|dev",
     "file": "|string|",
     "output": "o|string|",

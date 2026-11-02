@@ -63,14 +63,15 @@ infisical secrets-manager projects list --token <access-token>`,
 	projectsCmd.AddCommand(listCmd)
 
 	getCmd := &cobra.Command{
-		Use:   "get",
+		Use:   "get [slug]",
 		Short: "Show a project and its environments",
-		Example: `infisical secrets-manager projects get --projectId=<project-id>
+		Example: `infisical secrets-manager projects get my-app
+infisical secrets-manager projects get --projectId=<project-id>
 
 # The project this directory is linked to with infisical init
 infisical secrets-manager projects get`,
 		DisableFlagsInUseLine: true,
-		Args:                  cobra.NoArgs,
+		Args:                  cobra.MaximumNArgs(1),
 		Run:                   runProjectsGet,
 	}
 	getCmd.Flags().String("projectId", "", "project id (falls back to INFISICAL_PROJECT_ID, then .infisical.yaml or a legacy .infisical.json)")
@@ -96,6 +97,23 @@ infisical secrets-manager projects create --name my-app --description "Backend s
 	createCmd.Flags().String("token", "", "Create the project using a machine identity access token")
 	addProjectsOutputFlag(createCmd, "The output to format the created project in")
 	projectsCmd.AddCommand(createCmd)
+
+	deleteCmd := &cobra.Command{
+		Use:   "delete <slug>",
+		Short: "Delete a Secrets Management project and all of its environments and secrets",
+		Example: `infisical secrets-manager projects delete my-app
+
+# Delete without asking for confirmation
+infisical secrets-manager projects delete my-app --yes`,
+		DisableFlagsInUseLine: true,
+		Args:                  cobra.ExactArgs(1),
+		Run:                   runProjectsDelete,
+		Annotations:           serviceTokenUnsupported,
+	}
+	deleteCmd.Flags().String("token", "", "Delete the project using a machine identity access token")
+	addConfirmFlags(deleteCmd)
+	addProjectsOutputFlag(deleteCmd, "The output to format the deleted project in")
+	projectsCmd.AddCommand(deleteCmd)
 
 	return projectsCmd
 }
@@ -212,6 +230,10 @@ func runProjectsList(cmd *cobra.Command, args []string) {
 
 func runProjectsGet(cmd *cobra.Command, args []string) {
 	outputFormat := projectsOutputFormat(cmd)
+	if len(args) == 1 {
+		runProjectsGetBySlug(cmd, args[0], outputFormat)
+		return
+	}
 
 	projectID := resolveProjectID(cmd)
 	if projectID == "" {
@@ -252,6 +274,91 @@ func resolveProjectID(cmd *cobra.Command) string {
 	workspaceFile, err := util.GetWorkSpaceFromFilePath(filepath.Dir(configFile))
 	if err != nil {
 		util.HandleError(err, fmt.Sprintf("Unable to read the project config at %s", configFile))
+	}
+	return workspaceFile.WorkspaceId
+}
+
+func runProjectsGetBySlug(cmd *cobra.Command, slug, outputFormat string) {
+	if cmd.Flags().Changed("projectId") {
+		exitWithError(cmd, errProjectSlugAndID())
+	}
+	if token, _ := util.GetInfisicalToken(cmd); token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER {
+		util.PrintErrorMessageAndExit("Service tokens can't look up a project by slug. Pass --projectId instead, or use a machine identity access token.")
+	}
+
+	project := secretsManagerProjectBySlug(cmd, projectsHTTPClient(cmd), slug)
+	if outputFormat != "" {
+		printFormattedOutput(outputFormat, project.ProjectDetails)
+	} else {
+		printProjectDetails(project.ProjectDetails)
+	}
+
+	Telemetry.CaptureEvent("cli-command:projects get", posthog.NewProperties().Set("bySlug", true).Set("version", util.CLI_VERSION))
+}
+
+// secretsManagerProjectBySlug exits with project_not_found or project_type_not_supported rather than
+// return a project the secrets-manager commands can't act on.
+func secretsManagerProjectBySlug(cmd *cobra.Command, client *resty.Client, slug string) api.ProjectSettings {
+	project, err := api.CallGetProjectSettingsBySlug(client, slug)
+	if err != nil {
+		exitWithError(cmd, classifyAPIError(err, func(cause error) *util.CLIError {
+			return errProjectNotFound(errorScope{ProjectName: util.SuggestedValue(slug, "slug")}, cause)
+		}), "Unable to get the project")
+	}
+	if project.Type != "" && project.Type != secretManagerProjectType {
+		exitWithError(cmd, errProjectTypeNotSupported(project.Name, project.Type))
+	}
+	return project
+}
+
+func runProjectsDelete(cmd *cobra.Command, args []string) {
+	slug := args[0]
+	outputFormat := projectsOutputFormat(cmd)
+	client := secretsManagerHTTPClient(cmd, "delete projects")
+
+	project := secretsManagerProjectBySlug(cmd, client, slug)
+	if project.HasDeleteProtection {
+		exitWithError(cmd, errProjectDeleteProtected(project.Name))
+	}
+
+	if err := confirmDestructive(cmd, args, destructiveAction{
+		Target:      "project " + quoted(slug, "slug"),
+		Expected:    slug,
+		Label:       "the project slug",
+		Description: fmt.Sprintf("project %q (%s), with all of its environments and secrets, permanently", project.Name, util.SuggestedValue(slug, "slug")),
+	}); err != nil {
+		exitWithError(cmd, err)
+	}
+
+	deleted, err := api.CallDeleteProject(client, project.ID)
+	if err != nil {
+		exitWithError(cmd, classifyAPIError(err, func(cause error) *util.CLIError {
+			return errProjectNotFound(errorScope{ProjectName: util.SuggestedValue(slug, "slug")}, cause)
+		}), "Unable to delete the project")
+	}
+
+	if outputFormat != "" {
+		printFormattedOutput(outputFormat, deleted)
+	} else {
+		printSuccessNotice(cmd, fmt.Sprintf("Permanently deleted project %s.", util.SanitizeDisplay(project.Name)))
+		if linkedProjectID() == project.ID {
+			printProjectsTip(cmd, "This directory is still linked to the deleted project. To link it to another one, run [infisical init].")
+		}
+	}
+
+	Telemetry.CaptureEvent("cli-command:projects delete", posthog.NewProperties().Set("version", util.CLI_VERSION))
+}
+
+// linkedProjectID is the project .infisical.yaml (or a legacy .infisical.json) links this directory
+// to, or "" when there's none or it can't be read.
+func linkedProjectID() string {
+	configFile, err := util.FindWorkspaceConfigFile()
+	if err != nil {
+		return ""
+	}
+	workspaceFile, err := util.GetWorkSpaceFromFilePath(filepath.Dir(configFile))
+	if err != nil {
+		return ""
 	}
 	return workspaceFile.WorkspaceId
 }

@@ -111,6 +111,13 @@ type exitCalled struct{}
 func runEnvironments(t *testing.T, fake *fakeEnvironmentsAPI, args ...string) (stderr, stdout string, exited bool) {
 	t.Helper()
 	fake.serve(t)
+	return runUnderSecretsManager(t, buildEnvironmentsCmd, append([]string{"environments"}, args...)...)
+}
+
+// runUnderSecretsManager runs `infisical secrets-manager <args>` on a fresh tree holding only what
+// build returns, with a machine identity token, no terminal, and an exit that returns to the test.
+func runUnderSecretsManager(t *testing.T, build func() *cobra.Command, args ...string) (stderr, stdout string, exited bool) {
+	t.Helper()
 	t.Setenv(util.INFISICAL_TOKEN_NAME, "identity-access-token")
 	t.Setenv(util.INFISICAL_PROJECT_ID_NAME, "")
 	t.Chdir(t.TempDir())
@@ -126,9 +133,9 @@ func runEnvironments(t *testing.T, fake *fakeEnvironmentsAPI, args ...string) (s
 	root := &cobra.Command{Use: "infisical"}
 	root.PersistentFlags().Bool("silent", false, "")
 	product := &cobra.Command{Use: secretsManagerCommandName}
-	product.AddCommand(buildEnvironmentsCmd())
+	product.AddCommand(build())
 	root.AddCommand(product)
-	cmd, rest, err := root.Find(append([]string{secretsManagerCommandName, "environments"}, args...))
+	cmd, rest, err := root.Find(append([]string{secretsManagerCommandName}, args...))
 	if err != nil {
 		t.Fatal(err)
 	}

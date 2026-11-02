@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -618,7 +619,35 @@ func validateSecretKey(key string) error {
 	return nil
 }
 
+// SecretWriteMode says which keys a write accepts: any (secrets set), only new ones (secrets create)
+// or only existing ones (secrets update).
+type SecretWriteMode int
+
+const (
+	SecretWriteUpsert SecretWriteMode = iota
+	SecretWriteCreateOnly
+	SecretWriteUpdateOnly
+)
+
+// SecretWriteConflict is returned before anything is written when keys are on the wrong side of a
+// create-only or update-only write: Keys already exist for a create, or don't for an update.
+type SecretWriteConflict struct {
+	Mode SecretWriteMode
+	Keys []string
+}
+
+func (e *SecretWriteConflict) Error() string {
+	if e.Mode == SecretWriteCreateOnly {
+		return fmt.Sprintf("secrets already exist: %s", strings.Join(e.Keys, ", "))
+	}
+	return fmt.Sprintf("secrets don't exist: %s", strings.Join(e.Keys, ", "))
+}
+
 func SetRawSecrets(secretArgs []string, secretType string, environmentName string, secretsPath string, projectId string, tokenDetails *models.TokenDetails, file string, tagSlugs []string) ([]models.SecretSetOperation, error) {
+	return WriteRawSecrets(SecretWriteUpsert, secretArgs, secretType, environmentName, secretsPath, projectId, tokenDetails, file, tagSlugs)
+}
+
+func WriteRawSecrets(mode SecretWriteMode, secretArgs []string, secretType string, environmentName string, secretsPath string, projectId string, tokenDetails *models.TokenDetails, file string, tagSlugs []string) ([]models.SecretSetOperation, error) {
 	if file != "" {
 		content, err := os.ReadFile(file)
 		if err != nil {
@@ -686,6 +715,35 @@ func SetRawSecrets(secretArgs []string, secretType string, environmentName strin
 		return nil, fmt.Errorf("unable to retrieve secrets [err=%v]", err)
 	}
 
+	sharedSecretMapByName := make(map[string]models.SingleEnvironmentVariable, len(secrets))
+	personalSecretMapByName := make(map[string]models.SingleEnvironmentVariable, len(secrets))
+
+	for _, secret := range secrets {
+		if secret.Type == SECRET_TYPE_PERSONAL {
+			personalSecretMapByName[secret.Key] = secret
+		} else {
+			sharedSecretMapByName[secret.Key] = secret
+		}
+	}
+
+	// Checked before tags are created, so a refused create or update writes nothing at all.
+	if mode != SecretWriteUpsert {
+		existing := sharedSecretMapByName
+		if secretType != SECRET_TYPE_SHARED {
+			existing = personalSecretMapByName
+		}
+		conflict := &SecretWriteConflict{Mode: mode}
+		for _, arg := range secretArgs {
+			key, _, _ := strings.Cut(arg, "=")
+			if _, exists := existing[key]; exists == (mode == SecretWriteCreateOnly) && !slices.Contains(conflict.Keys, key) {
+				conflict.Keys = append(conflict.Keys, key)
+			}
+		}
+		if len(conflict.Keys) > 0 {
+			return nil, conflict
+		}
+	}
+
 	uniqueSlugs := make(map[string]struct{}, len(tagSlugs))
 	var cliProvidedTagIds []string
 	for _, slug := range tagSlugs {
@@ -703,17 +761,6 @@ func SetRawSecrets(secretArgs []string, secretType string, environmentName strin
 	secretsToCreate := []api.RawSecret{}
 	secretsToModify := []api.RawSecret{}
 	secretOperations := []models.SecretSetOperation{}
-
-	sharedSecretMapByName := make(map[string]models.SingleEnvironmentVariable, len(secrets))
-	personalSecretMapByName := make(map[string]models.SingleEnvironmentVariable, len(secrets))
-
-	for _, secret := range secrets {
-		if secret.Type == SECRET_TYPE_PERSONAL {
-			personalSecretMapByName[secret.Key] = secret
-		} else {
-			sharedSecretMapByName[secret.Key] = secret
-		}
-	}
 
 	for _, arg := range secretArgs {
 		splitKeyValueFromArg := strings.SplitN(arg, "=", 2)

@@ -27,6 +27,7 @@ const (
 	errCodeEnvironmentPending      = "environment_pending_deletion"
 	errCodeProjectRequired         = "project_required"
 	errCodeInvalidFlagValue        = "invalid_flag_value"
+	errCodeProjectDeleteProtected  = "project_delete_protected"
 	errCodeSecretExists            = "secret_exists"
 	errCodeSecretNotFound          = "secret_not_found"
 	errCodeFolderNotFound          = "folder_not_found"
@@ -40,6 +41,7 @@ var errorCodes = []string{
 	errCodeProjectTypeNotSupported, errCodeEnvironmentNotFound, errCodeSecretExists, errCodeSecretNotFound,
 	errCodeFolderNotFound, errCodeNothingToUpdate, errCodeConfirmationRequired, errCodeConfirmationDeclined,
 	errCodeEnvironmentExists, errCodeEnvironmentPending, errCodeProjectRequired, errCodeInvalidFlagValue,
+	errCodeProjectDeleteProtected,
 }
 
 const secretsManagerPrefix = "infisical " + secretsManagerCommandName
@@ -184,6 +186,17 @@ func errProjectRequired(what string) *util.CLIError {
 func errEmptyFlag(flag string) *util.CLIError {
 	return &util.CLIError{Code: errCodeInvalidFlagValue,
 		Message: fmt.Sprintf("--%s can't be empty: pass a value, or leave out --%s to keep the current one.", flag, flag)}
+}
+
+func errProjectSlugAndID() *util.CLIError {
+	return &util.CLIError{Code: errCodeInvalidFlagValue,
+		Message: "Pass a project slug or --projectId, not both."}
+}
+
+// Read from the project's settings, never from the backend's error message.
+func errProjectDeleteProtected(name string) *util.CLIError {
+	return &util.CLIError{Code: errCodeProjectDeleteProtected,
+		Message: fmt.Sprintf("Project %q has delete protection on: turn it off in the project's settings in Infisical, then delete it again. Nothing was deleted.", name)}
 }
 
 func formatDay(timestamp string) string {

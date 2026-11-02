@@ -37,6 +37,8 @@ const (
 	operationCallGetProject                        = "CallGetProject"
 	operationCallCreateProject                     = "CallCreateProject"
 	operationCallGetProjectEnvironments            = "CallGetProjectEnvironments"
+	operationCallGetProjectSettingsBySlug          = "CallGetProjectSettingsBySlug"
+	operationCallDeleteProject                     = "CallDeleteProject"
 	operationCallGetEnvironmentBySlug              = "CallGetEnvironmentBySlug"
 	operationCallCreateEnvironment                 = "CallCreateEnvironment"
 	operationCallUpdateEnvironment                 = "CallUpdateEnvironment"
@@ -527,6 +529,46 @@ func CallDeleteEnvironment(httpClient *resty.Client, projectID, environmentID st
 	}
 
 	return environmentResponse.Environment, nil
+}
+
+// CallGetProjectSettingsBySlug finds an active project in the token's organization; one pending
+// deletion is a 404. Unlike GET /v1/projects/:id, the response is the project itself, not wrapped.
+func CallGetProjectSettingsBySlug(httpClient *resty.Client, slug string) (ProjectSettings, error) {
+	var project ProjectSettings
+	response, err := httpClient.
+		R().
+		SetResult(&project).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/projects/slug/%s", config.INFISICAL_URL, url.PathEscape(slug)))
+
+	if err != nil {
+		return ProjectSettings{}, NewGenericRequestError(operationCallGetProjectSettingsBySlug, err)
+	}
+
+	if response.IsError() {
+		return ProjectSettings{}, NewAPIErrorWithResponse(operationCallGetProjectSettingsBySlug, response, nil)
+	}
+
+	return project, nil
+}
+
+func CallDeleteProject(httpClient *resty.Client, projectID string) (ProjectDetails, error) {
+	var deleteResponse DeleteProjectResponse
+	response, err := httpClient.
+		R().
+		SetResult(&deleteResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Delete(fmt.Sprintf("%v/v1/projects/%s", config.INFISICAL_URL, url.PathEscape(projectID)))
+
+	if err != nil {
+		return ProjectDetails{}, NewGenericRequestError(operationCallDeleteProject, err)
+	}
+
+	if response.IsError() {
+		return ProjectDetails{}, NewAPIErrorWithResponse(operationCallDeleteProject, response, nil)
+	}
+
+	return deleteResponse.Project, nil
 }
 
 func CallGetProjectBySlug(httpClient *resty.Client, slug string) (Project, error) {

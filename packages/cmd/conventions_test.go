@@ -115,7 +115,6 @@ var conventionExceptions = map[string][]string{
 	"infisical secrets-manager secrets folders delete":       {"args", "examples"},
 	"infisical secrets-manager secrets folders get":          {"args", "examples"},
 	"infisical secrets-manager secrets get":                  {"examples", "short"},
-	"infisical secrets-manager secrets set":                  {"action", "examples", "short"},
 }
 
 func visibleCommands(cmd *cobra.Command) []*cobra.Command {

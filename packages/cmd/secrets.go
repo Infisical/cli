@@ -4,6 +4,7 @@ Copyright (c) 2023 Infisical Inc.
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -145,6 +146,29 @@ func validateSecretsSetArgs(cmd *cobra.Command, args []string) error {
 }
 
 func runSecretsSet(cmd *cobra.Command, args []string) {
+	runSecretsWrite(cmd, args, util.SecretWriteUpsert)
+}
+
+var secretWriteEvents = map[util.SecretWriteMode]string{
+	util.SecretWriteUpsert:     "cli-command:secrets set",
+	util.SecretWriteCreateOnly: "cli-command:secrets create",
+	util.SecretWriteUpdateOnly: "cli-command:secrets update",
+}
+
+// secretWriteConflict turns a refused create or update into secret_exists or secret_not_found, naming
+// where the command looked so the suggested command targets the same place.
+func secretWriteConflict(err error, scope errorScope) error {
+	var conflict *util.SecretWriteConflict
+	if !errors.As(err, &conflict) {
+		return err
+	}
+	if conflict.Mode == util.SecretWriteCreateOnly {
+		return errSecretExists(conflict.Keys, scope)
+	}
+	return errSecretNotFound(conflict.Keys, scope)
+}
+
+func runSecretsWrite(cmd *cobra.Command, args []string, mode util.SecretWriteMode) {
 	token, err := util.GetInfisicalToken(cmd)
 	if err != nil {
 		util.HandleError(err, "Unable to parse flag")
@@ -221,10 +245,10 @@ func runSecretsSet(cmd *cobra.Command, args []string) {
 			util.PrintErrorMessageAndExit("When using service tokens or machine identities, you must set the --projectId flag")
 		}
 
-		secretOperations, err = util.SetRawSecrets(args, secretType, environmentName, secretsPath, projectId, token, file, tags)
+		secretOperations, err = util.WriteRawSecrets(mode, args, secretType, environmentName, secretsPath, projectId, token, file, tags)
 
 		if err != nil {
-			util.HandleError(err, "Unable to set secrets")
+			exitWithError(cmd, secretWriteConflict(err, errorScope{ProjectID: projectId, Environment: environmentName, SecretPath: secretsPath}), "Unable to set secrets")
 		}
 	} else {
 		if projectId == "" {
@@ -245,13 +269,13 @@ func runSecretsSet(cmd *cobra.Command, args []string) {
 			loggedInUserDetails = util.EstablishUserLoginSession()
 		}
 
-		secretOperations, err = util.SetRawSecrets(processedArgs, secretType, environmentName, secretsPath, projectId, &models.TokenDetails{
+		secretOperations, err = util.WriteRawSecrets(mode, processedArgs, secretType, environmentName, secretsPath, projectId, &models.TokenDetails{
 			Type:  "",
 			Token: loggedInUserDetails.UserCredentials.JTWToken,
 		}, file, tags)
 
 		if err != nil {
-			util.HandleError(err, "Unable to set secrets")
+			exitWithError(cmd, secretWriteConflict(err, errorScope{ProjectID: projectId, Environment: environmentName, SecretPath: secretsPath}), "Unable to set secrets")
 		}
 	}
 
@@ -289,7 +313,7 @@ func runSecretsSet(cmd *cobra.Command, args []string) {
 	} else {
 		visualize.Table(headers, rows)
 	}
-	Telemetry.CaptureEvent("cli-command:secrets set", posthog.NewProperties().Set("version", util.CLI_VERSION))
+	Telemetry.CaptureEvent(secretWriteEvents[mode], posthog.NewProperties().Set("version", util.CLI_VERSION))
 }
 
 func runSecretsDelete(cmd *cobra.Command, args []string) {

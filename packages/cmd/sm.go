@@ -29,6 +29,7 @@ var secretsManagementCommands = []func() *cobra.Command{
 // hiddenUnderSecretsManager are kept working under `secrets-manager` for backwards compatibility,
 // but no longer listed in its help. The top-level copies are unchanged.
 var hiddenUnderSecretsManager = [][]string{
+	{"secrets", "set"},
 	{"secrets", "generate-example-env"},
 	{"secrets", "agent-proxy"},
 	{"agent-proxy"},
@@ -144,6 +145,12 @@ func init() {
 	secretsManagerCmd.AddCommand(buildAgentProxyCmd())
 	secretsManagerCmd.AddCommand(buildProjectsCmd())
 	secretsManagerCmd.AddCommand(buildEnvironmentsCmd())
+
+	secretsCmd, _, err := secretsManagerCmd.Find([]string{"secrets"})
+	if err != nil || secretsCmd == secretsManagerCmd {
+		panic("secrets-manager secrets is not registered")
+	}
+	namespaceSecretsCmd(secretsCmd)
 
 	for path, describe := range confirmedUnderSecretsManager {
 		cmd, rest, err := secretsManagerCmd.Find(strings.Fields(path))

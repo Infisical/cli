@@ -20,8 +20,6 @@ var testScope = errorScope{ProjectID: testProjectID, ProjectName: "payments-api"
 // Commands that don't exist yet. Only errors with no callers suggest them, so no user can see one.
 // Remove an entry when its command is added; the test fails if you forget.
 var notYetShippedCommands = []string{
-	"infisical secrets-manager secrets create",
-	"infisical secrets-manager secrets update",
 	"infisical secrets-manager folders get",
 }
 
@@ -39,6 +37,8 @@ func everyConstructedError() []*util.CLIError {
 		errEnvironmentPending("qa", "2026-11-12T10:00:00.000Z", testScope),
 		errProjectRequired("an environment"),
 		errEmptyFlag("name"),
+		errProjectSlugAndID(),
+		errProjectDeleteProtected("payments-api"),
 		errSecretExists([]string{"API_KEY"}, testScope),
 		errSecretNotFound([]string{"API_KEY", "DB_URL"}, testScope),
 		errFolderNotFound("api", testScope),
@@ -60,14 +60,18 @@ func TestErrorCodesAreStableSnakeCaseAndUnique(t *testing.T) {
 		}
 		seen[code] = true
 	}
+	// Several constructors may share a code, such as invalid_flag_value.
+	constructed := map[string]bool{}
 	for _, err := range everyConstructedError() {
 		if !seen[err.Code] {
 			t.Errorf("constructor returns code %q, which is not in errorCodes", err.Code)
 		}
-		delete(seen, err.Code)
+		constructed[err.Code] = true
 	}
 	for code := range seen {
-		t.Errorf("code %q has no constructor in everyConstructedError", code)
+		if !constructed[code] {
+			t.Errorf("code %q has no constructor in everyConstructedError", code)
+		}
 	}
 }
 
