@@ -33,6 +33,7 @@ const (
 	errCodeNothingToUpdate         = "nothing_to_update"
 	errCodeConfirmationRequired    = "confirmation_required"
 	errCodeConfirmationDeclined    = "confirmation_declined"
+	errCodeServiceTokenUnsupported = "service_token_not_supported"
 )
 
 var errorCodes = []string{
@@ -40,6 +41,7 @@ var errorCodes = []string{
 	errCodeProjectTypeNotSupported, errCodeEnvironmentNotFound, errCodeSecretExists, errCodeSecretNotFound,
 	errCodeFolderNotFound, errCodeNothingToUpdate, errCodeConfirmationRequired, errCodeConfirmationDeclined,
 	errCodeEnvironmentExists, errCodeEnvironmentPending, errCodeProjectRequired, errCodeInvalidFlagValue,
+	errCodeServiceTokenUnsupported,
 }
 
 const secretsManagerPrefix = "infisical " + secretsManagerCommandName
@@ -184,6 +186,14 @@ func errProjectRequired(what string) *util.CLIError {
 func errEmptyFlag(flag string) *util.CLIError {
 	return &util.CLIError{Code: errCodeInvalidFlagValue,
 		Message: fmt.Sprintf("--%s can't be empty: pass a value, or leave out --%s to keep the current one.", flag, flag)}
+}
+
+// errServiceTokenUnsupported names what the command can't do with a service token, the alternative
+// that works, and the command for it.
+func errServiceTokenUnsupported(what, alternative string, next util.NextStep) *util.CLIError {
+	return &util.CLIError{Code: errCodeServiceTokenUnsupported,
+		Message: fmt.Sprintf("Service tokens can't %s: %s.", what, alternative),
+		Next:    []util.NextStep{next}}
 }
 
 func formatDay(timestamp string) string {

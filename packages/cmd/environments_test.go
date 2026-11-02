@@ -28,6 +28,7 @@ const testDeleteAfter = "2026-11-13T12:00:00.000Z"
 type fakeEnvironmentsAPI struct {
 	projectType string
 	missing     bool // GET /v1/projects/:id is a 404
+	oldBackend  bool // no GET /v1/projects/:id/environments/slug/:slug route, as before backend v0.161.9
 	mu          sync.Mutex
 	requests    []string
 }
@@ -73,7 +74,7 @@ func (f *fakeEnvironmentsAPI) serve(t *testing.T) {
 					{"id": testPendingID, "name": "QA", "slug": "qa", "deleteAfter": "2026-11-12T10:00:00.000Z"},
 				},
 			}})
-		case r.Method == http.MethodGet && path == "/environments/slug/staging":
+		case r.Method == http.MethodGet && path == "/environments/slug/staging" && !f.oldBackend:
 			_, _ = fmt.Fprintf(w, `{"environment":{"id":%q,"name":"Staging","slug":"staging","position":2,"projectId":%q}}`, testEnvironmentID, testProjectID)
 		case r.Method == http.MethodGet:
 			notFound()
@@ -170,6 +171,67 @@ func TestEnvironmentsGetListsAndShowsOne(t *testing.T) {
 	_, stdout, exited = runEnvironments(t, fake, "get", "staging", "--projectId", testProjectID, "-o", "json")
 	if exited || !strings.Contains(stdout, `"position":2`) {
 		t.Errorf("one: exited=%v stdout=%s", exited, stdout)
+	}
+}
+
+// A backend without the slug route still shows an environment the project lists, and a slug the list
+// doesn't have is reported without asking the route at all.
+func TestEnvironmentsGetOnAnOlderBackend(t *testing.T) {
+	_, stdout, exited := runEnvironments(t, &fakeEnvironmentsAPI{oldBackend: true}, "get", "staging", "--projectId", testProjectID, "-o", "json")
+	var shown map[string]any
+	if exited || json.Unmarshal([]byte(stdout), &shown) != nil || shown["id"] != testEnvironmentID || shown["projectId"] != testProjectID {
+		t.Errorf("exited=%v stdout=%s", exited, stdout)
+	}
+	if _, ok := shown["position"]; ok {
+		t.Errorf("a position the backend didn't send must be left out, not shown as 0: %s", stdout)
+	}
+
+	fake := &fakeEnvironmentsAPI{}
+	stderr, _, exited := runEnvironments(t, fake, "get", "nope", "--projectId", testProjectID, "-o", "json")
+	for _, request := range fake.requests {
+		if strings.Contains(request, "/environments/slug/") {
+			t.Errorf("a slug the project doesn't list needs no lookup: %v", fake.requests)
+		}
+	}
+	if !exited || !strings.Contains(stderr, errCodeEnvironmentNotFound) {
+		t.Errorf("exited=%v stderr=%s", exited, stderr)
+	}
+}
+
+// Without a terminal, or with -o json, a missing session is auth_required instead of a browser login
+// that would wait forever.
+func TestSecretsManagerHTTPClientNeverLogsInNonInteractively(t *testing.T) {
+	for _, c := range []struct {
+		terminal bool
+		args     []string
+	}{{false, nil}, {true, []string{"-o", "json"}}} {
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv(util.INFISICAL_TOKEN_NAME, "")
+		fakeTerminal(t, c.terminal, "", errors.New("must not prompt"))
+		stderr := captureStderr(t)
+		oldExit := exitProcess
+		exitProcess = func(int) { panic(exitCalled{}) }
+		t.Cleanup(func() { exitProcess = oldExit })
+
+		list, _, err := buildProjectsCmd().Find([]string{"list"})
+		if err != nil || list.ParseFlags(c.args) != nil {
+			t.Fatal(err)
+		}
+		exited := func() (exited bool) {
+			defer func() {
+				if r := recover(); r != nil {
+					if _, ok := r.(exitCalled); !ok {
+						panic(r)
+					}
+					exited = true
+				}
+			}()
+			secretsManagerHTTPClient(list, "list projects")
+			return false
+		}()
+		if !exited || !strings.Contains(stderr.String(), errCodeAuthRequired) && !strings.Contains(stderr.String(), "You're not logged in") {
+			t.Errorf("terminal=%v args=%v: exited=%v stderr=%q", c.terminal, c.args, exited, stderr.String())
+		}
 	}
 }
 

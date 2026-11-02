@@ -271,7 +271,7 @@ type Environment struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Slug        string `json:"slug"`
-	Position    int    `json:"position"`
+	Position    int    `json:"position,omitempty"`
 	ProjectID   string `json:"projectId"`
 	DeleteAfter string `json:"deleteAfter,omitempty"`
 }

@@ -39,6 +39,8 @@ func everyConstructedError() []*util.CLIError {
 		errEnvironmentPending("qa", "2026-11-12T10:00:00.000Z", testScope),
 		errProjectRequired("an environment"),
 		errEmptyFlag("name"),
+		errServiceTokenUnsupported("delete projects", "pass a machine identity access token with --token, or log in",
+			util.NextStep{Purpose: "To log in", Command: "infisical login"}),
 		errSecretExists([]string{"API_KEY"}, testScope),
 		errSecretNotFound([]string{"API_KEY", "DB_URL"}, testScope),
 		errFolderNotFound("api", testScope),

@@ -139,11 +139,26 @@ func secretsManagerHTTPClient(cmd *cobra.Command, what string) *resty.Client {
 		token = nil
 	}
 	if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER && rejectsServiceTokens(cmd) {
-		util.PrintErrorMessageAndExit(fmt.Sprintf("Service tokens can't %s. Pass a machine identity access token with --token, or log in with [infisical login].", what))
+		exitWithError(cmd, errServiceTokenUnsupported(what, "pass a machine identity access token with --token, or log in",
+			util.NextStep{Purpose: "To log in", Command: "infisical login"}))
 	}
 
 	if token != nil {
 		httpClient.SetAuthToken(token.Token)
+		return httpClient
+	}
+
+	// The login below opens a browser and waits, which hangs a script or an agent: without a terminal,
+	// or when it asked for -o json or yaml, a missing or expired session is an error instead.
+	if !stdinIsTerminal() || errorOutputFormat(cmd) != "" {
+		details, err := util.GetCurrentLoggedInUserDetails(true)
+		if err != nil {
+			util.HandleError(err, "Unable to get your login details")
+		}
+		if !details.IsUserLoggedIn || details.LoginExpired {
+			exitWithError(cmd, errAuthRequired(nil))
+		}
+		httpClient.SetAuthToken(details.UserCredentials.JTWToken)
 		return httpClient
 	}
 
