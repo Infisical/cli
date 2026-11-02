@@ -24,6 +24,8 @@ const (
 type ListenerCert struct {
 	in      OwnCaInput
 	current atomic.Pointer[listenerPair]
+	// Decided once at load: a file that is briefly missing during a renewal must not stop the checks.
+	fromFiles bool
 
 	// Only the watch goroutine touches these after LoadListenerCert returns.
 	certStamp, keyStamp   fileStamp
@@ -55,10 +57,6 @@ func (c *ListenerCert) NotAfter() time.Time { return c.current.Load().leaf.NotAf
 
 func (c *ListenerCert) tlsCertificate() *tls.Certificate { return &c.current.Load().certificate }
 
-func (c *ListenerCert) fromFiles() bool {
-	return c.certStamp != (fileStamp{}) || c.keyStamp != (fileStamp{})
-}
-
 // Any key type and the full chain, unlike a CA, which has to be an ECDSA P-256 key the proxy can sign with.
 func LoadListenerCert(in OwnCaInput) (*ListenerCert, error) {
 	pair, err := loadListenerPair(in)
@@ -66,6 +64,7 @@ func LoadListenerCert(in OwnCaInput) (*ListenerCert, error) {
 		return nil, err
 	}
 	c := &ListenerCert{in: in, certStamp: stampOf(in.Cert), keyStamp: stampOf(in.Key)}
+	c.fromFiles = c.certStamp != (fileStamp{}) || c.keyStamp != (fileStamp{})
 	c.current.Store(pair)
 	return c, nil
 }
@@ -111,13 +110,13 @@ func (c *ListenerCert) watch(stop <-chan struct{}) {
 }
 
 func (c *ListenerCert) check(now time.Time) {
-	if c.fromFiles() {
+	if c.fromFiles {
 		c.reloadIfChanged()
 	}
 
 	notAfter := c.NotAfter()
 	renew := "renew it and restart the proxy"
-	if c.fromFiles() {
+	if c.fromFiles {
 		renew = "renew it in place and the proxy picks it up within a minute"
 	}
 	switch left := notAfter.Sub(now); {

@@ -133,3 +133,25 @@ func TestSocks5ServesTheRenewedCertificateWithoutARestart(t *testing.T) {
 		t.Fatalf("served %s after the renewal, want the new certificate %s", after, own.Fingerprint())
 	}
 }
+
+func TestListenerCertKeepsCheckingAfterTheFilesWentMissing(t *testing.T) {
+	captureLogs(t)
+	dir := t.TempDir()
+	certPath, keyPath := writeListenerPair(t, dir, time.Now().Add(30*24*time.Hour), time.Now().Add(-time.Hour))
+	cert, err := LoadListenerCert(OwnCaInput{Cert: certPath, CertSource: "--socks5-tls-cert", Key: keyPath, KeySource: "--socks5-tls-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := cert.Fingerprint()
+	for _, path := range []string{certPath, keyPath} {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cert.check(time.Now())
+	writeListenerPair(t, dir, time.Now().Add(90*24*time.Hour), time.Now())
+	cert.check(time.Now())
+	if cert.Fingerprint() == before {
+		t.Fatal("the certificate written after the files went missing wasn't loaded")
+	}
+}
