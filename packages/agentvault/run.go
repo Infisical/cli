@@ -482,6 +482,9 @@ func serve(opts Options, s startup) error {
 				Str("tlsName", opts.Socks5.TLSName)
 		}
 		socksListening.Msg("agent-vault: SOCKS5 listening")
+		if cert := opts.Socks5.Cert; cert != nil {
+			go cert.watch(stop)
+		}
 		if opts.Socks5.AllowPrivateDestinations {
 			log.Warn().Str("door", "socks5").
 				Msg("agent-vault: SOCKS5 traffic may reach private and internal addresses")

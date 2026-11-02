@@ -379,8 +379,8 @@ func (s *socks5Server) warnMismatch(remote string) {
 
 func socks5TLSConfig(ca *caManager, opts *Socks5Options) *tls.Config {
 	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
-	if opts.Cert != nil {
-		cfg.Certificates = []tls.Certificate{opts.Cert.certificate}
+	if own := opts.Cert; own != nil {
+		cfg.GetCertificate = func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return own.tlsCertificate(), nil }
 		return cfg
 	}
 	// Per handshake rather than once, so the 24-hour leaf is replaced before it expires. The client's SNI is

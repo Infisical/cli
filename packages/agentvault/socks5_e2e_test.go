@@ -549,7 +549,7 @@ func selfSignedListenerCert(t *testing.T, name string, notAfter time.Time) (cert
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: name},
-		NotBefore:    notAfter.Add(-2 * time.Hour),
+		NotBefore:    time.Now().Add(-2 * time.Hour),
 		NotAfter:     notAfter,
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
