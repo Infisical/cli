@@ -274,10 +274,11 @@ func (c *sessionCache) lookup(sessionToken string, admit func() bool) ([]*resolv
 	}
 	c.mu.Unlock()
 
-	if admit != nil && !admit() {
-		return nil, nil, errResolveBudget
-	}
 	resolved, err, _ := c.inflight.Do(key, func() (any, error) {
+		// Inside the shared lookup, so connections waiting on the same token spend one ask, not one each.
+		if admit != nil && !admit() {
+			return nil, errResolveBudget
+		}
 		result, err := c.resolver.resolve(sessionToken, nil)
 		if err != nil {
 			// A rejected proxy token is remembered too: the poll loop exits after two such heartbeats, but

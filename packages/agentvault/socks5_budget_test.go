@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
 )
@@ -85,4 +87,29 @@ func TestMissBudgetIsSafeForConcurrentLogins(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+func TestConnectionsWaitingOnOneTokenSpendTheBudgetOnce(t *testing.T) {
+	resolver := &stubResolver{result: &resolveResult{Services: []*resolvedService{serviceWithSecret("s")}}, delay: 200 * time.Millisecond}
+	cache := newTestCache(resolver)
+	var admits atomic.Int32
+	admit := func() bool { admits.Add(1); return true }
+
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := cache.getAdmitted("agv_same", admit); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if n := admits.Load(); n != 1 {
+		t.Fatalf("50 connections waiting on one lookup spent the budget %d times, want 1", n)
+	}
+	if n := resolver.callCount(); n != 1 {
+		t.Fatalf("asked Infisical %d times, want 1", n)
+	}
 }

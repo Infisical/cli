@@ -286,3 +286,18 @@ func TestHalfCloseConnWakesOnClose(t *testing.T) {
 		t.Fatal("the waiting read ignored Close")
 	}
 }
+
+// A client that left looks the same as one that only stopped sending, so an upstream that never answers must not
+// hold the tunnel open for good.
+func TestHalfCloseConnGivesUpAfterTheReplyLimit(t *testing.T) {
+	c := halfClosedPipe(t, true)
+	c.replyLimit = 150 * time.Millisecond
+	start := time.Now()
+	_, err := c.Read(make([]byte, 1))
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("err = %v, want io.EOF once the reply limit passes", err)
+	}
+	if waited := time.Since(start); waited < 100*time.Millisecond || waited > 2*time.Second {
+		t.Fatalf("gave up after %s, want about the 150ms limit", waited)
+	}
+}
