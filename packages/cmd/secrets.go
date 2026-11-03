@@ -18,6 +18,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var setRawSecrets = util.SetRawSecrets
+
 // maskSecretValue redacts a secret value so it is not echoed to stdout.
 // The value has just been provided by the caller, so there is no need to
 // print it back; doing so risks leaking it into logs, terminals, or agents.
@@ -230,7 +232,7 @@ func runSecretsSet(cmd *cobra.Command, args []string) {
 			util.PrintErrorMessageAndExit("When using service tokens or machine identities, you must set the --projectId flag")
 		}
 
-		secretOperations, err = util.SetRawSecrets(processedArgs, secretType, environmentName, secretsPath, projectId, token, file, tags)
+		secretOperations, err = setRawSecrets(processedArgs, secretType, environmentName, secretsPath, projectId, token, file, tags)
 
 		if err != nil {
 			util.HandleError(err, "Unable to set secrets")
@@ -254,7 +256,7 @@ func runSecretsSet(cmd *cobra.Command, args []string) {
 			loggedInUserDetails = util.EstablishUserLoginSession()
 		}
 
-		secretOperations, err = util.SetRawSecrets(processedArgs, secretType, environmentName, secretsPath, projectId, &models.TokenDetails{
+		secretOperations, err = setRawSecrets(processedArgs, secretType, environmentName, secretsPath, projectId, &models.TokenDetails{
 			Type:  "",
 			Token: loggedInUserDetails.UserCredentials.JTWToken,
 		}, file, tags)
