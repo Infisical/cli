@@ -767,19 +767,12 @@ func init() {
 	RootCmd.AddCommand(profileCmd)
 }
 
-// printSecretsManagerDefaults reports the token, project, environment and secret path that
-// Secrets Management commands run here use when they aren't given flags. It resolves them with
-// the same functions those commands call, on a command that carries their flag defaults.
+// Resolved with the functions secrets, run and export call, on a command carrying their flag
+// defaults, so the report can't drift from what those commands do.
 func printSecretsManagerDefaults() {
 	defaults := &cobra.Command{}
 	defaults.Flags().String("env", "dev", "")
 	defaults.Flags().String("path", "/", "")
-	defaults.Flags().String("token", "", "")
-
-	token, _ := util.GetInfisicalToken(defaults)
-	if token != nil {
-		util.PrintlnStdout("Token override:", token.Source+". Commands that take --token use it instead of this profile.")
-	}
 
 	if configFile, err := util.FindWorkspaceConfigFile(); err == nil {
 		util.PrintlnStdout("Project config:", util.SanitizeDisplay(configFile))
@@ -788,13 +781,6 @@ func printSecretsManagerDefaults() {
 	case err != nil:
 		log.Debug().Err(err).Msg("profile current: project config")
 		util.PrintlnStdout("Project: unknown. The project config can't be read, so commands here that need a project fail. Run [infisical init] to link this directory again.")
-	case token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER:
-		util.PrintlnStdout("Project: the service token's own project")
-		via := "service token in " + token.Source
-		if projectID != "" {
-			via += fmt.Sprintf(", which takes the place of %s from %s", util.SanitizeDisplay(projectID), source)
-		}
-		util.PrintlnStdout("Project via:", via)
 	case projectID == "":
 		util.PrintlnStdout("Project: none. Run [infisical init] to link this directory, or pass --projectId to each command.")
 	default:

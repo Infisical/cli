@@ -555,7 +555,6 @@ func GetCmdFlagOrEnvWithDefaultValue(cmd *cobra.Command, flag string, envNames [
 	return value, nil
 }
 
-// SettingSourceDefault is the source of a setting that falls back to the command's own default.
 const SettingSourceDefault = "default"
 
 // ResolveEnvironmentName resolves the environment slug for a command, in order:
@@ -568,7 +567,6 @@ func ResolveEnvironmentName(cmd *cobra.Command) string {
 	return value
 }
 
-// ResolveEnvironmentNameWithSource is ResolveEnvironmentName plus a label for where the value came from.
 func ResolveEnvironmentNameWithSource(cmd *cobra.Command) (value, source string) {
 	if cmd.Flags().Changed("env") {
 		value, _ := cmd.Flags().GetString("env")
@@ -597,7 +595,6 @@ func ResolveSecretPath(cmd *cobra.Command) string {
 	return value
 }
 
-// ResolveSecretPathWithSource is ResolveSecretPath plus a label for where the value came from.
 func ResolveSecretPathWithSource(cmd *cobra.Command) (value, source string) {
 	if cmd.Flags().Changed("path") {
 		value, _ := cmd.Flags().GetString("path")
@@ -613,7 +610,6 @@ func ResolveSecretPathWithSource(cmd *cobra.Command) (value, source string) {
 	return value, SettingSourceDefault
 }
 
-// WorkspaceConfigError is a project config file that exists but can't be read.
 type WorkspaceConfigError struct {
 	Path string
 	Err  error
@@ -679,7 +675,6 @@ func workspaceFileForCommand(cmd *cobra.Command) (models.WorkspaceConfigFile, er
 	return GetWorkSpaceFromFile()
 }
 
-// workspaceConfigPathForCommand is the path of the file workspaceFileForCommand reads.
 func workspaceConfigPathForCommand(cmd *cobra.Command) (string, bool) {
 	if flag := cmd.Flags().Lookup("project-config-dir"); flag != nil && flag.Value.String() != "" {
 		return findWorkspaceConfigFileInDir(flag.Value.String())

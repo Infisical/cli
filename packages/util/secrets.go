@@ -543,7 +543,6 @@ func DeleteBackupSecrets() error {
 	return os.RemoveAll(fullPathToSecretsBackupFolder)
 }
 
-// environmentForGitBranch is the environment the config maps the current git branch to, and that branch.
 func environmentForGitBranch(workspaceFile models.WorkspaceConfigFile) (env, branch string) {
 	if len(workspaceFile.GitBranchToEnvironmentMapping) == 0 {
 		return "", ""

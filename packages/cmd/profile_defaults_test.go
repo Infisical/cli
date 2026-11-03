@@ -45,7 +45,7 @@ func TestProfileCurrentShowsWhatCommandsHereUse(t *testing.T) {
 			setup: func() { linkDirectory(t, "secrets-management:\n  project-id: "+testProjectID+"\n") },
 			want: []string{"Project: " + testProjectID + "\n", "Project via: .infisical.yaml\n",
 				"Environment: dev\n", "Environment via: default\n", "Secret path: /\n", "Secret path via: default\n", "Project config: "},
-			never: []string{"Token override"},
+			never: []string{"Token"},
 		},
 		"environment variables win over the config file": {
 			setup: func() {
@@ -60,23 +60,6 @@ func TestProfileCurrentShowsWhatCommandsHereUse(t *testing.T) {
 		"no project": {
 			want:  []string{"Project: none. Run [infisical init]"},
 			never: []string{"Project via", "Project config"},
-		},
-		"a service token reads its own project": {
-			setup: func() {
-				linkDirectory(t, "secrets-management:\n  project-id: "+testProjectID+"\n")
-				t.Setenv(util.INFISICAL_TOKEN_NAME, "st.id.secret.key")
-			},
-			want: []string{"Token override: INFISICAL_TOKEN environment variable.", "Project: the service token's own project\n",
-				"Project via: service token in INFISICAL_TOKEN environment variable, which takes the place of " + testProjectID + " from .infisical.yaml\n"},
-			never: []string{"st.id.secret.key"},
-		},
-		"a machine identity token keeps the configured project": {
-			setup: func() {
-				linkDirectory(t, "secrets-management:\n  project-id: "+testProjectID+"\n")
-				t.Setenv(util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME, "identity-access-token")
-			},
-			want:  []string{"Token override: INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN environment variable.", "Project: " + testProjectID + "\n"},
-			never: []string{"identity-access-token"},
 		},
 		"an unreadable config file": {
 			setup: func() { linkDirectory(t, "secrets-management: [\n") },
@@ -98,6 +81,30 @@ func TestProfileCurrentShowsWhatCommandsHereUse(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// profile current describes the profile, so a token in the environment changes nothing it prints.
+func TestProfileCurrentIgnoresTokensInTheEnvironment(t *testing.T) {
+	link := func() { linkDirectory(t, "secrets-management:\n  project-id: "+testProjectID+"\n") }
+	// Each run links a new temporary directory, so the config path is the one line that differs.
+	withoutConfigPath := func(out string) string {
+		var kept []string
+		for _, line := range strings.Split(out, "\n") {
+			if !strings.HasPrefix(line, "Project config: ") {
+				kept = append(kept, line)
+			}
+		}
+		return strings.Join(kept, "\n")
+	}
+	want := withoutConfigPath(secretsManagerDefaultsOutput(t, link))
+	for _, name := range []string{util.INFISICAL_TOKEN_NAME, util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME, util.INFISICAL_GATEWAY_TOKEN_NAME_LEGACY} {
+		for _, token := range []string{"st.id.secret.key", "identity-access-token"} {
+			got := withoutConfigPath(secretsManagerDefaultsOutput(t, func() { link(); t.Setenv(name, token) }))
+			if got != want {
+				t.Errorf("%s=%s changed the output:\n%s\nwant:\n%s", name, token, got, want)
+			}
+		}
 	}
 }
 
