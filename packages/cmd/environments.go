@@ -133,6 +133,18 @@ func loadEnvironmentsTarget(cmd *cobra.Command, explicitProject bool) environmen
 	}
 
 	client := secretsManagerHTTPClient(cmd, "manage environments")
+	project := secretsManagerProjectEnvironments(cmd, client, projectID)
+
+	return environmentsTarget{
+		client:       client,
+		project:      project,
+		scope:        errorScope{ProjectID: projectID, ProjectName: project.Name},
+		outputFormat: outputFormat,
+	}
+}
+
+// secretsManagerProjectEnvironments is the project with its environments, refusing other products.
+func secretsManagerProjectEnvironments(cmd *cobra.Command, client *resty.Client, projectID string) api.ProjectEnvironments {
 	project, err := api.CallGetProjectEnvironments(client, projectID)
 	if err != nil {
 		exitWithError(cmd, classifyAPIError(err, errorScope{ProjectID: projectID}, func(cause error) *util.CLIError {
@@ -142,13 +154,7 @@ func loadEnvironmentsTarget(cmd *cobra.Command, explicitProject bool) environmen
 	if project.Type != "" && project.Type != secretManagerProjectType {
 		exitWithError(cmd, errProjectTypeNotSupported(project.Name, project.Type))
 	}
-
-	return environmentsTarget{
-		client:       client,
-		project:      project,
-		scope:        errorScope{ProjectID: projectID, ProjectName: project.Name},
-		outputFormat: outputFormat,
-	}
+	return project
 }
 
 func (t environmentsTarget) active(slug string) (api.ProjectEnvironment, bool) {

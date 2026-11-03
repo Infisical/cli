@@ -109,10 +109,6 @@ var conventionExceptions = map[string][]string{
 	"infisical secrets-manager run":                          {"short"},
 	"infisical secrets-manager secrets":                      {"short"},
 	"infisical secrets-manager secrets delete":               {"examples", "short"},
-	"infisical secrets-manager secrets folders":              {"args", "examples"},
-	"infisical secrets-manager secrets folders create":       {"args", "examples"},
-	"infisical secrets-manager secrets folders delete":       {"args", "examples"},
-	"infisical secrets-manager secrets folders get":          {"args", "examples"},
 	"infisical secrets-manager secrets get":                  {"examples", "short"},
 }
 

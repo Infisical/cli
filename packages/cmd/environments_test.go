@@ -131,17 +131,18 @@ func runUnderSecretsManager(t *testing.T, build func() *cobra.Command, args ...s
 	return runUnderSecretsManagerAfter(t, nil, build, args...)
 }
 
-// runUnderSecretsManagerAfter is runUnderSecretsManager with setup run after the environment and
-// working directory are reset, so a test can link the directory or set INFISICAL_PROJECT_ID.
+// runUnderSecretsManagerAfter is runUnderSecretsManager with setup run after the environment, working
+// directory and terminal are reset, so a test can link the directory, set INFISICAL_PROJECT_ID, or
+// fake a terminal.
 func runUnderSecretsManagerAfter(t *testing.T, setup func(), build func() *cobra.Command, args ...string) (stderr, stdout string, exited bool) {
 	t.Helper()
 	t.Setenv(util.INFISICAL_TOKEN_NAME, "identity-access-token")
 	t.Setenv(util.INFISICAL_PROJECT_ID_NAME, "")
 	t.Chdir(t.TempDir())
+	fakeTerminal(t, false, "", errors.New("must not prompt"))
 	if setup != nil {
 		setup()
 	}
-	fakeTerminal(t, false, "", errors.New("must not prompt"))
 	errOut := captureStderr(t)
 	var out bytes.Buffer
 	oldStdout, oldExit, oldTelemetry := util.GetStdoutWriter, exitProcess, Telemetry

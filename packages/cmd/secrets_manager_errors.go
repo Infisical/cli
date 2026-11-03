@@ -35,6 +35,7 @@ const (
 	errCodeSecretExists            = "secret_exists"
 	errCodeSecretNotFound          = "secret_not_found"
 	errCodeFolderNotFound          = "folder_not_found"
+	errCodeFolderExists            = "folder_exists"
 	errCodeNothingToUpdate         = "nothing_to_update"
 	errCodeConfirmationRequired    = "confirmation_required"
 	errCodeConfirmationDeclined    = "confirmation_declined"
@@ -46,7 +47,7 @@ var errorCodes = []string{
 	errCodeFolderNotFound, errCodeNothingToUpdate, errCodeConfirmationRequired, errCodeConfirmationDeclined,
 	errCodeEnvironmentExists, errCodeEnvironmentPending, errCodeProjectRequired, errCodeInvalidFlagValue,
 	errCodeProjectDeleteProtected, errCodeInvalidArgument, errCodeServiceTokenUnsupported,
-	errCodeProjectConfigInvalid, errCodeTokenProjectMismatch,
+	errCodeProjectConfigInvalid, errCodeTokenProjectMismatch, errCodeFolderExists,
 }
 
 const secretsManagerPrefix = "infisical " + secretsManagerCommandName
@@ -300,6 +301,27 @@ func errFolderNotFound(name string, scope errorScope) *util.CLIError {
 		Message: fmt.Sprintf("Folder %s doesn't exist in %s.", quoted(name, "name"), quoted(path, "path")),
 		Next: []util.NextStep{{Purpose: "To see the folders there",
 			Command: secretsManagerPrefix + " folders get --path " + util.SuggestedValue(path, "path") + scope.envFlag() + scope.projectFlag()}}}
+}
+
+func errFolderExists(name string, scope errorScope) *util.CLIError {
+	path := scope.SecretPath
+	if path == "" {
+		path = "/"
+	}
+	return &util.CLIError{Code: errCodeFolderExists,
+		Message: fmt.Sprintf("Folder %s already exists in %s. Nothing was written.", quoted(name, "name"), quoted(path, "path")),
+		Next: []util.NextStep{{Purpose: "To see it",
+			Command: secretsManagerPrefix + " folders get " + util.SuggestedValue(name, "name") + " --path " + util.SuggestedValue(path, "path") + scope.envFlag() + scope.projectFlag()}}}
+}
+
+// errInvalidFolderName is for a name the backend would refuse. flag is "" for the positional name.
+func errInvalidFolderName(name, flag string) *util.CLIError {
+	code, subject := errCodeInvalidArgument, "Folder name "+quoted(name, "name")
+	if flag != "" {
+		code, subject = errCodeInvalidFlagValue, "--"+flag+" "+quoted(name, "name")
+	}
+	return &util.CLIError{Code: code,
+		Message: subject + " isn't a valid folder name: use only letters, numbers, dashes and underscores, and name a nested folder's parent with --path. Nothing was sent."}
 }
 
 func errNothingToUpdate(flags []string) *util.CLIError {

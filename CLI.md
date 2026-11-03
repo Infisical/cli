@@ -83,7 +83,8 @@ With `-o json`, the same error is JSON on stderr:
 | `project_required` | A delete ran without `--projectId`. Deletes never use `INFISICAL_PROJECT_ID` or `.infisical.yaml` |
 | `secret_exists` | `secrets create` on a key that exists. Nothing is written |
 | `secret_not_found` | `secrets update` on a key that doesn't exist. Nothing is written |
-| `folder_not_found` | `folders get <name>` for a folder that doesn't exist |
+| `folder_not_found` | `folders get`, `update` or `delete` on a folder that doesn't exist at `--path` |
+| `folder_exists` | `folders create` (or `update --name`) with a name another folder at `--path` has. Nothing is written |
 | `nothing_to_update` | `update` called without any change flags |
 | `confirmation_required` | A destructive command ran without a terminal and without `--yes` |
 | `confirmation_declined` | The slug typed at the prompt didn't match, or the prompt was cancelled |

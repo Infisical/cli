@@ -22,9 +22,7 @@ var testScope = errorScope{ProjectID: testProjectID, ProjectName: "payments-api"
 
 // Commands that don't exist yet. Only errors with no callers suggest them, so no user can see one.
 // Remove an entry when its command is added; the test fails if you forget.
-var notYetShippedCommands = []string{
-	"infisical secrets-manager folders get",
-}
+var notYetShippedCommands = []string{}
 
 func everyConstructedError() []*util.CLIError {
 	cause := errors.New("cause")
@@ -54,6 +52,9 @@ func everyConstructedError() []*util.CLIError {
 		errSecretExists([]string{"API_KEY"}, testScope),
 		errSecretNotFound([]string{"API_KEY", "DB_URL"}, testScope),
 		errFolderNotFound("api", testScope),
+		errFolderExists("api", testScope),
+		errInvalidFolderName("app/api", ""),
+		errInvalidFolderName("my folder", "name"),
 		errNothingToUpdate([]string{"name", "slug"}),
 		errConfirmationRequired(action, "infisical secrets-manager environments delete qa --yes"),
 		errConfirmationDeclined(action),

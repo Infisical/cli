@@ -711,6 +711,39 @@
     "template": "|string|",
     "token": "|string|"
   },
+  "infisical secrets-manager folders": {},
+  "infisical secrets-manager folders create": {
+    "description": "|string|",
+    "env": "|string|dev",
+    "output": "o|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "token": "|string|"
+  },
+  "infisical secrets-manager folders delete": {
+    "env": "|string|dev",
+    "output": "o|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "token": "|string|",
+    "yes": "y|bool|false"
+  },
+  "infisical secrets-manager folders get": {
+    "env": "|string|dev",
+    "output": "o|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "token": "|string|"
+  },
+  "infisical secrets-manager folders update": {
+    "description": "|string|",
+    "env": "|string|dev",
+    "name": "|string|",
+    "output": "o|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "token": "|string|"
+  },
   "infisical secrets-manager project": {},
   "infisical secrets-manager project create": {
     "description": "|string|",
@@ -1100,6 +1133,39 @@
     "secret-overriding": "|bool|true",
     "tags": "t|string|",
     "template": "|string|",
+    "token": "|string|"
+  },
+  "infisical sm folders": {},
+  "infisical sm folders create": {
+    "description": "|string|",
+    "env": "|string|dev",
+    "output": "o|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "token": "|string|"
+  },
+  "infisical sm folders delete": {
+    "env": "|string|dev",
+    "output": "o|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "token": "|string|",
+    "yes": "y|bool|false"
+  },
+  "infisical sm folders get": {
+    "env": "|string|dev",
+    "output": "o|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "token": "|string|"
+  },
+  "infisical sm folders update": {
+    "description": "|string|",
+    "env": "|string|dev",
+    "name": "|string|",
+    "output": "o|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
     "token": "|string|"
   },
   "infisical sm project": {},

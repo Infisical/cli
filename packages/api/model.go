@@ -475,6 +475,47 @@ type GetEncryptedSecretsV3Request struct {
 	Recursive     bool   `json:"recursive"`
 }
 
+type Folder struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	CreatedAt   string `json:"createdAt,omitempty"`
+	UpdatedAt   string `json:"updatedAt,omitempty"`
+}
+
+type ListFoldersResponse struct {
+	Folders []Folder `json:"folders"`
+}
+
+type FolderResponse struct {
+	Folder Folder `json:"folder"`
+}
+
+type CreateFolderRequest struct {
+	ProjectID   string  `json:"projectId"`
+	Environment string  `json:"environment"`
+	Name        string  `json:"name"`
+	Path        string  `json:"path"`
+	Description *string `json:"description,omitempty"`
+}
+
+// UpdateFolderRequest always carries a name, which the route requires even when only the description
+// changes. A nil Description leaves it as it is.
+type UpdateFolderRequest struct {
+	ProjectID   string  `json:"projectId"`
+	Environment string  `json:"environment"`
+	Name        string  `json:"name"`
+	Path        string  `json:"path"`
+	Description *string `json:"description,omitempty"`
+}
+
+type DeleteFolderRequest struct {
+	ProjectID   string `json:"projectId"`
+	Environment string `json:"environment"`
+	Path        string `json:"path"`
+	ForceDelete bool   `json:"forceDelete"`
+}
+
 type GetFoldersV1Request struct {
 	Environment string `json:"environment"`
 	WorkspaceId string `json:"workspaceId"`

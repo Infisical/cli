@@ -49,6 +49,10 @@ const (
 	operationCallGetFoldersV1                      = "CallGetFoldersV1"
 	operationCallCreateFolderV1                    = "CallCreateFolderV1"
 	operationCallDeleteFolderV1                    = "CallDeleteFolderV1"
+	operationCallListFolders                       = "CallListFolders"
+	operationCallCreateFolder                      = "CallCreateFolder"
+	operationCallUpdateFolder                      = "CallUpdateFolder"
+	operationCallDeleteFolder                      = "CallDeleteFolder"
 	operationCallDeleteSecretsV3                   = "CallDeleteSecretsV3"
 	operationCallCreateServiceToken                = "CallCreateServiceToken"
 	operationCallUniversalAuthLogin                = "CallUniversalAuthLogin"
@@ -774,6 +778,88 @@ func CallDeleteFolderV1(httpClient *resty.Client, request DeleteFolderV1Request)
 	}
 
 	return folderResponse, nil
+}
+
+func CallListFolders(httpClient *resty.Client, projectID, environment, path string) ([]Folder, error) {
+	var listResponse ListFoldersResponse
+	response, err := httpClient.
+		R().
+		SetResult(&listResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		SetQueryParam("projectId", projectID).
+		SetQueryParam("environment", environment).
+		SetQueryParam("path", path).
+		Get(fmt.Sprintf("%v/v2/folders", config.INFISICAL_URL))
+
+	if err != nil {
+		return nil, NewGenericRequestError(operationCallListFolders, err)
+	}
+
+	if response.IsError() {
+		return nil, NewAPIErrorWithResponse(operationCallListFolders, response, nil)
+	}
+
+	return listResponse.Folders, nil
+}
+
+func CallCreateFolder(httpClient *resty.Client, request CreateFolderRequest) (Folder, error) {
+	var folderResponse FolderResponse
+	response, err := httpClient.
+		R().
+		SetBody(request).
+		SetResult(&folderResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Post(fmt.Sprintf("%v/v2/folders", config.INFISICAL_URL))
+
+	if err != nil {
+		return Folder{}, NewGenericRequestError(operationCallCreateFolder, err)
+	}
+
+	if response.IsError() {
+		return Folder{}, NewAPIErrorWithResponse(operationCallCreateFolder, response, nil)
+	}
+
+	return folderResponse.Folder, nil
+}
+
+func CallUpdateFolder(httpClient *resty.Client, folderID string, request UpdateFolderRequest) (Folder, error) {
+	var folderResponse FolderResponse
+	response, err := httpClient.
+		R().
+		SetBody(request).
+		SetResult(&folderResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Patch(fmt.Sprintf("%v/v2/folders/%s", config.INFISICAL_URL, url.PathEscape(folderID)))
+
+	if err != nil {
+		return Folder{}, NewGenericRequestError(operationCallUpdateFolder, err)
+	}
+
+	if response.IsError() {
+		return Folder{}, NewAPIErrorWithResponse(operationCallUpdateFolder, response, nil)
+	}
+
+	return folderResponse.Folder, nil
+}
+
+func CallDeleteFolder(httpClient *resty.Client, folderID string, request DeleteFolderRequest) (Folder, error) {
+	var folderResponse FolderResponse
+	response, err := httpClient.
+		R().
+		SetBody(request).
+		SetResult(&folderResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Delete(fmt.Sprintf("%v/v2/folders/%s", config.INFISICAL_URL, url.PathEscape(folderID)))
+
+	if err != nil {
+		return Folder{}, NewGenericRequestError(operationCallDeleteFolder, err)
+	}
+
+	if response.IsError() {
+		return Folder{}, NewAPIErrorWithResponse(operationCallDeleteFolder, response, nil)
+	}
+
+	return folderResponse.Folder, nil
 }
 
 func CallDeleteSecretsRawV3(httpClient *resty.Client, request DeleteSecretV3Request) error {
