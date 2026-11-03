@@ -213,18 +213,6 @@ func TestGateway_RelayGatewayConnectivity(t *testing.T) {
 	}
 	require.NotZero(t, gatewayId, "Gateway ID should be set")
 
-	projDesc := "e2e tests for PAM connectivity"
-	template := "default"
-	projectType := client.Pam
-	projectResp, err := c.CreateProjectWithResponse(ctx, client.CreateProjectJSONRequestBody{
-		ProjectName:        "pam-tests",
-		ProjectDescription: &projDesc,
-		Template:           &template,
-		Type:               &projectType,
-	})
-	require.NoError(t, err)
-	require.Equal(t, projectResp.StatusCode(), http.StatusOK)
-
 	t.Run("kubernetes", func(t *testing.T) {
 		t.Parallel()
 		ctx := t.Context()
