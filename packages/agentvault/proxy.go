@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -379,7 +380,8 @@ func (b *bufferedConn) Read(p []byte) (int, error) { return b.reader.Read(p) }
 // The scheme is the tunnel's, not the inner request's, and the target host comes from the CONNECT line so
 // an agent cannot address one host through a tunnel to another.
 func (ps *proxyServer) serveTunnel(conn net.Conn, t tunnel) {
-	listener := newOneShotListener(conn)
+	halfClose := newHalfCloseConn(conn)
+	listener := newOneShotListener(halfClose)
 	srv := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ps.forwardHTTP(w, r, t)
@@ -390,12 +392,144 @@ func (ps *proxyServer) serveTunnel(conn net.Conn, t tunnel) {
 		IdleTimeout:       tunnelIdleTimeout,
 		MaxHeaderBytes:    maxRequestHeaderBytes,
 		ConnState: func(_ net.Conn, state http.ConnState) {
+			halfClose.setInRequest(state == http.StateActive)
+			// A client that stopped sending can't send another request, so once its reply is out the
+			// connection is done rather than idling until the timeout.
+			if state == http.StateIdle && halfClose.sawEOF() {
+				_ = halfClose.Close()
+			}
 			if state == http.StateHijacked || state == http.StateClosed {
 				_ = listener.Close()
 			}
 		},
 	}
 	_ = srv.Serve(listener)
+}
+
+// halfCloseConn keeps a tunnel's reply alive after the client stops sending. A client may write its request and
+// then shut its sending side while it waits for the reply: a TCP FIN on the HTTP door, or a TLS close_notify,
+// which is how E2B passes a sandbox's FIN on to the SOCKS5 door. net/http reads that end of input as the client
+// leaving and cancels the request, so the reply never comes. Here the end of input, once a request has been
+// read, makes reads wait instead, until the connection closes or the read deadline passes. A client that really
+// left mid-request is noticed when the reply can't be written. Outside a request the end of input passes
+// through, so a client that connects and leaves frees its slot at once.
+type halfCloseConn struct {
+	net.Conn
+
+	mu        sync.Mutex
+	inRequest bool
+	eof       bool
+	closed    bool
+	deadline  time.Time
+	// Closed and replaced whenever the deadline changes or the connection closes, to wake a waiting read.
+	changed chan struct{}
+}
+
+func newHalfCloseConn(c net.Conn) *halfCloseConn {
+	return &halfCloseConn{Conn: c, changed: make(chan struct{})}
+}
+
+func (c *halfCloseConn) Read(p []byte) (int, error) {
+	c.mu.Lock()
+	eof, inRequest := c.eof, c.inRequest
+	c.mu.Unlock()
+	if !eof {
+		n, err := c.Conn.Read(p)
+		if !errors.Is(err, io.EOF) {
+			return n, err
+		}
+		c.mu.Lock()
+		c.eof = true
+		inRequest = c.inRequest
+		c.mu.Unlock()
+		if n > 0 {
+			return n, nil
+		}
+	}
+	if !inRequest {
+		return 0, io.EOF
+	}
+	return 0, c.waitAfterEOF()
+}
+
+// net/http reports StateActive once a request's first bytes are read, and StateIdle after its reply.
+func (c *halfCloseConn) setInRequest(in bool) {
+	c.mu.Lock()
+	c.inRequest = in
+	c.mu.Unlock()
+}
+
+// net/http stops its background read by setting a read deadline in the past, and ends an idle connection with
+// one in the future, so the wait honours every deadline set while it runs.
+func (c *halfCloseConn) waitAfterEOF() error {
+	for {
+		c.mu.Lock()
+		closed, deadline, changed := c.closed, c.deadline, c.changed
+		c.mu.Unlock()
+		if closed {
+			return net.ErrClosed
+		}
+		if deadline.IsZero() {
+			<-changed
+			continue
+		}
+		wait := time.Until(deadline)
+		if wait <= 0 {
+			return os.ErrDeadlineExceeded
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-changed:
+			timer.Stop()
+		case <-timer.C:
+			return os.ErrDeadlineExceeded
+		}
+	}
+}
+
+func (c *halfCloseConn) sawEOF() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.eof
+}
+
+func (c *halfCloseConn) wakeLocked() {
+	close(c.changed)
+	c.changed = make(chan struct{})
+}
+
+func (c *halfCloseConn) SetDeadline(t time.Time) error {
+	c.mu.Lock()
+	c.deadline = t
+	c.wakeLocked()
+	c.mu.Unlock()
+	return c.Conn.SetDeadline(t)
+}
+
+func (c *halfCloseConn) SetReadDeadline(t time.Time) error {
+	c.mu.Lock()
+	c.deadline = t
+	c.wakeLocked()
+	c.mu.Unlock()
+	return c.Conn.SetReadDeadline(t)
+}
+
+func (c *halfCloseConn) Close() error {
+	c.mu.Lock()
+	if !c.closed {
+		c.closed = true
+		c.wakeLocked()
+	}
+	c.mu.Unlock()
+	return c.Conn.Close()
+}
+
+// Kept so net/http can still end its side cleanly (a TLS close_notify or a TCP FIN) before a full close.
+func (c *halfCloseConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return nil
 }
 
 // handlePlainForward serves only http:// absolute-form. https:// is rejected so the proxy can never be
