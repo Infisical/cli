@@ -15,8 +15,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// fakeProjectsAPI answers GET /v1/projects/slug/:slug, GET /v1/projects/:id, DELETE /v1/projects/:id
-// and POST /v1/projects like the backend, and records every request. With notMember, the project
+// fakeProjectsAPI answers GET /v1/projects/slug/:slug, GET /v1/projects/:id, PATCH /v1/projects/:id,
+// DELETE /v1/projects/:id and POST /v1/projects like the backend, and records every request, with the
+// body of each PATCH in patches. With notMember, the project
 // routes answer the way the backend does for a user who isn't a member of the project.
 type fakeProjectsAPI struct {
 	projectType string
@@ -26,18 +27,22 @@ type fakeProjectsAPI struct {
 	expired     bool
 	mu          sync.Mutex
 	requests    []string
+	patches     []string
 }
 
 func (f *fakeProjectsAPI) serve(t *testing.T) {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.ReadAll(r.Body)
+		body, _ := io.ReadAll(r.Body)
 		line := r.Method + " " + strings.TrimPrefix(r.URL.Path, "/api")
 		if r.URL.RawQuery != "" {
 			line += "?" + r.URL.RawQuery
 		}
 		f.mu.Lock()
 		f.requests = append(f.requests, line)
+		if r.Method == http.MethodPatch {
+			f.patches = append(f.patches, string(body))
+		}
 		f.mu.Unlock()
 
 		w.Header().Set("Content-Type", "application/json")
@@ -65,6 +70,14 @@ func (f *fakeProjectsAPI) serve(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/slug/payments-api":
 			_ = json.NewEncoder(w).Encode(project)
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/"+testProjectID:
+			_ = json.NewEncoder(w).Encode(map[string]any{"project": project})
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/v1/projects/"+testProjectID:
+			delete(project, "environments")
+			var update map[string]string
+			_ = json.Unmarshal(body, &update)
+			for field, value := range update {
+				project[field] = value
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"project": project})
 		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/projects/"+testProjectID:
 			delete(project, "environments")
@@ -357,5 +370,61 @@ func TestProjectsGetIgnoresAnEnvServiceTokenUnlessByID(t *testing.T) {
 		if got := ignoresEnvServiceToken(get, c.args, envToken); got != c.ignored {
 			t.Errorf("%s: ignored=%v, want %v", c.name, got, c.ignored)
 		}
+	}
+}
+
+func TestProjectsUpdateSendsOnlyWhatChanged(t *testing.T) {
+	cases := []struct {
+		args []string
+		sent string
+	}{
+		{[]string{"payments-api", "--name", " Payments "}, `{"name":"Payments"}`},
+		{[]string{testProjectID, "--slug", "payments"}, `{"slug":"payments"}`},
+		{[]string{"payments-api", "--description", ""}, `{"description":""}`},
+		{[]string{"payments-api", "--name", "P", "--slug", "p-api", "--description", "Billing"}, `{"name":"P","description":"Billing","slug":"p-api"}`},
+	}
+	for _, c := range cases {
+		fake := &fakeProjectsAPI{}
+		_, stdout, exited := runProjects(t, fake, append([]string{"update"}, append(c.args, "-o", "json")...)...)
+		var updated map[string]any
+		if exited || len(fake.patches) != 1 || fake.patches[0] != c.sent || json.Unmarshal([]byte(stdout), &updated) != nil || updated["id"] != testProjectID {
+			t.Errorf("%v: exited=%v patches=%v stdout=%s", c.args, exited, fake.patches, stdout)
+		}
+	}
+
+	stderr, stdout, _ := runProjects(t, &fakeProjectsAPI{}, "update", "payments-api", "--name", "Billing")
+	if !strings.Contains(stderr, "Updated project Billing") || strings.Contains(stdout, "Updated project") {
+		t.Errorf("text: stderr=%q stdout=%q", stderr, stdout)
+	}
+}
+
+// Every refusal happens before the PATCH. The flag checks happen before any request at all.
+func TestProjectsUpdateRefusesBeforeUpdating(t *testing.T) {
+	cases := []struct {
+		name     string
+		fake     *fakeProjectsAPI
+		args     []string
+		code     string
+		requests bool
+	}{
+		{"no change flags", &fakeProjectsAPI{}, []string{"payments-api"}, errCodeNothingToUpdate, false},
+		{"empty name", &fakeProjectsAPI{}, []string{"payments-api", "--name", " "}, errCodeInvalidFlagValue, false},
+		{"empty slug", &fakeProjectsAPI{}, []string{"payments-api", "--slug", ""}, errCodeInvalidFlagValue, false},
+		{"missing slug", &fakeProjectsAPI{}, []string{"nope", "--name", "x"}, errCodeProjectNotFound, true},
+		{"missing ID", &fakeProjectsAPI{}, []string{"00000000-0000-4000-8000-000000000000", "--name", "x"}, errCodeProjectNotFound, true},
+		{"another product", &fakeProjectsAPI{projectType: "kms"}, []string{"payments-api", "--name", "x"}, errCodeProjectTypeNotSupported, true},
+		{"not a member", &fakeProjectsAPI{notMember: true}, []string{testProjectID, "--name", "x"}, errCodeProjectNotFound, true},
+	}
+	for _, c := range cases {
+		stderr, stdout, exited := runProjects(t, c.fake, append([]string{"update"}, append(c.args, "-o", "json")...)...)
+		if !exited || errorCode(t, stderr) != c.code || stdout != "" || len(c.fake.patches) != 0 || (len(c.fake.requests) > 0) != c.requests {
+			t.Errorf("%s: want %s, got exited=%v requests=%v stderr=%s", c.name, c.code, exited, c.fake.requests, stderr)
+		}
+	}
+}
+
+func TestProjectsUpdateRejectsServiceTokens(t *testing.T) {
+	if !rejectsServiceTokens(findCommand(t, smPath([]string{"projects", "update"}))) {
+		t.Error("projects update should be marked serviceTokenUnsupported")
 	}
 }

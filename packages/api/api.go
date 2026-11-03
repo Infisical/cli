@@ -39,6 +39,7 @@ const (
 	operationCallGetProjectEnvironments            = "CallGetProjectEnvironments"
 	operationCallGetProjectSettingsBySlug          = "CallGetProjectSettingsBySlug"
 	operationCallDeleteProject                     = "CallDeleteProject"
+	operationCallUpdateProject                     = "CallUpdateProject"
 	operationCallGetEnvironmentBySlug              = "CallGetEnvironmentBySlug"
 	operationCallCreateEnvironment                 = "CallCreateEnvironment"
 	operationCallUpdateEnvironment                 = "CallUpdateEnvironment"
@@ -569,6 +570,26 @@ func CallDeleteProject(httpClient *resty.Client, projectID string) (ProjectDetai
 	}
 
 	return deleteResponse.Project, nil
+}
+
+func CallUpdateProject(httpClient *resty.Client, projectID string, request UpdateProjectRequest) (ProjectDetails, error) {
+	var updateResponse UpdateProjectResponse
+	response, err := httpClient.
+		R().
+		SetBody(request).
+		SetResult(&updateResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Patch(fmt.Sprintf("%v/v1/projects/%s", config.INFISICAL_URL, url.PathEscape(projectID)))
+
+	if err != nil {
+		return ProjectDetails{}, NewGenericRequestError(operationCallUpdateProject, err)
+	}
+
+	if response.IsError() {
+		return ProjectDetails{}, NewAPIErrorWithResponse(operationCallUpdateProject, response, nil)
+	}
+
+	return updateResponse.Project, nil
 }
 
 func CallGetProjectBySlug(httpClient *resty.Client, slug string) (Project, error) {

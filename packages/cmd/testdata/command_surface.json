@@ -733,6 +733,13 @@
     "output": "o|string|",
     "token": "|string|"
   },
+  "infisical secrets-manager project update": {
+    "description": "|string|",
+    "name": "|string|",
+    "output": "o|string|",
+    "slug": "|string|",
+    "token": "|string|"
+  },
   "infisical secrets-manager projects": {},
   "infisical secrets-manager projects create": {
     "description": "|string|",
@@ -753,6 +760,13 @@
   },
   "infisical secrets-manager projects list": {
     "output": "o|string|",
+    "token": "|string|"
+  },
+  "infisical secrets-manager projects update": {
+    "description": "|string|",
+    "name": "|string|",
+    "output": "o|string|",
+    "slug": "|string|",
     "token": "|string|"
   },
   "infisical secrets-manager run": {
@@ -1110,6 +1124,13 @@
     "output": "o|string|",
     "token": "|string|"
   },
+  "infisical sm project update": {
+    "description": "|string|",
+    "name": "|string|",
+    "output": "o|string|",
+    "slug": "|string|",
+    "token": "|string|"
+  },
   "infisical sm projects": {},
   "infisical sm projects create": {
     "description": "|string|",
@@ -1130,6 +1151,13 @@
   },
   "infisical sm projects list": {
     "output": "o|string|",
+    "token": "|string|"
+  },
+  "infisical sm projects update": {
+    "description": "|string|",
+    "name": "|string|",
+    "output": "o|string|",
+    "slug": "|string|",
     "token": "|string|"
   },
   "infisical sm run": {

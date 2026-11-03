@@ -272,6 +272,17 @@ type ProjectSettings struct {
 	HasDeleteProtection bool `json:"hasDeleteProtection"`
 }
 
+// UpdateProjectRequest sends only the fields that are set. An empty Description clears it.
+type UpdateProjectRequest struct {
+	Name        *string `json:"name,omitempty"`
+	Description *string `json:"description,omitempty"`
+	Slug        *string `json:"slug,omitempty"`
+}
+
+type UpdateProjectResponse struct {
+	Project ProjectDetails `json:"project"`
+}
+
 type DeleteProjectResponse struct {
 	Project ProjectDetails `json:"project"`
 }

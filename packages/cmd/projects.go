@@ -31,7 +31,7 @@ func buildProjectsCmd() *cobra.Command {
 	projectsCmd := &cobra.Command{
 		Use:     "projects",
 		Aliases: []string{"project"},
-		Short:   "Show, create, and delete Secrets Management projects",
+		Short:   "Show, create, update, and delete Secrets Management projects",
 		Example: `# List the projects in your organization
 infisical secrets-manager projects get
 
@@ -123,6 +123,26 @@ infisical secrets-manager projects create --name my-app --description "Backend s
 	createCmd.Flags().String("token", "", "Create the project using a machine identity access token")
 	addProjectsOutputFlag(createCmd, "The output to format the created project in")
 	projectsCmd.AddCommand(createCmd)
+
+	updateCmd := &cobra.Command{
+		Use:   "update <slug-or-id>",
+		Short: "Change a Secrets Management project's name, slug, or description",
+		Example: `infisical secrets-manager projects update my-app --name "My App"
+infisical secrets-manager projects update my-app --slug my-app-backend
+
+# Clear the description
+infisical secrets-manager projects update <project-id> --description ""`,
+		DisableFlagsInUseLine: true,
+		Args:                  cobra.ExactArgs(1),
+		Run:                   runProjectsUpdate,
+		Annotations:           serviceTokenUnsupported,
+	}
+	updateCmd.Flags().String("name", "", "New name (up to 64 characters)")
+	updateCmd.Flags().String("slug", "", "New slug (up to 64 characters). Commands that name the project by its old slug stop working")
+	updateCmd.Flags().String("description", "", `New description (up to 1024 characters). Pass "" to clear it`)
+	updateCmd.Flags().String("token", "", "Update the project using a machine identity access token")
+	addProjectsOutputFlag(updateCmd, "The output to format the updated project in")
+	projectsCmd.AddCommand(updateCmd)
 
 	deleteCmd := &cobra.Command{
 		Use:   "delete <slug>",
@@ -336,16 +356,7 @@ func runProjectsGet(cmd *cobra.Command, args []string) {
 }
 
 func getProjectByID(cmd *cobra.Command, projectID, outputFormat string) {
-	project, err := api.CallGetProject(projectsHTTPClient(cmd), projectID)
-	if err != nil {
-		exitWithError(cmd, classifyAPIError(err, errorScope{ProjectID: projectID}, func(cause error) *util.CLIError {
-			return errProjectNotFound(errorScope{ProjectID: projectID}, cause)
-		}), "Unable to get the project")
-	}
-	if project.Type != "" && project.Type != secretManagerProjectType {
-		exitWithError(cmd, errProjectTypeNotSupported(project.Name, project.Type))
-	}
-
+	project := secretsManagerProjectByID(cmd, projectsHTTPClient(cmd), projectID)
 	if outputFormat != "" {
 		printFormattedOutput(outputFormat, project)
 	} else {
@@ -392,6 +403,27 @@ func runProjectsGetBySlug(cmd *cobra.Command, slug, outputFormat string) {
 	}
 
 	Telemetry.CaptureEvent("cli-command:projects get", posthog.NewProperties().Set("bySlug", true).Set("version", util.CLI_VERSION))
+}
+
+// secretsManagerProject finds the project by its slug or its ID, the way projects get takes it.
+func secretsManagerProject(cmd *cobra.Command, client *resty.Client, slugOrID string) api.ProjectDetails {
+	if isProjectID(slugOrID) {
+		return secretsManagerProjectByID(cmd, client, slugOrID)
+	}
+	return secretsManagerProjectBySlug(cmd, client, slugOrID).ProjectDetails
+}
+
+func secretsManagerProjectByID(cmd *cobra.Command, client *resty.Client, projectID string) api.ProjectDetails {
+	project, err := api.CallGetProject(client, projectID)
+	if err != nil {
+		exitWithError(cmd, classifyAPIError(err, errorScope{ProjectID: projectID}, func(cause error) *util.CLIError {
+			return errProjectNotFound(errorScope{ProjectID: projectID}, cause)
+		}), "Unable to get the project")
+	}
+	if project.Type != "" && project.Type != secretManagerProjectType {
+		exitWithError(cmd, errProjectTypeNotSupported(project.Name, project.Type))
+	}
+	return project
 }
 
 // secretsManagerProjectBySlug exits with project_not_found or project_type_not_supported rather than
@@ -445,6 +477,57 @@ func runProjectsDelete(cmd *cobra.Command, args []string) {
 	}
 
 	Telemetry.CaptureEvent("cli-command:projects delete", posthog.NewProperties().Set("version", util.CLI_VERSION))
+}
+
+// projectUpdate reads the change flags. A name or slug can't be empty, but an empty description clears it.
+func projectUpdate(cmd *cobra.Command) (api.UpdateProjectRequest, *util.CLIError) {
+	var request api.UpdateProjectRequest
+	for _, field := range []struct {
+		flag       string
+		value      **string
+		allowEmpty bool
+	}{{"name", &request.Name, false}, {"slug", &request.Slug, false}, {"description", &request.Description, true}} {
+		if !cmd.Flags().Changed(field.flag) {
+			continue
+		}
+		value, _ := cmd.Flags().GetString(field.flag)
+		value = strings.TrimSpace(value)
+		if value == "" && !field.allowEmpty {
+			return api.UpdateProjectRequest{}, errEmptyFlag(field.flag)
+		}
+		*field.value = &value
+	}
+	return request, nil
+}
+
+func runProjectsUpdate(cmd *cobra.Command, args []string) {
+	outputFormat := projectsOutputFormat(cmd)
+	request, invalid := projectUpdate(cmd)
+	if invalid != nil {
+		exitWithError(cmd, invalid)
+	}
+	if request.Name == nil && request.Slug == nil && request.Description == nil {
+		exitWithError(cmd, errNothingToUpdate([]string{"name", "slug", "description"}))
+	}
+
+	client := secretsManagerHTTPClient(cmd, "update projects")
+	project := secretsManagerProject(cmd, client, args[0])
+	updated, err := api.CallUpdateProject(client, project.ID, request)
+	if err != nil {
+		scope := errorScope{ProjectName: project.Name}
+		exitWithError(cmd, classifyAPIError(err, scope, func(cause error) *util.CLIError {
+			return errProjectNotFound(scope, cause)
+		}), "Unable to update the project")
+	}
+
+	if outputFormat != "" {
+		printFormattedOutput(outputFormat, updated)
+	} else {
+		printSuccessNotice(cmd, fmt.Sprintf("Updated project %s", util.SanitizeDisplay(updated.Name)))
+		printProjectDetails(updated)
+	}
+
+	Telemetry.CaptureEvent("cli-command:projects update", posthog.NewProperties().Set("bySlug", !isProjectID(args[0])).Set("version", util.CLI_VERSION))
 }
 
 // linkedProjectID is the project .infisical.yaml (or a legacy .infisical.json) links this directory
