@@ -51,7 +51,7 @@ func buildSecretsWriteCmd(action string, mode util.SecretWriteMode, short, examp
 		},
 	}
 	cmd.Flags().String("token", "", "Write the secrets using a service token or machine identity access token")
-	cmd.Flags().String("projectId", "", "ID of the project (falls back to INFISICAL_PROJECT_ID, then .infisical.yaml)")
+	cmd.Flags().String("projectId", "", "ID of the project (falls back to INFISICAL_PROJECT_ID, then .infisical.yaml or a legacy .infisical.json)")
 	cmd.Flags().String("path", "/", "Folder path of the secrets")
 	cmd.Flags().String("type", util.SECRET_TYPE_SHARED, "Type of the secrets: shared or personal")
 	cmd.Flags().String("file", "", "Read the secrets from a .env or YAML file (comments: # or //) instead of arguments")

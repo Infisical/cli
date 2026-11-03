@@ -53,6 +53,8 @@ func (f *fakeProjectsAPI) serve(t *testing.T) {
 		case f.notMember && strings.HasPrefix(r.URL.Path, "/api/v1/projects/"):
 			w.WriteHeader(http.StatusForbidden)
 			_, _ = w.Write([]byte(`{"error":"ProjectMembershipNotFound","message":"You are not a member of this project with ID ` + testProjectID + `.","reqId":"req-test"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects":
+			_ = json.NewEncoder(w).Encode(map[string]any{"projects": []any{project}})
 		case f.denyCreate && r.Method == http.MethodPost && r.URL.Path == "/api/v1/projects":
 			w.WriteHeader(http.StatusForbidden)
 			_, _ = w.Write([]byte(`{"error":"PermissionDenied","message":"You are not allowed to create on workspace","reqId":"req-test"}`))
@@ -166,9 +168,31 @@ func TestProjectsGetByIDErrors(t *testing.T) {
 		t.Errorf("not a member: exited=%v stderr=%s", exited, stderr)
 	}
 	fake := &fakeProjectsAPI{}
-	stderr, _, exited = runProjects(t, fake, "get", "-o", "json")
-	if !exited || errorCode(t, stderr) != errCodeProjectNotLinked || len(fake.requests) != 0 {
-		t.Errorf("no project: exited=%v requests=%v stderr=%s", exited, fake.requests, stderr)
+	stderr, _, exited = runProjects(t, fake, "get", "--projectId", " ", "-o", "json")
+	if !exited || errorCode(t, stderr) != errCodeInvalidFlagValue || len(fake.requests) != 0 {
+		t.Errorf("empty --projectId: exited=%v requests=%v stderr=%s", exited, fake.requests, stderr)
+	}
+}
+
+// get with no slug and no --projectId lists, like get for every resource, even in a directory that
+// .infisical.yaml links to a project. projects list does the same, hidden.
+func TestProjectsGetWithoutASlugLists(t *testing.T) {
+	for _, args := range [][]string{{"get"}, {"list"}} {
+		fake := &fakeProjectsAPI{}
+		fake.serve(t)
+		t.Setenv(util.INFISICAL_PROJECT_ID_NAME, testProjectID)
+		_, stdout, exited := runUnderSecretsManager(t, buildProjectsCmd, append([]string{"projects"}, append(args, "-o", "json")...)...)
+		var projects []map[string]any
+		if exited || json.Unmarshal([]byte(stdout), &projects) != nil || len(projects) != 1 || projects[0]["slug"] != "payments-api" {
+			t.Errorf("%v: exited=%v stdout=%s", args, exited, stdout)
+		}
+		if len(fake.requests) != 1 || fake.requests[0] != "GET /v1/projects?type=secret-manager" {
+			t.Errorf("%v: requests=%v", args, fake.requests)
+		}
+	}
+	list, _, _ := buildProjectsCmd().Find([]string{"list"})
+	if !list.Hidden {
+		t.Error("projects list should be hidden: get lists")
 	}
 }
 
@@ -252,25 +276,29 @@ func TestProjectsDeleteRejectsServiceTokens(t *testing.T) {
 	}
 }
 
-// The root's "session is being overwritten" warning and the slug lookup must agree on when a service
-// token from INFISICAL_TOKEN is set aside: only for projects get <slug>, never for a lookup by ID, and
-// never for one passed with --token.
-func TestProjectsGetIgnoresAnEnvServiceTokenOnlyForASlug(t *testing.T) {
+// The root's "session is being overwritten" warning and the request must agree on when a service
+// token from INFISICAL_TOKEN is set aside: for listing and for a slug, whose routes reject it, but not
+// for a lookup by --projectId, and never for one passed with --token, which is refused instead.
+func TestProjectsGetIgnoresAnEnvServiceTokenUnlessByID(t *testing.T) {
 	envToken := &models.TokenDetails{Type: util.SERVICE_TOKEN_IDENTIFIER, Token: "st.a.b.c", Source: "INFISICAL_TOKEN environment variable"}
-	get, _, err := buildProjectsCmd().Find([]string{"get"})
-	if err != nil {
-		t.Fatal(err)
+	cases := []struct {
+		name    string
+		flags   []string
+		args    []string
+		ignored bool
+	}{
+		{"slug", nil, []string{"payments-api"}, true},
+		{"listing", nil, nil, true},
+		{"by ID", []string{"--projectId", testProjectID}, nil, false},
+		{"--token", []string{"--token", "st.a.b.c"}, []string{"payments-api"}, false},
 	}
-	if !ignoresEnvServiceToken(get, []string{"payments-api"}, envToken) {
-		t.Error("projects get <slug> should use the session, so the root must not warn about the token")
-	}
-	if ignoresEnvServiceToken(get, nil, envToken) {
-		t.Error("projects get by ID still accepts service tokens")
-	}
-	if err := get.ParseFlags([]string{"--token", "st.a.b.c"}); err != nil {
-		t.Fatal(err)
-	}
-	if ignoresEnvServiceToken(get, []string{"payments-api"}, envToken) {
-		t.Error("a service token passed with --token is refused, not ignored")
+	for _, c := range cases {
+		get, _, err := buildProjectsCmd().Find([]string{"get"})
+		if err != nil || get.ParseFlags(c.flags) != nil {
+			t.Fatal(err)
+		}
+		if got := ignoresEnvServiceToken(get, c.args, envToken); got != c.ignored {
+			t.Errorf("%s: ignored=%v, want %v", c.name, got, c.ignored)
+		}
 	}
 }

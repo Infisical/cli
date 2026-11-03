@@ -143,20 +143,20 @@ func errProjectNotLinked() *util.CLIError {
 		Message: "No project is selected: this directory isn't linked to one and --projectId wasn't passed.",
 		Next: []util.NextStep{
 			{Purpose: "To link this directory to a project", Command: "infisical init"},
-			{Purpose: "To find a project ID to pass with --projectId", Command: secretsManagerPrefix + " projects list"},
+			{Purpose: "To find a project ID to pass with --projectId", Command: secretsManagerPrefix + " projects get"},
 		}}
 }
 
 func errProjectNotFound(scope errorScope, cause error) *util.CLIError {
 	return &util.CLIError{Code: errCodeProjectNotFound, Cause: cause,
 		Message: fmt.Sprintf("Project %q doesn't exist, or you don't have access to it.", scope.projectLabel()),
-		Next:    []util.NextStep{{Purpose: "To see the projects you can access", Command: secretsManagerPrefix + " projects list"}}}
+		Next:    []util.NextStep{{Purpose: "To see the projects you can access", Command: secretsManagerPrefix + " projects get"}}}
 }
 
 func errProjectTypeNotSupported(projectName, projectType string) *util.CLIError {
 	return &util.CLIError{Code: errCodeProjectTypeNotSupported,
 		Message: fmt.Sprintf("%q is a %s project, and %s commands only work with Secrets Management projects.", projectName, projectType, secretsManagerCommandName),
-		Next:    []util.NextStep{{Purpose: "To see your Secrets Management projects", Command: secretsManagerPrefix + " projects list"}}}
+		Next:    []util.NextStep{{Purpose: "To see your Secrets Management projects", Command: secretsManagerPrefix + " projects get"}}}
 }
 
 func errEnvironmentNotFound(slug string, scope errorScope, cause error) *util.CLIError {
@@ -191,7 +191,12 @@ func errEnvironmentPending(slug, deleteAfter string, scope errorScope) *util.CLI
 func errProjectRequired(what string) *util.CLIError {
 	return &util.CLIError{Code: errCodeProjectRequired,
 		Message: fmt.Sprintf("Deleting %s needs --projectId: a delete never uses %s or the project linked to this directory.", what, util.INFISICAL_PROJECT_ID_NAME),
-		Next:    []util.NextStep{{Purpose: "To find the project ID", Command: secretsManagerPrefix + " projects list"}}}
+		Next:    []util.NextStep{{Purpose: "To find the project ID", Command: secretsManagerPrefix + " projects get"}}}
+}
+
+func errEmptyProjectID() *util.CLIError {
+	return &util.CLIError{Code: errCodeInvalidFlagValue,
+		Message: "--projectId can't be empty: pass a project ID, or leave it out to list your projects."}
 }
 
 func errEmptyFlag(flag string) *util.CLIError {

@@ -26,6 +26,31 @@ var secretsManagementCommands = []func() *cobra.Command{
 	buildDynamicSecretsCmd,
 }
 
+const (
+	projectIDFallsBack = "ID of the project (falls back to INFISICAL_PROJECT_ID, then .infisical.yaml or a legacy .infisical.json)"
+	projectIDForReads  = "ID of the project (falls back to INFISICAL_PROJECT_ID, then, with a login session, .infisical.yaml or a legacy .infisical.json; a service token always uses its own project)"
+	projectIDForSet    = "ID of the project (falls back to INFISICAL_PROJECT_ID, then, with a login session, .infisical.yaml or a legacy .infisical.json; required with a token otherwise)"
+)
+
+// projectIDUsageUnderSecretsManager says how each shared command finds its project. The builders'
+// own text only mentions machine identities and predates the fallbacks. It stays on the top-level
+// copies, whose help doesn't change.
+var projectIDUsageUnderSecretsManager = map[string]string{
+	"secrets":                      projectIDForReads,
+	"secrets get":                  projectIDForReads,
+	"secrets set":                  projectIDForSet,
+	"secrets delete":               projectIDFallsBack,
+	"secrets folders get":          projectIDFallsBack,
+	"secrets folders create":       projectIDFallsBack,
+	"secrets folders delete":       projectIDFallsBack,
+	"run":                          projectIDForReads,
+	"export":                       projectIDForReads,
+	"dynamic-secrets lease create": projectIDFallsBack + ", unless --project-slug is set",
+	"dynamic-secrets lease list":   projectIDFallsBack + ", unless --project-slug is set",
+	"dynamic-secrets lease renew":  projectIDFallsBack + ", unless --project-slug is set",
+	"dynamic-secrets lease delete": projectIDFallsBack + ", unless --project-slug is set",
+}
+
 // hiddenUnderSecretsManager are kept working under `secrets-manager` for backwards compatibility,
 // but no longer listed in its help. The top-level copies are unchanged.
 var hiddenUnderSecretsManager = [][]string{
@@ -163,6 +188,14 @@ func init() {
 			panic(fmt.Sprintf("secrets-manager %s is not registered", path))
 		}
 		requireConfirmation(cmd, describe)
+	}
+
+	for path, usage := range projectIDUsageUnderSecretsManager {
+		cmd, rest, err := secretsManagerCmd.Find(strings.Fields(path))
+		if err != nil || len(rest) != 0 || cmd.Flags().Lookup("projectId") == nil {
+			panic(fmt.Sprintf("secrets-manager %s has no --projectId", path))
+		}
+		cmd.Flags().Lookup("projectId").Usage = usage
 	}
 
 	for _, path := range hiddenUnderSecretsManager {

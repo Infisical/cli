@@ -106,7 +106,6 @@ var conventionExceptions = map[string][]string{
 	"infisical secrets-manager dynamic-secrets lease list":   {"action", "examples", "short"},
 	"infisical secrets-manager dynamic-secrets lease renew":  {"action", "examples", "short"},
 	"infisical secrets-manager export":                       {"short"},
-	"infisical secrets-manager projects list":                {"action"}, // stays: projects get without a slug already means the linked project
 	"infisical secrets-manager run":                          {"short"},
 	"infisical secrets-manager secrets":                      {"short"},
 	"infisical secrets-manager secrets delete":               {"examples", "short"},

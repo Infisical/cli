@@ -41,6 +41,7 @@ func everyConstructedError() []*util.CLIError {
 		errProjectRequired("an environment"),
 		errEmptyFlag("name"),
 		errProjectSlugAndID(),
+		errEmptyProjectID(),
 		errFlagRequired("name", "the name of the new project"),
 		errSecretRepeated("DUP"),
 		errInvalidSecretType("team"),

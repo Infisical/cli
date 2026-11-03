@@ -102,9 +102,15 @@ func TestSmFlagsMatchTopLevel(t *testing.T) {
 		} {
 			topFlags, smFlags := flagSignature(pair[0]), flagSignature(pair[1])
 			for flag, signature := range topFlags {
-				if smFlags[flag] != signature {
-					t.Errorf("%s: %s flag --%s differs under sm: top=%q sm=%q", name, kind, flag, signature, smFlags[flag])
+				if smFlags[flag] == signature {
+					continue
 				}
+				// Only the description of --projectId may differ, and only where sm.go sets it.
+				if usage, rewritten := projectIDUsageUnderSecretsManager[name]; rewritten && kind == "local" && flag == "projectId" &&
+					strings.TrimSuffix(smFlags[flag], usage) == strings.TrimSuffix(signature, top.LocalFlags().Lookup("projectId").Usage) {
+					continue
+				}
+				t.Errorf("%s: %s flag --%s differs under sm: top=%q sm=%q", name, kind, flag, signature, smFlags[flag])
 			}
 			for flag := range smFlags {
 				if _, ok := topFlags[flag]; ok {

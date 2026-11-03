@@ -171,7 +171,7 @@ func TestCommandSurfaceIsBackwardsCompatible(t *testing.T) {
 
 func TestCommandSurfaceRecordsAliases(t *testing.T) {
 	surface := currentCommandSurface()
-	for _, path := range []string{"infisical av", "infisical av proxy", "infisical sm projects list", "infisical sm project list", "infisical secrets-manager project list"} {
+	for _, path := range []string{"infisical av", "infisical av proxy", "infisical sm projects get", "infisical sm project get", "infisical secrets-manager project get"} {
 		if _, ok := surface[path]; !ok {
 			t.Errorf("alias path %q is not part of the surface", path)
 		}

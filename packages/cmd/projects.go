@@ -30,12 +30,12 @@ func buildProjectsCmd() *cobra.Command {
 	projectsCmd := &cobra.Command{
 		Use:     "projects",
 		Aliases: []string{"project"},
-		Short:   "List, inspect, and create Secrets Management projects",
+		Short:   "Show, create, and delete Secrets Management projects",
 		Example: `# List the projects in your organization
-infisical secrets-manager projects list
+infisical secrets-manager projects get
 
 # Show a project and its environments
-infisical secrets-manager projects get --projectId=<project-id>
+infisical secrets-manager projects get my-app
 
 # Create a project, then link this directory to it
 infisical secrets-manager projects create --name my-app
@@ -47,6 +47,7 @@ infisical init --project-id <project-id>`,
 		},
 	}
 
+	// Hidden but still working: `projects get` with no slug lists, like get does for every resource.
 	listCmd := &cobra.Command{
 		Use:   "list",
 		Short: "List the Secrets Management projects in your organization",
@@ -54,6 +55,7 @@ infisical init --project-id <project-id>`,
 
 # With a machine identity access token
 infisical secrets-manager projects list --token <access-token>`,
+		Hidden:                true,
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.NoArgs,
 		Run:                   runProjectsList,
@@ -65,18 +67,25 @@ infisical secrets-manager projects list --token <access-token>`,
 
 	getCmd := &cobra.Command{
 		Use:   "get [slug]",
-		Short: "Show a project and its environments",
-		Example: `infisical secrets-manager projects get my-app
-infisical secrets-manager projects get --projectId=<project-id>
+		Short: "List your Secrets Management projects, or show one and its environments",
+		Long: `List your Secrets Management projects, or show one and its environments.
 
-# The project this directory is linked to with infisical init
-infisical secrets-manager projects get`,
+Without a slug, lists the projects in your organization. It doesn't use INFISICAL_PROJECT_ID or
+.infisical.yaml to pick one: pass the project's slug to see it.`,
+		Example: `# Every Secrets Management project in your organization
+infisical secrets-manager projects get
+
+# One project and its environments
+infisical secrets-manager projects get my-app`,
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.MaximumNArgs(1),
 		Run:                   runProjectsGet,
-		Annotations:           serviceTokenUnsupportedWithArgs,
+		Annotations:           serviceTokenOnlyWithProjectID,
 	}
-	getCmd.Flags().String("projectId", "", "project id (falls back to INFISICAL_PROJECT_ID, then .infisical.yaml or a legacy .infisical.json)")
+	getCmd.Flags().String("projectId", "", "ID of the project to show, instead of a slug")
+	// Still works, for scripts and for service tokens, which can't look a project up by slug. The slug
+	// is the documented way to name one.
+	_ = getCmd.Flags().MarkHidden("projectId")
 	getCmd.Flags().String("token", "", "Get the project using a machine identity access token")
 	addProjectsOutputFlag(getCmd, "The output to format the project in")
 	projectsCmd.AddCommand(getCmd)
@@ -126,16 +135,19 @@ const serviceTokenAnnotation = "infisical.serviceToken"
 // annotation rather than a list of command paths so it holds under every alias of the command.
 var serviceTokenUnsupported = map[string]string{serviceTokenAnnotation: "unsupported"}
 
-// serviceTokenUnsupportedWithArgs marks a command that accepts service tokens on its own but not when
-// given a positional target, such as projects get <slug>, whose lookup route rejects them.
-var serviceTokenUnsupportedWithArgs = map[string]string{serviceTokenAnnotation: "unsupported-with-args"}
+// serviceTokenOnlyWithProjectID marks projects get, which accepts service tokens only for a lookup by
+// --projectId: listing and the lookup by slug use routes that reject them.
+var serviceTokenOnlyWithProjectID = map[string]string{serviceTokenAnnotation: "only-with-projectId"}
 
 func rejectsServiceTokens(cmd *cobra.Command) bool {
 	return cmd.Annotations[serviceTokenAnnotation] == "unsupported"
 }
 
 func rejectsServiceTokensFor(cmd *cobra.Command, args []string) bool {
-	return rejectsServiceTokens(cmd) || (cmd.Annotations[serviceTokenAnnotation] == "unsupported-with-args" && len(args) > 0)
+	if cmd.Annotations[serviceTokenAnnotation] == "only-with-projectId" {
+		return len(args) > 0 || !cmd.Flags().Changed("projectId")
+	}
+	return rejectsServiceTokens(cmd)
 }
 
 // Reports whether cmd will skip token and use the login session instead,
@@ -250,9 +262,11 @@ func printFormattedOutput[T any](outputFormat string, value T) {
 }
 
 func runProjectsList(cmd *cobra.Command, args []string) {
-	outputFormat := projectsOutputFormat(cmd)
+	listProjects(cmd, projectsHTTPClient(cmd), projectsOutputFormat(cmd))
+}
 
-	projects, err := api.CallListProjects(projectsHTTPClient(cmd), secretManagerProjectType)
+func listProjects(cmd *cobra.Command, client *resty.Client, outputFormat string) {
+	projects, err := api.CallListProjects(client, secretManagerProjectType)
 	if err != nil {
 		exitWithError(cmd, classifyAPIError(err, errorScope{}, nil), "Unable to list projects")
 	}
@@ -275,9 +289,16 @@ func runProjectsGet(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	projectID := resolveProjectID(cmd)
-	if projectID == "" {
-		exitWithError(cmd, errProjectNotLinked())
+	// Without a slug or --projectId, get lists, like it does for every resource. It doesn't fall back to
+	// INFISICAL_PROJECT_ID or .infisical.yaml, which would make it mean something else in a linked
+	// directory.
+	if !cmd.Flags().Changed("projectId") {
+		listProjects(cmd, secretsManagerHTTPClientRejecting(cmd, "list projects", true), outputFormat)
+		return
+	}
+	projectID, _ := cmd.Flags().GetString("projectId")
+	if projectID = strings.TrimSpace(projectID); projectID == "" {
+		exitWithError(cmd, errEmptyProjectID())
 	}
 
 	project, err := api.CallGetProject(projectsHTTPClient(cmd), projectID)
