@@ -101,8 +101,13 @@ func guardControl(own map[netip.Addr]bool) func(network, address string, c sysca
 		if err != nil {
 			return errPrivateDestination
 		}
-		ip := addrPort.Addr()
-		if blockedDestination(ip) || own[ip.WithZone("").Unmap()] {
+		// Normalised once, so a NAT64 form of one of the machine's own addresses is caught as well.
+		ip := addrPort.Addr().WithZone("").Unmap()
+		if nat64Prefix.Contains(ip) {
+			b := ip.As16()
+			ip = netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]})
+		}
+		if blockedDestination(ip) || own[ip] {
 			return errPrivateDestination
 		}
 		return nil

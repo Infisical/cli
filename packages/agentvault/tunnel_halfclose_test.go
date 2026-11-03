@@ -95,28 +95,6 @@ func sendThenHalfClose(t *testing.T, conn net.Conn, closeWrite func() error, hos
 }
 
 func TestTunnelRepliesAfterTheClientHalfCloses(t *testing.T) {
-	t.Run("HTTP door, plain HTTP, TCP FIN", func(t *testing.T) {
-		f := newSocks5Fixture(t, &stubResolver{result: &resolveResult{SessionID: "s1"}}, slowUpstreams(300*time.Millisecond))
-		_, port := plainUpstream(t)
-		target := net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port)))
-		conn := connectHTTPDoor(t, f.ps, target)
-		status, body := sendThenHalfClose(t, conn, conn.CloseWrite, target)
-		if status != http.StatusOK || body != "plain reply /half" {
-			t.Fatalf("status=%d body=%q", status, body)
-		}
-	})
-
-	t.Run("HTTP door, HTTPS, TLS close_notify", func(t *testing.T) {
-		f := newSocks5Fixture(t, &stubResolver{result: &resolveResult{SessionID: "s1"}}, slowUpstreams(300*time.Millisecond))
-		target := net.JoinHostPort("127.0.0.1", strconv.Itoa(int(f.upstreamPort(t))))
-		raw := connectHTTPDoor(t, f.ps, target)
-		inner := tls.Client(raw, &tls.Config{RootCAs: f.proxyCAs, ServerName: "127.0.0.1"})
-		status, _ := sendThenHalfClose(t, inner, inner.CloseWrite, target)
-		if status != http.StatusOK {
-			t.Fatalf("status=%d", status)
-		}
-	})
-
 	t.Run("SOCKS5 door, HTTPS, TLS close_notify", func(t *testing.T) {
 		f := newSocks5Fixture(t, &stubResolver{result: &resolveResult{SessionID: "s1"}}, slowUpstreams(300*time.Millisecond))
 		conn, auth, rep := dialSocks5(t, f.addr, f.outerTLS(), ProxyAuthUsername, testSocks5Token, "127.0.0.1", f.upstreamPort(t))
@@ -145,6 +123,40 @@ func TestTunnelRepliesAfterTheClientHalfCloses(t *testing.T) {
 		status, body := sendThenHalfClose(t, outer, outer.CloseWrite, net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))))
 		if status != http.StatusOK || body != "plain reply /half" {
 			t.Fatalf("status=%d body=%q", status, body)
+		}
+	})
+}
+
+// The HTTP door keeps net/http's behaviour: a client that stops sending is taken as gone, and its request is
+// cancelled rather than left running upstream.
+func TestHTTPDoorCancelsWhenTheClientStopsSending(t *testing.T) {
+	t.Run("plain HTTP, TCP FIN", func(t *testing.T) {
+		f := newSocks5Fixture(t, &stubResolver{result: &resolveResult{SessionID: "s1"}}, slowUpstreams(2*time.Second))
+		_, port := plainUpstream(t)
+		target := net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port)))
+		conn := connectHTTPDoor(t, f.ps, target)
+		start := time.Now()
+		status, _ := sendThenHalfClose(t, conn, conn.CloseWrite, target)
+		if status != http.StatusBadGateway {
+			t.Fatalf("status=%d, want 502 from the cancelled request", status)
+		}
+		if waited := time.Since(start); waited > time.Second {
+			t.Fatalf("took %s, want the request cancelled before the 2s upstream finished", waited)
+		}
+	})
+
+	t.Run("HTTPS, TLS close_notify", func(t *testing.T) {
+		f := newSocks5Fixture(t, &stubResolver{result: &resolveResult{SessionID: "s1"}}, slowUpstreams(2*time.Second))
+		target := net.JoinHostPort("127.0.0.1", strconv.Itoa(int(f.upstreamPort(t))))
+		raw := connectHTTPDoor(t, f.ps, target)
+		inner := tls.Client(raw, &tls.Config{RootCAs: f.proxyCAs, ServerName: "127.0.0.1"})
+		start := time.Now()
+		status, _ := sendThenHalfClose(t, inner, inner.CloseWrite, target)
+		if status != http.StatusBadGateway {
+			t.Fatalf("status=%d, want 502 from the cancelled request", status)
+		}
+		if waited := time.Since(start); waited > time.Second {
+			t.Fatalf("took %s, want the request cancelled before the 2s upstream finished", waited)
 		}
 	})
 }
@@ -289,8 +301,45 @@ func TestHalfCloseConnWakesOnClose(t *testing.T) {
 
 // A client that left looks the same as one that only stopped sending, so an upstream that never answers must not
 // hold the tunnel open for good.
+func TestHalfCloseConnGivesUpWhenNoReplyStarts(t *testing.T) {
+	c := halfClosedPipe(t, true)
+	c.replyStartLimit = 150 * time.Millisecond
+	start := time.Now()
+	_, err := c.Read(make([]byte, 1))
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("err = %v, want io.EOF once the start limit passes", err)
+	}
+	if waited := time.Since(start); waited < 100*time.Millisecond || waited > 2*time.Second {
+		t.Fatalf("gave up after %s, want about the 150ms limit", waited)
+	}
+}
+
+// Once the reply is flowing, a client that left is noticed when a write fails, so the longer limit applies.
+func TestHalfCloseConnWaitsLongerOnceTheReplyStarts(t *testing.T) {
+	server, client := net.Pipe()
+	t.Cleanup(func() { _ = server.Close() })
+	c := newHalfCloseConn(server)
+	c.setInRequest(true)
+	c.replyStartLimit = 100 * time.Millisecond
+	c.replyLimit = 600 * time.Millisecond
+	go func() { _, _ = io.Copy(io.Discard, client) }()
+	if _, err := c.Write([]byte("HTTP/1.1 200 OK\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	_ = client.Close()
+	start := time.Now()
+	_, err := c.Read(make([]byte, 1))
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("err = %v, want io.EOF once the overall limit passes", err)
+	}
+	if waited := time.Since(start); waited < 400*time.Millisecond {
+		t.Fatalf("gave up after %s, the start limit applied though the reply had started", waited)
+	}
+}
+
 func TestHalfCloseConnGivesUpAfterTheReplyLimit(t *testing.T) {
 	c := halfClosedPipe(t, true)
+	c.replied = true
 	c.replyLimit = 150 * time.Millisecond
 	start := time.Now()
 	_, err := c.Read(make([]byte, 1))

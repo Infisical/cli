@@ -74,7 +74,7 @@ func TestGuardControlFailsClosed(t *testing.T) {
 
 func TestGuardControlRefusesTheHostsOwnAddresses(t *testing.T) {
 	control := guardControl(map[netip.Addr]bool{netip.MustParseAddr("8.8.4.4"): true})
-	for _, address := range []string{"8.8.4.4:443", "[::ffff:8.8.4.4]:443"} {
+	for _, address := range []string{"8.8.4.4:443", "[::ffff:8.8.4.4]:443", "[64:ff9b::808:404]:443"} {
 		if err := control("tcp", address, nil); !errors.Is(err, errPrivateDestination) {
 			t.Errorf("guardControl(%q) = %v, want errPrivateDestination", address, err)
 		}

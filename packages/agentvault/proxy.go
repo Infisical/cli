@@ -380,8 +380,15 @@ func (b *bufferedConn) Read(p []byte) (int, error) { return b.reader.Read(p) }
 // The scheme is the tunnel's, not the inner request's, and the target host comes from the CONNECT line so
 // an agent cannot address one host through a tunnel to another.
 func (ps *proxyServer) serveTunnel(conn net.Conn, t tunnel) {
-	halfClose := newHalfCloseConn(conn)
-	listener := newOneShotListener(halfClose)
+	// Only the SOCKS5 door, where E2B passes a sandbox's half-close on as a close_notify. A client on the HTTP
+	// door that closes is taken as gone, so its request is cancelled at once.
+	var halfClose *halfCloseConn
+	served := conn
+	if t.viaSocks5 {
+		halfClose = newHalfCloseConn(conn)
+		served = halfClose
+	}
+	listener := newOneShotListener(served)
 	srv := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ps.forwardHTTP(w, r, t)
@@ -392,11 +399,13 @@ func (ps *proxyServer) serveTunnel(conn net.Conn, t tunnel) {
 		IdleTimeout:       tunnelIdleTimeout,
 		MaxHeaderBytes:    maxRequestHeaderBytes,
 		ConnState: func(_ net.Conn, state http.ConnState) {
-			halfClose.setInRequest(state == http.StateActive)
-			// A client that stopped sending can't send another request, so once its reply is out the
-			// connection is done rather than idling until the timeout.
-			if state == http.StateIdle && halfClose.sawEOF() {
-				_ = halfClose.Close()
+			if halfClose != nil {
+				halfClose.setInRequest(state == http.StateActive)
+				// A client that stopped sending can't send another request, so once its reply is out the
+				// connection is done rather than idling until the timeout.
+				if state == http.StateIdle && halfClose.sawEOF() {
+					_ = halfClose.Close()
+				}
 			}
 			if state == http.StateHijacked || state == http.StateClosed {
 				_ = listener.Close()
@@ -413,15 +422,18 @@ func (ps *proxyServer) serveTunnel(conn net.Conn, t tunnel) {
 // read, makes reads wait instead, until the connection closes or the read deadline passes. A client that really
 // left mid-request is noticed when the reply can't be written. Outside a request the end of input passes
 // through, so a client that connects and leaves frees its slot at once. A client that left can't be told apart
-// from one that only stopped sending, so the wait is capped: an upstream that never answers can't hold the slot.
+// from one that only stopped sending, so the wait is capped: the upstream has a minute to start its reply, and
+// a reply already flowing ends when a write to a client that left fails, or after 10 minutes at most.
 type halfCloseConn struct {
 	net.Conn
 
-	// How long a reply may take after the end of input. The Anthropic and OpenAI SDKs give up after 10 minutes.
+	replyStartLimit time.Duration
+	// The Anthropic and OpenAI SDKs give up after 10 minutes.
 	replyLimit time.Duration
 
 	mu        sync.Mutex
 	inRequest bool
+	replied   bool
 	eof       bool
 	eofAt     time.Time
 	closed    bool
@@ -431,7 +443,12 @@ type halfCloseConn struct {
 }
 
 func newHalfCloseConn(c net.Conn) *halfCloseConn {
-	return &halfCloseConn{Conn: c, replyLimit: halfCloseReplyLimit, changed: make(chan struct{})}
+	return &halfCloseConn{
+		Conn:            c,
+		replyStartLimit: halfCloseReplyStartLimit,
+		replyLimit:      halfCloseReplyLimit,
+		changed:         make(chan struct{}),
+	}
 }
 
 func (c *halfCloseConn) Read(p []byte) (int, error) {
@@ -461,7 +478,21 @@ func (c *halfCloseConn) Read(p []byte) (int, error) {
 func (c *halfCloseConn) setInRequest(in bool) {
 	c.mu.Lock()
 	c.inRequest = in
+	if in {
+		c.replied = false
+	}
 	c.mu.Unlock()
+}
+
+// The first write of a request's reply moves a waiting read from the start limit to the overall one.
+func (c *halfCloseConn) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	if !c.replied {
+		c.replied = true
+		c.wakeLocked()
+	}
+	c.mu.Unlock()
+	return c.Conn.Write(p)
 }
 
 // net/http stops its background read by setting a read deadline in the past, and ends an idle connection with
@@ -469,7 +500,11 @@ func (c *halfCloseConn) setInRequest(in bool) {
 func (c *halfCloseConn) waitAfterEOF() error {
 	for {
 		c.mu.Lock()
-		closed, deadline, changed, giveUp := c.closed, c.deadline, c.changed, c.eofAt.Add(c.replyLimit)
+		limit := c.replyStartLimit
+		if c.replied {
+			limit = c.replyLimit
+		}
+		closed, deadline, changed, giveUp := c.closed, c.deadline, c.changed, c.eofAt.Add(limit)
 		c.mu.Unlock()
 		if closed {
 			return net.ErrClosed
@@ -694,6 +729,14 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, t tun
 		// upstream read before the next write to the agent fails.
 		if fw.writeErr == nil && !errors.Is(copyErr, context.Canceled) {
 			log.Warn().Err(copyErr).Str("host", hostname).Msg("agent-vault: upstream stream failed part way")
+		}
+		// The request line above already logged the upstream's status, which the agent never got.
+		if fw.writeErr != nil {
+			gone := log.Info().Str("host", hostname).Str("path", reqPath).Int("status", status)
+			if t.viaSocks5 {
+				gone = gone.Str("door", "socks5")
+			}
+			gone.Msg("agent-vault: the client left before the reply reached it")
 		}
 		panic(http.ErrAbortHandler)
 	}
@@ -1121,7 +1164,10 @@ func (l *oneShotListener) Addr() net.Addr { return l.conn.LocalAddr() }
 
 const limitFullWarnEvery = time.Minute
 
-const halfCloseReplyLimit = 10 * time.Minute
+const (
+	halfCloseReplyStartLimit = time.Minute
+	halfCloseReplyLimit      = 10 * time.Minute
+)
 
 type limitListener struct {
 	net.Listener
