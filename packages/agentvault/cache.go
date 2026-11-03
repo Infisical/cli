@@ -64,9 +64,11 @@ type resolvedService struct {
 	// As Infisical sent it, so a credential refresh can name the destination the rejected token went to.
 	hostPattern  string
 	hostPatterns []hostPattern
-	// A nil map means every method is allowed; an empty slice of prefixes means every path.
+	// A nil map means every method is allowed; an empty slice of prefixes means every path. allowedTools is
+	// MCP only, the exact names tools/call may name, and nil means every tool.
 	allowedMethods      map[string]bool
 	allowedPathPrefixes []string
+	allowedTools        map[string]bool
 	credential          credential
 	customHeaders       []customHeader
 	substitutions       []substitution

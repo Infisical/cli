@@ -70,6 +70,7 @@ func (r *infisicalResolver) resolve(sessionToken string, held *sessionLogGrant) 
 			hostPatterns:          parseHostPatterns(wire.HostPattern),
 			allowedMethods:        toMethodSet(wire.AllowedMethods),
 			allowedPathPrefixes:   toPathPrefixes(wire.AllowedPathPrefixes),
+			allowedTools:          toToolSet(wire.AllowedTools),
 			credential:            toCredential(wire.Credential),
 			customHeaders:         toCustomHeaders(wire.CustomHeaders),
 			substitutions:         toSubstitutions(wire.Substitutions),
@@ -166,6 +167,19 @@ func toMethodSet(methods []string) map[string]bool {
 	set := make(map[string]bool, len(methods))
 	for _, method := range methods {
 		set[strings.ToUpper(strings.TrimSpace(method))] = true
+	}
+	return set
+}
+
+// Exact names, case and all, since that is how an MCP server matches them. Fails closed like toMethodSet:
+// only nil means every tool, so a list that arrived empty allows none.
+func toToolSet(tools []string) map[string]bool {
+	if tools == nil {
+		return nil
+	}
+	set := make(map[string]bool, len(tools))
+	for _, tool := range tools {
+		set[tool] = true
 	}
 	return set
 }
