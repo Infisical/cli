@@ -156,6 +156,16 @@ func readAgentVaultProxyInputs(cmd *cobra.Command) (agentVaultProxyInputs, error
 	if in.listenHost, err = hostOnly(listenHost, listenHostSource); err != nil {
 		return in, err
 	}
+	// Empty means every interface, the opposite of what someone passing the flag wants, such as from an
+	// unset variable in --listen-host "$HOST" or "[$HOST]".
+	// An empty environment variable still counts as unset, the way it does for every other setting here.
+	if in.listenHost == "" && (listenHost != "" || cmd.Flags().Changed("listen-host")) {
+		source := listenHostSource
+		if listenHost == "" {
+			source = "--listen-host"
+		}
+		return in, fmt.Errorf("%s is empty; pass an address such as 127.0.0.1, or leave it out to listen on all interfaces", source)
+	}
 
 	caCert, caCertSource, err := agentVaultFlagOrEnv(cmd, "ca-cert", "INFISICAL_AGENT_VAULT_CA_CERT")
 	if err != nil {
@@ -294,7 +304,7 @@ func hostOnly(raw, source string) (string, error) {
 		return "", fmt.Errorf("%s takes a host only, without a scheme such as https://, got %q", source, raw)
 	}
 	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
-		host = host[1 : len(host)-1]
+		host = strings.TrimSpace(host[1 : len(host)-1])
 	}
 	if strings.Contains(host, ":") {
 		if _, err := netip.ParseAddr(host); err != nil {
@@ -377,7 +387,7 @@ func addAgentVaultProxyFlags(cmd *cobra.Command) {
 	cmd.Flags().String("socks5-tls-name", "", "DNS name or IP address clients reach the SOCKS5 port by; the proxy makes the port's certificate for it")
 	cmd.Flags().String("socks5-tls-cert", "", "your own certificate for the SOCKS5 port, instead of one the proxy makes: PEM, base64 PEM or file path")
 	cmd.Flags().String("socks5-tls-key", "", "private key for --socks5-tls-cert: PEM, base64 PEM or file path")
-	cmd.Flags().Bool("socks5-allow-private-destinations", false, "let SOCKS5 traffic that no service covers reach private and internal addresses, such as loopback, link-local and the host's own")
+	cmd.Flags().Bool("socks5-allow-private-destinations", false, "let SOCKS5 traffic that no service covers reach private and internal addresses, such as loopback, link-local and the proxy's own network interfaces")
 	cmd.Flags().String("log-format", "console", "log output format: console | json")
 	cmd.Flags().String("log-file", "", "path to also write logs to")
 	// Units written for enrollment still pass this on every start; failing on an unknown flag would take an

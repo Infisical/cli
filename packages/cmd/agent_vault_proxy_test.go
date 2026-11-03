@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"strings"
 	"testing"
@@ -212,6 +213,29 @@ func TestAgentVaultProxyListenHostTakesAHostOnly(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAgentVaultProxyRefusesAnEmptyListenHost(t *testing.T) {
+	for _, value := range []string{"", "[]", "  ", "[ ]"} {
+		t.Run(fmt.Sprintf("flag %q", value), func(t *testing.T) {
+			_, err := readProxyInputs(t, nil, "--listen-host", value)
+			if err == nil || !strings.Contains(err.Error(), "--listen-host is empty") {
+				t.Fatalf("got %v, want an empty --listen-host error", err)
+			}
+		})
+	}
+	t.Run("env", func(t *testing.T) {
+		_, err := readProxyInputs(t, map[string]string{"INFISICAL_AGENT_VAULT_LISTEN_HOST": "[]"})
+		if err == nil || !strings.Contains(err.Error(), "INFISICAL_AGENT_VAULT_LISTEN_HOST is empty") {
+			t.Fatalf("got %v, want an empty env error", err)
+		}
+	})
+	t.Run("left out", func(t *testing.T) {
+		in, err := readProxyInputs(t, nil)
+		if err != nil || in.listenHost != "" {
+			t.Fatalf("got %q err=%v, want all interfaces", in.listenHost, err)
+		}
+	})
 }
 
 func TestAgentVaultProxyListenHostFromEnv(t *testing.T) {

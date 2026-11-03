@@ -181,7 +181,7 @@ func writeSocks5Reply(w io.Writer, rep byte) error {
 }
 
 const (
-	socks5StepTimeout       = 10 * time.Second
+	socks5StepTimeout       = 3 * time.Second
 	socks5MaxAcceptBackoff  = time.Second
 	socks5MismatchWarnEvery = time.Minute
 )
@@ -189,8 +189,10 @@ const (
 type socks5Server struct {
 	ps        *proxyServer
 	tlsConfig *tls.Config
-	// The client's own steps: TLS, greeting, login and request. Asking Infisical about the token runs on its
-	// own timeout, so a slow Infisical does not cut off an agent that did nothing wrong.
+	// One deadline for the client's TLS, greeting and login together, and another for its request. A real
+	// client such as E2B needs milliseconds; a short deadline frees a slot held by one that sends nothing.
+	// Asking Infisical about the token runs on its own timeout, so a slow Infisical does not cut off an agent
+	// that did nothing wrong.
 	stepTimeout time.Duration
 
 	// A count under a lock rather than a WaitGroup: a test waits for the connections so far and then opens
