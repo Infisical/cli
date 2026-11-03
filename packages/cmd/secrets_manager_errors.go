@@ -29,6 +29,7 @@ const (
 	errCodeInvalidFlagValue        = "invalid_flag_value"
 	errCodeInvalidArgument         = "invalid_argument"
 	errCodeServiceTokenUnsupported = "service_token_not_supported"
+	errCodeTokenProjectMismatch    = "token_project_mismatch"
 	errCodeProjectConfigInvalid    = "project_config_invalid"
 	errCodeProjectDeleteProtected  = "project_delete_protected"
 	errCodeSecretExists            = "secret_exists"
@@ -45,7 +46,7 @@ var errorCodes = []string{
 	errCodeFolderNotFound, errCodeNothingToUpdate, errCodeConfirmationRequired, errCodeConfirmationDeclined,
 	errCodeEnvironmentExists, errCodeEnvironmentPending, errCodeProjectRequired, errCodeInvalidFlagValue,
 	errCodeProjectDeleteProtected, errCodeInvalidArgument, errCodeServiceTokenUnsupported,
-	errCodeProjectConfigInvalid,
+	errCodeProjectConfigInvalid, errCodeTokenProjectMismatch,
 }
 
 const secretsManagerPrefix = "infisical " + secretsManagerCommandName
@@ -231,6 +232,18 @@ func errProjectConfigInvalid(path string, cause error) *util.CLIError {
 func errSecretRepeated(name string) *util.CLIError {
 	return &util.CLIError{Code: errCodeInvalidArgument,
 		Message: fmt.Sprintf("Secret %s is given more than once: pass each secret once. Nothing was written.", quoted(name, "name"))}
+}
+
+func errSecretAssignmentInvalid(position int) *util.CLIError {
+	return &util.CLIError{Code: errCodeInvalidArgument,
+		Message: fmt.Sprintf("Argument %d isn't in NAME=value form: pass each secret as NAME=value or NAME=@filepath. Nothing was written.", position)}
+}
+
+func errServiceTokenProjectMismatch(selected, tokenProject string) *util.CLIError {
+	return &util.CLIError{Code: errCodeTokenProjectMismatch,
+		Message: fmt.Sprintf("The service token is for project %s, not the selected project %s. Nothing was written: use a token for %s, or pass --projectId %s.",
+			util.SuggestedValue(tokenProject, "token-project-id"), util.SuggestedValue(selected, "project-id"),
+			util.SuggestedValue(selected, "project-id"), util.SuggestedValue(tokenProject, "token-project-id"))}
 }
 
 func errProjectSlugAndID() *util.CLIError {

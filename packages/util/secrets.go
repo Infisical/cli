@@ -21,17 +21,17 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func GetPlainTextSecretsViaServiceToken(fullServiceToken string, environment string, secretPath string, includeImports bool, recursive bool, tagSlugs string, expandSecretReferences bool, includePersonalOverrides bool) ([]models.SingleEnvironmentVariable, error) {
+func serviceTokenClient(fullServiceToken string) (*resty.Client, api.GetServiceTokenDetailsResponse, error) {
 	serviceTokenParts := strings.SplitN(fullServiceToken, ".", 4)
 	if len(serviceTokenParts) < 4 {
-		return nil, fmt.Errorf("invalid service token entered. Please double check your service token and try again")
+		return nil, api.GetServiceTokenDetailsResponse{}, fmt.Errorf("invalid service token entered. Please double check your service token and try again")
 	}
 
 	serviceToken := fmt.Sprintf("%v.%v.%v", serviceTokenParts[0], serviceTokenParts[1], serviceTokenParts[2])
 
 	httpClient, err := GetRestyClientWithCustomHeaders()
 	if err != nil {
-		return nil, fmt.Errorf("unable to get client with custom headers [err=%v]", err)
+		return nil, api.GetServiceTokenDetailsResponse{}, fmt.Errorf("unable to get client with custom headers [err=%v]", err)
 	}
 
 	httpClient.SetAuthToken(serviceToken).
@@ -39,7 +39,20 @@ func GetPlainTextSecretsViaServiceToken(fullServiceToken string, environment str
 
 	serviceTokenDetails, err := api.CallGetServiceTokenDetailsV2(httpClient)
 	if err != nil {
-		return nil, fmt.Errorf("unable to get service token details. [err=%w]", err)
+		return nil, api.GetServiceTokenDetailsResponse{}, fmt.Errorf("unable to get service token details. [err=%w]", err)
+	}
+	return httpClient, serviceTokenDetails, nil
+}
+
+func GetServiceTokenProjectID(fullServiceToken string) (string, error) {
+	_, details, err := serviceTokenClient(fullServiceToken)
+	return details.Workspace, err
+}
+
+func GetPlainTextSecretsViaServiceToken(fullServiceToken string, environment string, secretPath string, includeImports bool, recursive bool, tagSlugs string, expandSecretReferences bool, includePersonalOverrides bool) ([]models.SingleEnvironmentVariable, error) {
+	httpClient, serviceTokenDetails, err := serviceTokenClient(fullServiceToken)
+	if err != nil {
+		return nil, err
 	}
 
 	// if multiple scopes are there then user needs to specify which environment and secret path

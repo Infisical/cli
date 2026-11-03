@@ -44,6 +44,8 @@ func everyConstructedError() []*util.CLIError {
 		errEmptyProjectID(),
 		errFlagRequired("name", "the name of the new project"),
 		errSecretRepeated("DUP"),
+		errSecretAssignmentInvalid(2),
+		errServiceTokenProjectMismatch(testProjectID, "0b9e4f1a-2c3d-4e5f-8a7b-6c5d4e3f2a1b"),
 		errInvalidSecretType("team"),
 		errProjectConfigInvalid("/work/app/.infisical.yaml", errors.New("yaml: line 2: did not find expected key")),
 		errServiceTokenUnsupported("delete projects", "pass a machine identity access token with --token, or log in",

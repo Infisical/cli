@@ -177,6 +177,20 @@ func secretWriteError(err error, mode util.SecretWriteMode, scope errorScope) er
 	return classifyAPIError(err, scope, nil)
 }
 
+// A service token reads its own project's secrets whatever project is selected, so create and update
+// would check one project's keys and send the writes to another. They write to the token's project,
+// and refuse a different one selected with --projectId, INFISICAL_PROJECT_ID or .infisical.yaml.
+func serviceTokenWriteProject(cmd *cobra.Command, serviceToken, selected string) string {
+	tokenProject, err := util.GetServiceTokenProjectID(serviceToken)
+	if err != nil {
+		exitWithError(cmd, classifyAPIError(err, errorScope{ProjectID: selected}, nil), "Unable to set secrets")
+	}
+	if selected != "" && selected != tokenProject {
+		exitWithError(cmd, errServiceTokenProjectMismatch(selected, tokenProject))
+	}
+	return tokenProject
+}
+
 func runSecretsWrite(cmd *cobra.Command, args []string, mode util.SecretWriteMode) {
 	token, err := util.GetInfisicalToken(cmd)
 	if err != nil {
@@ -223,9 +237,14 @@ func runSecretsWrite(cmd *cobra.Command, args []string, mode util.SecretWriteMod
 	}
 
 	processedArgs := []string{}
-	for _, arg := range args {
+	for i, arg := range args {
 		splitKeyValue := strings.SplitN(arg, "=", 2)
 		if len(splitKeyValue) != 2 {
+			// set keeps its legacy message. create and update don't repeat the argument, which can be a
+			// pasted value or token.
+			if mode != util.SecretWriteUpsert {
+				exitWithError(cmd, errSecretAssignmentInvalid(i+1))
+			}
 			util.HandleError(fmt.Errorf("invalid argument format: %s. Expected format: key=value or key=@filepath", arg), "")
 		}
 
@@ -256,9 +275,13 @@ func runSecretsWrite(cmd *cobra.Command, args []string, mode util.SecretWriteMod
 		// set has always required --projectId with a token. create and update also read .infisical.yaml,
 		// like every other secrets-manager command.
 		if projectId == "" && mode != util.SecretWriteUpsert {
-			if projectId = resolveProjectID(cmd); projectId == "" {
-				exitWithError(cmd, errProjectNotLinked())
-			}
+			projectId = resolveProjectID(cmd)
+		}
+		if mode != util.SecretWriteUpsert && token.Type == util.SERVICE_TOKEN_IDENTIFIER {
+			projectId = serviceTokenWriteProject(cmd, token.Token, projectId)
+		}
+		if projectId == "" && mode != util.SecretWriteUpsert {
+			exitWithError(cmd, errProjectNotLinked())
 		}
 		if projectId == "" {
 			util.PrintErrorMessageAndExit("When using service tokens or machine identities, you must set the --projectId flag")
