@@ -356,9 +356,35 @@ func TestSocks5PrivateDestinations(t *testing.T) {
 		}
 	})
 
-	t.Run("bundle-hosts: an exception the admin set is allowed", func(t *testing.T) {
+	t.Run("bundle-hosts: an exception that resolves to loopback is refused", func(t *testing.T) {
+		f := newSocks5Fixture(t, &stubResolver{result: &resolveResult{SessionID: "s1"}}, func(ps *proxyServer, _ *Socks5Options, _ *socks5Server) {
+			ps.setConfig(ProxyConfig{TrafficPolicy: TrafficPolicyBundleHosts, AllowedHosts: "localhost"})
+		})
+		status, body := f.get(t, "localhost", f.upstreamPort(t))
+		if status != http.StatusForbidden || !strings.Contains(body, errPrivateDestination.Error()) {
+			t.Fatalf("status=%d body=%s, want 403 private destination", status, body)
+		}
+		if f.hits.Load() != 0 {
+			t.Fatal("the upstream was reached")
+		}
+	})
+
+	t.Run("bundle-hosts: a private host a service names is allowed", func(t *testing.T) {
+		var f *socks5Fixture
+		f = newSocks5Fixture(t, resolverFunc(func() (*resolveResult, error) {
+			return &resolveResult{SessionID: "s1", Services: []*resolvedService{bearerService("127.0.0.1:" + strconv.Itoa(int(f.upstreamPort(t))))}}, nil
+		}), func(ps *proxyServer, _ *Socks5Options, _ *socks5Server) {
+			ps.setConfig(ProxyConfig{TrafficPolicy: TrafficPolicyBundleHosts})
+		})
+		if status, body := f.get(t, "127.0.0.1", f.upstreamPort(t)); status != http.StatusOK {
+			t.Fatalf("status=%d body=%s", status, body)
+		}
+	})
+
+	t.Run("bundle-hosts: the opt-out lets an exception reach a private host", func(t *testing.T) {
 		f := newSocks5Fixture(t, &stubResolver{result: &resolveResult{SessionID: "s1"}}, func(ps *proxyServer, _ *Socks5Options, _ *socks5Server) {
 			ps.setConfig(ProxyConfig{TrafficPolicy: TrafficPolicyBundleHosts, AllowedHosts: "127.0.0.1"})
+			ps.socks5AllowPrivate = true
 		})
 		if status, body := f.get(t, "127.0.0.1", f.upstreamPort(t)); status != http.StatusOK {
 			t.Fatalf("status=%d body=%s", status, body)

@@ -700,7 +700,7 @@ func (ps *proxyServer) forward(req *http.Request, t tunnel) (*http.Response, *re
 		replay, replayable = replayableBody(req)
 	}
 
-	upstream, err := ps.upstreamFor(t, matched, cfg)
+	upstream, err := ps.upstreamFor(t, matched)
 	if err != nil {
 		return nil, matched, outcome, err
 	}
@@ -726,12 +726,12 @@ func (ps *proxyServer) forward(req *http.Request, t tunnel) (*http.Response, *re
 	return resp, matched, outcome, nil
 }
 
-// upstreamFor picks the transport a request leaves through. A SOCKS5 port is meant to face the internet, so
-// under the any-host policy a destination no service names may not be private: only an admin naming a host
-// in a bundle makes an internal address reachable that way. Under bundle-hosts every reachable host is
-// already named. Exceptions do not count here, because the UI hides them once the policy is any-host.
-func (ps *proxyServer) upstreamFor(t tunnel, matched *resolvedService, cfg ProxyConfig) (http.RoundTripper, error) {
-	if !t.viaSocks5 || ps.socks5AllowPrivate || matched != nil || cfg.TrafficPolicy != TrafficPolicyAnyHost {
+// upstreamFor picks the transport a request leaves through. A SOCKS5 port is meant to face the internet, so a
+// destination no service names may not be private, whatever the policy: only an admin naming a host in a
+// bundle makes an internal address reachable that way. Exceptions do not count, because a wildcard exception
+// such as *.nip.io lets the client choose the address a name resolves to.
+func (ps *proxyServer) upstreamFor(t tunnel, matched *resolvedService) (http.RoundTripper, error) {
+	if !t.viaSocks5 || ps.socks5AllowPrivate || matched != nil {
 		return ps.transport, nil
 	}
 	if ps.guardedTransport == nil {
@@ -978,13 +978,16 @@ func (l *oneShotListener) Close() error {
 
 func (l *oneShotListener) Addr() net.Addr { return l.conn.LocalAddr() }
 
+const limitFullWarnEvery = time.Minute
+
 type limitListener struct {
 	net.Listener
 	sem       chan struct{}
 	done      chan struct{}
 	closeOnce sync.Once
 	onFull    func()
-	fullOnce  sync.Once
+	// Rate limited rather than once per process, so an operator sees every period the limit is reached.
+	lastFull atomic.Int64
 }
 
 func newLimitListener(l net.Listener, n int, onFull func()) net.Listener {
@@ -1001,7 +1004,10 @@ func (l *limitListener) acquire() bool {
 		return false
 	default:
 	}
-	l.fullOnce.Do(l.onFull)
+	now := time.Now().UnixNano()
+	if last := l.lastFull.Load(); now-last >= int64(limitFullWarnEvery) && l.lastFull.CompareAndSwap(last, now) {
+		l.onFull()
+	}
 	select {
 	case l.sem <- struct{}{}:
 		return true
