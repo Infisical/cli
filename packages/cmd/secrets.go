@@ -270,6 +270,15 @@ func runSecretsWrite(cmd *cobra.Command, args []string, mode util.SecretWriteMod
 		util.HandleError(err, "Unable to parse flag")
 	}
 
+	// create and update refuse a repeated name from local input alone, before a login or the request a
+	// service token needs. The file has then been read, so the writer gets its secrets as arguments.
+	if mode != util.SecretWriteUpsert {
+		if processedArgs, err = util.CollectSecretArgs(mode, processedArgs, file); err != nil {
+			exitWithError(cmd, secretWriteError(err, mode, errorScope{}), "Unable to set secrets")
+		}
+		file = ""
+	}
+
 	var secretOperations []models.SecretSetOperation
 	if token != nil && (token.Type == util.SERVICE_TOKEN_IDENTIFIER || token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER) {
 		// set has always required --projectId with a token. create and update also read .infisical.yaml,

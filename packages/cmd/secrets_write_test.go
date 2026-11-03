@@ -123,3 +123,32 @@ func TestSecretWriteUsesTheServiceTokenProject(t *testing.T) {
 		t.Errorf("exited=%v stderr=%s", exited, stderr)
 	}
 }
+
+// A repeated name is local input, so it's refused before any request: an expired token or an API that
+// can't be reached must not hide it.
+func TestSecretWriteRefusesRepeatedNamesBeforeAnyRequest(t *testing.T) {
+	dir := t.TempDir()
+	dotenv := dir + "/repeated.env"
+	if err := os.WriteFile(dotenv, []byte("DUP=a\nDUP=b\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inputs := map[string][]string{"arguments": {"DUP=a", "DUP=b"}, "--file": {"--file", dotenv}}
+	tokens := map[string]string{"service token": "st.id.secret.key", "machine identity": "identity-access-token"}
+	for tokenName, token := range tokens {
+		for inputName, input := range inputs {
+			for _, action := range []string{"create", "update"} {
+				fake := &fakeServiceTokenAPI{}
+				fake.serve(t)
+				setup := func() { t.Setenv(util.INFISICAL_TOKEN_NAME, token) }
+				args := append([]string{"secrets", action, "-o", "json", "--projectId", tokenProjectID}, input...)
+				stderr, _, exited := runUnderSecretsManagerAfter(t, setup, buildNamespacedSecretsCmd, args...)
+				if !exited || errorCode(t, stderr) != errCodeInvalidArgument {
+					t.Errorf("%s, %s, %s: exited=%v stderr=%s", tokenName, inputName, action, exited, stderr)
+				}
+				if len(fake.requests) != 0 {
+					t.Errorf("%s, %s, %s: sent %v", tokenName, inputName, action, fake.requests)
+				}
+			}
+		}
+	}
+}

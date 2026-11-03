@@ -696,7 +696,9 @@ func SetRawSecrets(secretArgs []string, secretType string, environmentName strin
 	return WriteRawSecrets(SecretWriteUpsert, secretArgs, secretType, environmentName, secretsPath, projectId, tokenDetails, file, tagSlugs)
 }
 
-func WriteRawSecrets(mode SecretWriteMode, secretArgs []string, secretType string, environmentName string, secretsPath string, projectId string, tokenDetails *models.TokenDetails, file string, tagSlugs []string) ([]models.SecretSetOperation, error) {
+// CollectSecretArgs adds the secrets in file to secretArgs. For create and update it also refuses a
+// repeated name. It reads only local input, so a command can run it before any request.
+func CollectSecretArgs(mode SecretWriteMode, secretArgs []string, file string) ([]string, error) {
 	if file != "" {
 		content, err := os.ReadFile(file)
 		if err != nil {
@@ -743,6 +745,15 @@ func WriteRawSecrets(mode SecretWriteMode, secretArgs []string, secretType strin
 			}
 			seen[key] = true
 		}
+	}
+
+	return secretArgs, nil
+}
+
+func WriteRawSecrets(mode SecretWriteMode, secretArgs []string, secretType string, environmentName string, secretsPath string, projectId string, tokenDetails *models.TokenDetails, file string, tagSlugs []string) ([]models.SecretSetOperation, error) {
+	secretArgs, err := CollectSecretArgs(mode, secretArgs, file)
+	if err != nil {
+		return nil, err
 	}
 
 	if tokenDetails == nil {
