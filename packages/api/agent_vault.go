@@ -105,6 +105,7 @@ type AgentVaultService struct {
 	// A nil slice means unrestricted, which is what JSON null decodes to.
 	AllowedMethods      []string                 `json:"allowedMethods"`
 	AllowedPathPrefixes []string                 `json:"allowedPathPrefixes"`
+	AllowedTools        []string                 `json:"allowedTools"`
 	Credential          AgentVaultCredential     `json:"credential"`
 	CustomHeaders       []AgentVaultCustomHeader `json:"customHeaders"`
 	Substitutions       []AgentVaultSubstitution `json:"substitutions"`

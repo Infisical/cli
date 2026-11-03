@@ -44,7 +44,6 @@ type PAMTestInfra struct {
 	Infisical       *helpers.InfisicalService
 	ApiClient       client.ClientWithResponsesInterface
 	Identity        helpers.MachineIdentity
-	ProjectId       string
 	GatewayId       openapitypes.UUID
 	RelayCmd        *helpers.Command
 	GatewayCmd      *helpers.Command
@@ -134,20 +133,6 @@ func SetupPAMInfra(t *testing.T, ctx context.Context, opts ...SetupPAMOption) *P
 	})
 	require.Equal(t, helpers.WaitSuccess, result)
 
-	// Create PAM project
-	projDesc := "e2e tests for PAM"
-	template := "default"
-	projectType := client.Pam
-	projectResp, err := c.CreateProjectWithResponse(ctx, client.CreateProjectJSONRequestBody{
-		ProjectName:        "pam-e2e-tests",
-		ProjectDescription: &projDesc,
-		Template:           &template,
-		Type:               &projectType,
-	})
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, projectResp.StatusCode())
-	projectId := projectResp.JSON200.Project.Id
-
 	// Create shared HOME dir for login and pam commands.
 	// Pre-seed the config to use file-based vault so the CLI never
 	// attempts to access the system keychain.
@@ -168,7 +153,6 @@ func SetupPAMInfra(t *testing.T, ctx context.Context, opts ...SetupPAMOption) *P
 		Infisical:       svc,
 		ApiClient:       c,
 		Identity:        identity,
-		ProjectId:       projectId,
 		GatewayId:       gatewayId,
 		RelayCmd:        relayCmd,
 		GatewayCmd:      gatewayCmd,
