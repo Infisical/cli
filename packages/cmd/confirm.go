@@ -68,7 +68,8 @@ func confirmDestructive(cmd *cobra.Command, args []string, action destructiveAct
 		return errConfirmationRequired(action, rerunWithYes(cmd, args, action.Scope))
 	}
 
-	util.PrintlnStderr(fmt.Sprintf("This deletes %s.", util.SanitizeDisplay(action.Description)))
+	// The description repeats names from the backend, such as a project's, so it's redacted like errors.
+	util.PrintlnStderr(util.RedactCredentials(fmt.Sprintf("This deletes %s.", util.SanitizeDisplay(action.Description))))
 	typed, err := promptForConfirmation(fmt.Sprintf("Type %s to confirm", action.Label))
 	if err != nil || strings.TrimSpace(typed) != action.Expected {
 		return errConfirmationDeclined(action)
