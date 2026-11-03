@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -125,6 +126,24 @@ func TestConfirmAtATerminal(t *testing.T) {
 		if codeOf(err) != errCodeConfirmationDeclined {
 			t.Errorf("answer %q (err %v): want confirmation_declined, got %v", answer, promptErr, err)
 		}
+	}
+}
+
+// The question names things from the backend, such as a project, so a token in one is redacted. The
+// errors are redacted by WriteCLIError; the question is printed directly.
+func TestConfirmQuestionRedactsCredentials(t *testing.T) {
+	token := "ghp" + "_" + strings.Repeat("aB3", 12)
+	stderr := captureStderr(t)
+	fakeTerminal(t, true, "qa", nil)
+	cmd := &cobra.Command{Use: "delete"}
+	addConfirmFlags(cmd)
+	action := destructiveAction{Target: "environment \"qa\"", Expected: "qa", Label: "the environment slug",
+		Description: fmt.Sprintf("environment qa from project %q, with all of its secrets", "app "+token)}
+	if err := confirmDestructive(cmd, []string{"qa"}, action); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stderr.String(), token) || !strings.Contains(stderr.String(), "This deletes environment qa from project") {
+		t.Errorf("stderr=%q", stderr.String())
 	}
 }
 

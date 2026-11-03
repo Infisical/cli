@@ -52,6 +52,8 @@ func TestParseJSONRPCCalls(t *testing.T) {
 		{"malformed", `{"method":"tools/call",`, false, nil},
 		{"trailing message", `{"method":"ping"} {"method":"tools/call","params":{"name":"x"}}`, false, nil},
 		{"top level scalar", `"tools/call"`, false, nil},
+		{"nested array in a batch", `[{"method":"ping"},[{"method":"tools/call","params":{"name":"x"}}]]`, false, nil},
+		{"scalar in a batch", `[{"method":"ping"},"tools/call"]`, false, nil},
 		{"empty", ``, false, nil},
 	}
 	for _, tc := range cases {
