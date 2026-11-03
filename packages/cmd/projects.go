@@ -369,22 +369,12 @@ func getProjectByID(cmd *cobra.Command, projectID, outputFormat string) {
 // resolveProjectID is the project a command works on: --projectId, then INFISICAL_PROJECT_ID, then
 // .infisical.yaml (or a legacy .infisical.json). It is "" when none is set.
 func resolveProjectID(cmd *cobra.Command) string {
-	projectID, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "projectId", []string{util.INFISICAL_PROJECT_ID_NAME}, "")
-	if err != nil {
-		util.HandleError(err, "Unable to parse flag")
+	projectID, _, err := util.ResolveProjectIDWithSource(cmd)
+	var configErr *util.WorkspaceConfigError
+	if errors.As(err, &configErr) {
+		exitWithError(cmd, errProjectConfigInvalid(configErr.Path, configErr.Err))
 	}
-	if projectID != "" {
-		return projectID
-	}
-	configFile, err := util.FindWorkspaceConfigFile()
-	if err != nil {
-		return ""
-	}
-	workspaceFile, err := util.GetWorkSpaceFromFilePath(filepath.Dir(configFile))
-	if err != nil {
-		exitWithError(cmd, errProjectConfigInvalid(configFile, err))
-	}
-	return workspaceFile.WorkspaceId
+	return projectID
 }
 
 func runProjectsGetBySlug(cmd *cobra.Command, slug, outputFormat string) {

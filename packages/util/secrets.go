@@ -543,30 +543,22 @@ func DeleteBackupSecrets() error {
 	return os.RemoveAll(fullPathToSecretsBackupFolder)
 }
 
-func envFromWorkspaceConfig(workspaceFile models.WorkspaceConfigFile) string {
-	if env := GetEnvelopmentBasedOnGitBranch(workspaceFile); env != "" {
-		return env
+// environmentForGitBranch is the environment the config maps the current git branch to, and that branch.
+func environmentForGitBranch(workspaceFile models.WorkspaceConfigFile) (env, branch string) {
+	if len(workspaceFile.GitBranchToEnvironmentMapping) == 0 {
+		return "", ""
 	}
-
-	return workspaceFile.DefaultEnvironment
-}
-
-func GetEnvelopmentBasedOnGitBranch(workspaceFile models.WorkspaceConfigFile) string {
 	branch, err := getCurrentBranch()
 	if err != nil {
-		log.Debug().Msgf("getEnvelopmentBasedOnGitBranch: [err=%s]", err)
+		log.Debug().Msgf("environmentForGitBranch: [err=%s]", err)
+		return "", ""
 	}
-
-	envBasedOnGitBranch, ok := workspaceFile.GitBranchToEnvironmentMapping[branch]
-
-	log.Debug().Msgf("GetEnvelopmentBasedOnGitBranch: [envBasedOnGitBranch=%s] [ok=%t]", envBasedOnGitBranch, ok)
-
-	if err == nil && ok {
-		return envBasedOnGitBranch
-	} else {
-		log.Debug().Msgf("getEnvelopmentBasedOnGitBranch: [err=%s]", err)
-		return ""
+	env, ok := workspaceFile.GitBranchToEnvironmentMapping[branch]
+	log.Debug().Msgf("environmentForGitBranch: [env=%s] [ok=%t]", env, ok)
+	if !ok {
+		return "", ""
 	}
+	return env, branch
 }
 
 func isYAMLSecretsFile(fileName string) bool {
