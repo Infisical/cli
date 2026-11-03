@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/pem"
 	"errors"
@@ -244,21 +245,20 @@ func TestSocks5RefusesAtLogin(t *testing.T) {
 		name string
 		err  error
 		msg  string
+		// Only a session that is gone fails the login; a problem on the proxy's side fails the request.
+		wantAuth, wantRep byte
 	}{
-		{"revoked or expired session", &api.APIError{StatusCode: 401, Name: infisicalUnauthorizedName}, "the session is no longer valid"},
-		{"proxy token rejected", &api.APIError{StatusCode: 401, Name: proxyTokenRejectedName}, "Infisical rejected this proxy's token"},
-		{"Infisical unreachable", errors.New("dial tcp: connection refused"), "the session could not be resolved"},
+		{"revoked or expired session", &api.APIError{StatusCode: 401, Name: infisicalUnauthorizedName}, "the session is no longer valid", socks5AuthStatusRefus, 0},
+		{"proxy token rejected", &api.APIError{StatusCode: 401, Name: proxyTokenRejectedName}, "Infisical rejected this proxy's token", socks5AuthStatusOK, socks5RepFailure},
+		{"Infisical unreachable", errors.New("dial tcp: connection refused"), "the session could not be resolved", socks5AuthStatusOK, socks5RepFailure},
+		{"Infisical rate limited", &api.APIError{StatusCode: 429}, "the session could not be resolved", socks5AuthStatusOK, socks5RepFailure},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var logs bytes.Buffer
-			restore := log.Logger
-			log.Logger = zerolog.New(&syncWriter{w: &logs})
-			t.Cleanup(func() { log.Logger = restore })
-
+			logs := captureLogs(t)
 			f := newSocks5Fixture(t, &stubResolver{err: tc.err}, nil)
-			conn, auth, _ := dialSocks5(t, f.addr, f.outerTLS(), ProxyAuthUsername, testSocks5Token, "127.0.0.1", 443)
-			if conn != nil || auth != socks5AuthStatusRefus {
-				t.Fatalf("auth = %#x, want the login refused", auth)
+			conn, auth, rep := dialSocks5(t, f.addr, f.outerTLS(), ProxyAuthUsername, testSocks5Token, "127.0.0.1", 443)
+			if conn != nil || auth != tc.wantAuth || rep != tc.wantRep {
+				t.Fatalf("auth=%#x rep=%#x, want auth=%#x rep=%#x", auth, rep, tc.wantAuth, tc.wantRep)
 			}
 			f.server.wait()
 			out := logs.String()
@@ -269,6 +269,87 @@ func TestSocks5RefusesAtLogin(t *testing.T) {
 				t.Fatal("the session token reached the log")
 			}
 		})
+	}
+}
+
+func randomSessionToken(t *testing.T) string {
+	t.Helper()
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		t.Fatal(err)
+	}
+	return "agv_" + base64.RawURLEncoding.EncodeToString(b)
+}
+
+// tokenResolver knows one session and says every other token is gone, counting what it was asked.
+type tokenResolver struct {
+	known string
+	calls atomic.Int64
+}
+
+func (r *tokenResolver) resolve(token string, _ *sessionLogGrant) (*resolveResult, error) {
+	r.calls.Add(1)
+	if token == r.known {
+		return &resolveResult{SessionID: "known"}, nil
+	}
+	return nil, &api.APIError{StatusCode: 401, Name: infisicalUnauthorizedName}
+}
+
+func TestSocks5AFloodOfUnknownTokensStaysWithinTheBudget(t *testing.T) {
+	resolver := &tokenResolver{known: testSocks5Token}
+	f := newSocks5Fixture(t, resolver, func(_ *proxyServer, _ *Socks5Options, s *socks5Server) {
+		s.budget = newMissBudget(1, 5)
+	})
+
+	// Known before the flood, so its later logins are cache hits that never touch the budget.
+	conn, auth, rep := dialSocks5(t, f.addr, f.outerTLS(), ProxyAuthUsername, testSocks5Token, "127.0.0.1", 443)
+	if conn == nil {
+		t.Fatalf("known session refused: auth=%#x rep=%#x", auth, rep)
+	}
+	conn.Close()
+
+	start := time.Now()
+	var refusedLogin, busy int
+	for i := 0; i < 30; i++ {
+		_, auth, rep := dialSocks5(t, f.addr, f.outerTLS(), ProxyAuthUsername, randomSessionToken(t), "127.0.0.1", 443)
+		switch {
+		case auth == socks5AuthStatusRefus:
+			refusedLogin++
+		case auth == socks5AuthStatusOK && rep == socks5RepFailure:
+			busy++
+		default:
+			t.Fatalf("auth=%#x rep=%#x for an unknown token", auth, rep)
+		}
+	}
+	// The known session plus the burst, plus whatever the 1/s rate refilled while the flood ran.
+	allowed := int64(1 + 5 + int(time.Since(start).Seconds()) + 1)
+	if n := resolver.calls.Load(); n > allowed {
+		t.Fatalf("Infisical was asked %d times, budget allows %d", n, allowed)
+	}
+	if busy == 0 || refusedLogin == 0 {
+		t.Fatalf("refused=%d busy=%d, want some of each", refusedLogin, busy)
+	}
+
+	conn, auth, rep = dialSocks5(t, f.addr, f.outerTLS(), ProxyAuthUsername, testSocks5Token, "127.0.0.1", 443)
+	if conn == nil {
+		t.Fatalf("the flood locked out a known session: auth=%#x rep=%#x", auth, rep)
+	}
+	conn.Close()
+}
+
+func TestSocks5RefusalWarningsAreRateLimited(t *testing.T) {
+	logs := captureLogs(t)
+	f := newSocks5Fixture(t, &tokenResolver{known: testSocks5Token}, nil)
+	for i := 0; i < 4; i++ {
+		dialSocks5(t, f.addr, f.outerTLS(), ProxyAuthUsername, randomSessionToken(t), "127.0.0.1", 443)
+	}
+	f.server.wait()
+	out := logs.String()
+	if n := strings.Count(out, `"level":"warn","door":"socks5"`); n != 1 {
+		t.Fatalf("got %d warn lines for 4 refusals in a minute, want 1: %s", n, out)
+	}
+	if n := strings.Count(out, "the session is no longer valid"); n != 4 {
+		t.Fatalf("got %d refusal lines, want each one at warn or debug: %s", n, out)
 	}
 }
 

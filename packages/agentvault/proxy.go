@@ -574,7 +574,7 @@ func (ps *proxyServer) forward(req *http.Request, t tunnel) (*http.Response, *re
 	scheme, hostname, port, sessionToken := t.scheme, t.hostname, t.port, t.sessionToken
 	var outcome forwardOutcome
 
-	services, grant, err := ps.cache.lookup(sessionToken)
+	services, grant, err := ps.cache.lookup(sessionToken, nil)
 	if err != nil {
 		return nil, nil, outcome, fmt.Errorf("%w: %w", errSessionResolve, err)
 	}

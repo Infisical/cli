@@ -411,7 +411,7 @@ func TestARememberedRefreshFailureExpires(t *testing.T) {
 	resolver := &oauthResolver{err: errors.New("dial tcp: connection refused")}
 	cache := newSessionCache(resolver, func() time.Duration { return time.Minute })
 	resolver.services = []*resolvedService{oauthMCPService("mcp.example", "old-token")}
-	if _, _, err := cache.lookup("tok"); err != nil {
+	if _, _, err := cache.lookup("tok", nil); err != nil {
 		t.Fatal(err)
 	}
 	sent := oauthToken("old-token")

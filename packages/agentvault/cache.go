@@ -226,7 +226,14 @@ func isSessionGone(err error) bool {
 }
 
 func (c *sessionCache) get(sessionToken string) ([]*resolvedService, error) {
-	services, _, err := c.lookup(sessionToken)
+	services, _, err := c.lookup(sessionToken, nil)
+	return services, err
+}
+
+// getAdmitted is get for a caller that rations lookups of tokens it hasn't seen: admit runs only when Infisical
+// would be asked, so a known session, or one already refused, never spends from the budget.
+func (c *sessionCache) getAdmitted(sessionToken string, admit func() bool) ([]*resolvedService, error) {
+	services, _, err := c.lookup(sessionToken, admit)
 	return services, err
 }
 
@@ -235,7 +242,7 @@ type cacheLookup struct {
 	sessionLog *sessionLogGrant
 }
 
-func (c *sessionCache) lookup(sessionToken string) ([]*resolvedService, *sessionLogGrant, error) {
+func (c *sessionCache) lookup(sessionToken string, admit func() bool) ([]*resolvedService, *sessionLogGrant, error) {
 	key := sessionKey(sessionToken)
 
 	c.mu.Lock()
@@ -267,6 +274,9 @@ func (c *sessionCache) lookup(sessionToken string) ([]*resolvedService, *session
 	}
 	c.mu.Unlock()
 
+	if admit != nil && !admit() {
+		return nil, nil, errResolveBudget
+	}
 	resolved, err, _ := c.inflight.Do(key, func() (any, error) {
 		result, err := c.resolver.resolve(sessionToken, nil)
 		if err != nil {

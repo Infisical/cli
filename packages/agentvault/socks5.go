@@ -184,6 +184,7 @@ const (
 	socks5StepTimeout       = 3 * time.Second
 	socks5MaxAcceptBackoff  = time.Second
 	socks5MismatchWarnEvery = time.Minute
+	socks5RefusalWarnEvery  = time.Minute
 )
 
 type socks5Server struct {
@@ -202,10 +203,26 @@ type socks5Server struct {
 	idle    *sync.Cond
 
 	lastMismatchWarn atomic.Int64
+
+	budget *missBudget
+
+	refusalsMu sync.Mutex
+	refusals   map[string]*refusalLog
+}
+
+type refusalLog struct {
+	last       time.Time
+	suppressed int
 }
 
 func newSocks5Server(ps *proxyServer, tlsConfig *tls.Config) *socks5Server {
-	s := &socks5Server{ps: ps, tlsConfig: tlsConfig, stepTimeout: socks5StepTimeout}
+	s := &socks5Server{
+		ps:          ps,
+		tlsConfig:   tlsConfig,
+		stepTimeout: socks5StepTimeout,
+		budget:      newMissBudget(socks5MissesPerSecond, socks5MissBurst),
+		refusals:    make(map[string]*refusalLog),
+	}
 	s.idle = sync.NewCond(&s.connsMu)
 	return s
 }
@@ -315,17 +332,28 @@ func (s *socks5Server) handle(raw net.Conn) {
 		return
 	}
 
-	_, err = s.ps.cache.get(sessionToken)
+	remoteIP := remote
+	if host, _, err := net.SplitHostPort(remote); err == nil {
+		remoteIP = host
+	}
+	_, err = s.ps.cache.getAdmitted(sessionToken, func() bool { return s.budget.admit(remoteIP) })
 	_ = raw.SetDeadline(time.Now().Add(s.stepTimeout))
+	s.budget.record(remoteIP, err)
 	if err != nil {
-		refusal := classifyGateRefusal(err)
-		refusal.event.
-			Str("door", "socks5").
-			Str("remote", remote).
-			Str("sessionKey", sessionKey(sessionToken)).
-			Str("decision", refusal.decision).
-			Msg(refusal.msg)
-		_, _ = conn.Write([]byte{socks5AuthVersion, socks5AuthStatusRefus})
+		s.logRefusal(classifyGateRefusal(err), err, remote, sessionToken)
+		// RFC 1929's refusal tells a client its credentials are wrong, which is true only of a session that is
+		// gone. Anything on the proxy's side lets the login through and fails the request with RFC 1928's
+		// general failure instead, so a client can tell "fix your token" from "try again later".
+		if isSessionGone(err) {
+			_, _ = conn.Write([]byte{socks5AuthVersion, socks5AuthStatusRefus})
+			return
+		}
+		if _, err := conn.Write([]byte{socks5AuthVersion, socks5AuthStatusOK}); err != nil {
+			return
+		}
+		if _, _, err := readSocks5Request(conn); err == nil {
+			_ = writeSocks5Reply(conn, socks5RepFailure)
+		}
 		return
 	}
 	if _, err := conn.Write([]byte{socks5AuthVersion, socks5AuthStatusOK}); err != nil {
@@ -365,6 +393,40 @@ func (s *socks5Server) handle(raw net.Conn) {
 	_ = raw.SetDeadline(time.Time{})
 
 	s.ps.serveIntercepted(conn, tunnel{hostname: hostname, port: port, sessionToken: sessionToken, viaSocks5: true}, leaf)
+}
+
+// A flood of logins with made-up tokens would otherwise write a line each. The first refusal of each kind in a
+// minute keeps its usual line, with how many were held back since; the rest go to debug.
+func (s *socks5Server) logRefusal(refusal gateRefusal, err error, remote, sessionToken string) {
+	now := time.Now()
+	s.refusalsMu.Lock()
+	entry := s.refusals[refusal.msg]
+	if entry == nil {
+		entry = &refusalLog{}
+		s.refusals[refusal.msg] = entry
+	}
+	suppressed, emit := 0, now.Sub(entry.last) >= socks5RefusalWarnEvery
+	if emit {
+		suppressed = entry.suppressed
+		entry.last, entry.suppressed = now, 0
+	} else {
+		entry.suppressed++
+	}
+	s.refusalsMu.Unlock()
+
+	event := refusal.event
+	if !emit {
+		event.Discard()
+		event = log.Debug().Err(err)
+	} else if suppressed > 0 {
+		event = event.Int("suppressedSinceLast", suppressed)
+	}
+	event.
+		Str("door", "socks5").
+		Str("remote", remote).
+		Str("sessionKey", sessionKey(sessionToken)).
+		Str("decision", refusal.decision).
+		Msg(refusal.msg)
 }
 
 // A first byte of 0x05 on the TLS port means the client was set up for plain SOCKS5, the likeliest setup
