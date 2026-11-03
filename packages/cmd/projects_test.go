@@ -12,6 +12,7 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/models"
 	"github.com/Infisical/infisical-merge/packages/util"
+	"github.com/spf13/cobra"
 )
 
 // fakeProjectsAPI answers GET /v1/projects/slug/:slug, GET /v1/projects/:id, DELETE /v1/projects/:id
@@ -228,6 +229,33 @@ func TestProjectsGetByIDArgument(t *testing.T) {
 	get, _, _ := buildProjectsCmd().Find([]string{"get"})
 	if flag := get.Flags().Lookup("projectId"); flag == nil || !flag.Hidden || flag.Deprecated == "" || !strings.Contains(flag.Deprecated, "<slug-or-id>") {
 		t.Errorf("--projectId should keep working, hidden and deprecated in favor of the argument: %+v", flag)
+	}
+}
+
+// The --projectId deprecation notice goes to stderr in text, but never with -o json or yaml, whose
+// stderr must stay one document, nor with --silent.
+func TestProjectsGetDeprecationNoticeRespectsOutput(t *testing.T) {
+	for _, c := range []struct {
+		args   []string
+		notice bool
+	}{
+		{[]string{"--projectId", testProjectID}, true},
+		{[]string{"--projectId", testProjectID, "-o", "json"}, false},
+		{[]string{"-o", "yaml", "--projectId", testProjectID}, false},
+		{[]string{"--projectId", testProjectID, "--silent"}, false},
+	} {
+		root := &cobra.Command{Use: "infisical"}
+		root.PersistentFlags().Bool("silent", false, "")
+		root.AddCommand(buildProjectsCmd())
+		get, rest, err := root.Find(append([]string{"projects", "get"}, c.args...))
+		if err != nil || get.ParseFlags(rest) != nil {
+			t.Fatal(err)
+		}
+		stderr := captureStderr(t)
+		get.PreRun(get, get.Flags().Args())
+		if got := strings.Contains(stderr.String(), "Flag --projectId has been deprecated"); got != c.notice {
+			t.Errorf("%v: notice=%v, want %v (stderr=%q)", c.args, got, c.notice, stderr.String())
+		}
 	}
 }
 

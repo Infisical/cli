@@ -4,6 +4,7 @@ Copyright (c) 2026 Infisical Inc.
 package cmd
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -88,6 +89,18 @@ infisical secrets-manager projects get <project-id>`,
 	getCmd.Flags().String("projectId", "", "ID of the project to show")
 	_ = getCmd.Flags().MarkHidden("projectId")
 	_ = getCmd.Flags().MarkDeprecated("projectId", "pass the project's slug or ID as the argument instead: infisical secrets-manager projects get <slug-or-id>")
+	// pflag writes the deprecation notice while it parses, before -o and --silent are known, so it's
+	// held here and printed once they are: never into -o json or yaml, whose stderr must stay one
+	// JSON or YAML document.
+	var flagNotices bytes.Buffer
+	getCmd.Flags().SetOutput(&flagNotices)
+	getCmd.PreRun = func(cmd *cobra.Command, args []string) {
+		silent, _ := cmd.Flags().GetBool("silent")
+		if flagNotices.Len() > 0 && !silent && !isStructuredOutputRequested(cmd) {
+			fmt.Fprint(util.GetStderrWriter(), flagNotices.String())
+		}
+		flagNotices.Reset()
+	}
 	getCmd.Flags().String("token", "", "Get the project using a machine identity access token")
 	addProjectsOutputFlag(getCmd, "The output to format the project in")
 	projectsCmd.AddCommand(getCmd)
