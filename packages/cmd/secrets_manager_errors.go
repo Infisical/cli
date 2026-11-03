@@ -235,7 +235,7 @@ func errSecretRepeated(name string) *util.CLIError {
 
 func errProjectSlugAndID() *util.CLIError {
 	return &util.CLIError{Code: errCodeInvalidFlagValue,
-		Message: "Pass a project slug or --projectId, not both."}
+		Message: "Pass the project as the argument or with --projectId, not both."}
 }
 
 // Read from the project's settings, never from the backend's error message.

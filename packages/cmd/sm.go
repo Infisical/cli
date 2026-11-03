@@ -40,7 +40,7 @@ var projectIDUsageUnderSecretsManager = map[string]string{
 	"secrets get":                  projectIDForReads,
 	"secrets set":                  projectIDForSet,
 	"secrets delete":               projectIDFallsBack,
-	"secrets folders get":          projectIDFallsBack,
+	"secrets folders get":          projectIDForReads,
 	"secrets folders create":       projectIDFallsBack,
 	"secrets folders delete":       projectIDFallsBack,
 	"run":                          projectIDForReads,

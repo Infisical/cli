@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -174,14 +175,19 @@ func TestProjectsGetByIDErrors(t *testing.T) {
 	}
 }
 
-// get with no slug and no --projectId lists, like get for every resource, even in a directory that
-// .infisical.yaml links to a project. projects list does the same, hidden.
+// get with no slug and no --projectId lists, like get for every resource, even with INFISICAL_PROJECT_ID
+// set and in a directory that .infisical.yaml links to a project. projects list does the same, hidden.
 func TestProjectsGetWithoutASlugLists(t *testing.T) {
+	linkedProject := func() {
+		t.Setenv(util.INFISICAL_PROJECT_ID_NAME, testProjectID)
+		if err := os.WriteFile(util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME, []byte("secrets-management:\n  project-id: "+testProjectID+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for _, args := range [][]string{{"get"}, {"list"}} {
 		fake := &fakeProjectsAPI{}
 		fake.serve(t)
-		t.Setenv(util.INFISICAL_PROJECT_ID_NAME, testProjectID)
-		_, stdout, exited := runUnderSecretsManager(t, buildProjectsCmd, append([]string{"projects"}, append(args, "-o", "json")...)...)
+		_, stdout, exited := runUnderSecretsManagerAfter(t, linkedProject, buildProjectsCmd, append([]string{"projects"}, append(args, "-o", "json")...)...)
 		var projects []map[string]any
 		if exited || json.Unmarshal([]byte(stdout), &projects) != nil || len(projects) != 1 || projects[0]["slug"] != "payments-api" {
 			t.Errorf("%v: exited=%v stdout=%s", args, exited, stdout)
@@ -200,6 +206,28 @@ func TestProjectsListErrors(t *testing.T) {
 	stderr, stdout, exited := runProjects(t, &fakeProjectsAPI{expired: true}, "list", "-o", "json")
 	if !exited || errorCode(t, stderr) != errCodeAuthRequired || stdout != "" {
 		t.Errorf("exited=%v stdout=%q stderr=%s", exited, stdout, stderr)
+	}
+}
+
+// The argument can be the project's ID instead of its slug, which is how a service token names one.
+func TestProjectsGetByIDArgument(t *testing.T) {
+	fake := &fakeProjectsAPI{}
+	_, stdout, exited := runProjects(t, fake, "get", testProjectID, "-o", "json")
+	var project map[string]any
+	if exited || json.Unmarshal([]byte(stdout), &project) != nil || project["id"] != testProjectID ||
+		len(fake.requests) != 1 || fake.requests[0] != "GET /v1/projects/"+testProjectID {
+		t.Errorf("exited=%v requests=%v stdout=%s", exited, fake.requests, stdout)
+	}
+
+	fake = &fakeProjectsAPI{}
+	stderr, _, exited := runProjects(t, fake, "get", testProjectID, "--projectId", testProjectID, "-o", "json")
+	if !exited || errorCode(t, stderr) != errCodeInvalidFlagValue || len(fake.requests) != 0 {
+		t.Errorf("ID argument and --projectId: exited=%v requests=%v stderr=%s", exited, fake.requests, stderr)
+	}
+
+	get, _, _ := buildProjectsCmd().Find([]string{"get"})
+	if flag := get.Flags().Lookup("projectId"); flag == nil || !flag.Hidden || flag.Deprecated == "" || !strings.Contains(flag.Deprecated, "<slug-or-id>") {
+		t.Errorf("--projectId should keep working, hidden and deprecated in favor of the argument: %+v", flag)
 	}
 }
 
@@ -289,7 +317,8 @@ func TestProjectsGetIgnoresAnEnvServiceTokenUnlessByID(t *testing.T) {
 	}{
 		{"slug", nil, []string{"payments-api"}, true},
 		{"listing", nil, nil, true},
-		{"by ID", []string{"--projectId", testProjectID}, nil, false},
+		{"by ID", nil, []string{testProjectID}, false},
+		{"by --projectId", []string{"--projectId", testProjectID}, nil, false},
 		{"--token", []string{"--token", "st.a.b.c"}, []string{"payments-api"}, false},
 	}
 	for _, c := range cases {

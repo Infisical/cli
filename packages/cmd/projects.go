@@ -66,26 +66,28 @@ infisical secrets-manager projects list --token <access-token>`,
 	projectsCmd.AddCommand(listCmd)
 
 	getCmd := &cobra.Command{
-		Use:   "get [slug]",
+		Use:   "get [slug-or-id]",
 		Short: "List your Secrets Management projects, or show one and its environments",
 		Long: `List your Secrets Management projects, or show one and its environments.
 
-Without a slug, lists the projects in your organization. It doesn't use INFISICAL_PROJECT_ID or
-.infisical.yaml to pick one: pass the project's slug to see it.`,
+Name the project by its slug or its ID. Without one, lists the projects in your organization. It
+doesn't use INFISICAL_PROJECT_ID or .infisical.yaml to pick one.`,
 		Example: `# Every Secrets Management project in your organization
 infisical secrets-manager projects get
 
 # One project and its environments
-infisical secrets-manager projects get my-app`,
+infisical secrets-manager projects get my-app
+
+# By ID, which also works with a service token
+infisical secrets-manager projects get <project-id>`,
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.MaximumNArgs(1),
 		Run:                   runProjectsGet,
-		Annotations:           serviceTokenOnlyWithProjectID,
+		Annotations:           serviceTokenOnlyByID,
 	}
-	getCmd.Flags().String("projectId", "", "ID of the project to show, instead of a slug")
-	// Still works, for scripts and for service tokens, which can't look a project up by slug. The slug
-	// is the documented way to name one.
+	getCmd.Flags().String("projectId", "", "ID of the project to show")
 	_ = getCmd.Flags().MarkHidden("projectId")
+	_ = getCmd.Flags().MarkDeprecated("projectId", "pass the project's slug or ID as the argument instead: infisical secrets-manager projects get <slug-or-id>")
 	getCmd.Flags().String("token", "", "Get the project using a machine identity access token")
 	addProjectsOutputFlag(getCmd, "The output to format the project in")
 	projectsCmd.AddCommand(getCmd)
@@ -135,17 +137,20 @@ const serviceTokenAnnotation = "infisical.serviceToken"
 // annotation rather than a list of command paths so it holds under every alias of the command.
 var serviceTokenUnsupported = map[string]string{serviceTokenAnnotation: "unsupported"}
 
-// serviceTokenOnlyWithProjectID marks projects get, which accepts service tokens only for a lookup by
-// --projectId: listing and the lookup by slug use routes that reject them.
-var serviceTokenOnlyWithProjectID = map[string]string{serviceTokenAnnotation: "only-with-projectId"}
+// serviceTokenOnlyByID marks projects get, which accepts service tokens only for a lookup by ID:
+// listing and the lookup by slug use routes that reject them.
+var serviceTokenOnlyByID = map[string]string{serviceTokenAnnotation: "only-by-id"}
 
 func rejectsServiceTokens(cmd *cobra.Command) bool {
 	return cmd.Annotations[serviceTokenAnnotation] == "unsupported"
 }
 
 func rejectsServiceTokensFor(cmd *cobra.Command, args []string) bool {
-	if cmd.Annotations[serviceTokenAnnotation] == "only-with-projectId" {
-		return len(args) > 0 || !cmd.Flags().Changed("projectId")
+	if cmd.Annotations[serviceTokenAnnotation] == "only-by-id" {
+		if len(args) > 0 {
+			return !isProjectID(args[0])
+		}
+		return !cmd.Flags().Changed("projectId")
 	}
 	return rejectsServiceTokens(cmd)
 }
@@ -282,15 +287,29 @@ func listProjects(cmd *cobra.Command, client *resty.Client, outputFormat string)
 	Telemetry.CaptureEvent("cli-command:projects list", posthog.NewProperties().Set("projectCount", len(projects)).Set("version", util.CLI_VERSION))
 }
 
+// isProjectID reports whether a projects get argument is a project ID rather than a slug. Project IDs
+// are UUIDs, written the way the API returns them.
+func isProjectID(value string) bool {
+	parsed, err := uuid.Parse(value)
+	return err == nil && parsed.String() == value
+}
+
 func runProjectsGet(cmd *cobra.Command, args []string) {
 	outputFormat := projectsOutputFormat(cmd)
 	if len(args) == 1 {
+		if cmd.Flags().Changed("projectId") {
+			exitWithError(cmd, errProjectSlugAndID())
+		}
+		if isProjectID(args[0]) {
+			getProjectByID(cmd, args[0], outputFormat)
+			return
+		}
 		runProjectsGetBySlug(cmd, args[0], outputFormat)
 		return
 	}
 
-	// Without a slug or --projectId, get lists, like it does for every resource. It doesn't fall back to
-	// INFISICAL_PROJECT_ID or .infisical.yaml, which would make it mean something else in a linked
+	// Without a slug, ID or --projectId, get lists, like it does for every resource. It doesn't fall back
+	// to INFISICAL_PROJECT_ID or .infisical.yaml, which would make it mean something else in a linked
 	// directory.
 	if !cmd.Flags().Changed("projectId") {
 		listProjects(cmd, secretsManagerHTTPClientRejecting(cmd, "list projects", true), outputFormat)
@@ -300,7 +319,10 @@ func runProjectsGet(cmd *cobra.Command, args []string) {
 	if projectID = strings.TrimSpace(projectID); projectID == "" {
 		exitWithError(cmd, errEmptyProjectID())
 	}
+	getProjectByID(cmd, projectID, outputFormat)
+}
 
+func getProjectByID(cmd *cobra.Command, projectID, outputFormat string) {
 	project, err := api.CallGetProject(projectsHTTPClient(cmd), projectID)
 	if err != nil {
 		exitWithError(cmd, classifyAPIError(err, errorScope{ProjectID: projectID}, func(cause error) *util.CLIError {
@@ -342,14 +364,11 @@ func resolveProjectID(cmd *cobra.Command) string {
 }
 
 func runProjectsGetBySlug(cmd *cobra.Command, slug, outputFormat string) {
-	if cmd.Flags().Changed("projectId") {
-		exitWithError(cmd, errProjectSlugAndID())
-	}
 	// Only a service token passed with --token is refused; one in INFISICAL_TOKEN is ignored in favor of
 	// the login session, as the other project commands do.
 	if token, _ := util.GetInfisicalToken(cmd); token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER && cmd.Flags().Changed("token") {
-		exitWithError(cmd, errServiceTokenUnsupported("look up a project by slug", "pass --projectId instead, or use a machine identity access token",
-			util.NextStep{Purpose: "To get the project by its ID", Command: secretsManagerPrefix + " projects get --projectId <project-id>"}))
+		exitWithError(cmd, errServiceTokenUnsupported("look up a project by slug", "pass the project's ID instead, or use a machine identity access token",
+			util.NextStep{Purpose: "To get the project by its ID", Command: secretsManagerPrefix + " projects get <project-id>"}))
 	}
 
 	project := secretsManagerProjectBySlug(cmd, secretsManagerHTTPClientRejecting(cmd, "look up a project by slug", true), slug)
