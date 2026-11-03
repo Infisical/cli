@@ -144,18 +144,42 @@ func checkToolAllowlist(svc *resolvedService, req *http.Request, logging bool) (
 // string the proxy reads as one tool name can hold a second "name" key the server sees and runs. A header
 // that doesn't parse, such as one naming charset twice (Go fails, Node keeps the last), can't be trusted
 // either, and neither can two Content-Type headers. us-ascii is refused as well: Node clears each byte's
-// high bit when decoding it, which turns 0xA2 into a quote.
+// high bit when decoding it, which turns 0xA2 into a quote. Nor can RFC 2231 parameters such as charset*= or
+// charset*0=: Go merges them into charset, over a plain charset that Node reads instead.
 func requestMediaType(header http.Header) (string, bool) {
 	values := header.Values("Content-Type")
 	if len(values) == 0 {
 		return "", true
 	}
 	mediaType, params, err := mime.ParseMediaType(values[0])
-	if len(values) > 1 || err != nil {
+	if len(values) > 1 || err != nil || hasExtendedParameter(values[0]) {
 		return "", false
 	}
 	charset, named := params["charset"]
 	return mediaType, !named || strings.EqualFold(charset, "utf-8") || strings.EqualFold(charset, "utf8")
+}
+
+// Whether a parameter name in a Content-Type value has an asterisk, which marks the RFC 2231 extended form.
+func hasExtendedParameter(value string) bool {
+	inName, inQuote, escaped := false, false, false
+	for _, c := range value {
+		switch {
+		case escaped:
+			escaped = false
+		case inQuote:
+			escaped = c == '\\'
+			inQuote = c != '"'
+		case c == '"':
+			inQuote = true
+		case c == ';':
+			inName = true
+		case c == '=':
+			inName = false
+		case inName && c == '*':
+			return true
+		}
+	}
+	return false
 }
 
 // The 2026-07-28 revision of the specification lets a gateway route on Mcp-Method and Mcp-Name while the
