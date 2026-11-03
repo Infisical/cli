@@ -16,6 +16,8 @@ func TestBlockedDestination(t *testing.T) {
 		{"192.168.1.1", true},
 		{"127.0.0.1", true},
 		{"0.0.0.0", true},
+		{"168.63.129.16", true},
+		{"168.63.129.17", false},
 		{"100.64.0.1", true},
 		{"169.254.169.254", true},
 		{"192.0.0.1", true},

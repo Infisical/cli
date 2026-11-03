@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/netip"
 	"syscall"
+
+	"github.com/rs/zerolog/log"
 )
 
 var errPrivateDestination = errors.New("the destination is a private or internal address")
@@ -16,6 +18,8 @@ var errPrivateDestination = errors.New("the destination is a private or internal
 var blockedPrefixes = func() []netip.Prefix {
 	cidrs := []string{
 		"0.0.0.0/8",
+		// Azure's WireServer: public address space, but it serves the VM's own configuration.
+		"168.63.129.16/32",
 		"10.0.0.0/8",
 		"100.64.0.0/10",
 		"127.0.0.0/8",
@@ -78,6 +82,8 @@ func hostAddresses() map[netip.Addr]bool {
 	own := map[netip.Addr]bool{}
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
+		log.Warn().Err(err).Str("door", "socks5").
+			Msg("agent-vault: couldn't read this machine's network addresses, so the SOCKS5 port won't refuse them")
 		return own
 	}
 	for _, addr := range addrs {
