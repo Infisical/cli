@@ -2,12 +2,11 @@ package agentvault
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/netip"
 	"syscall"
-
-	"github.com/rs/zerolog/log"
 )
 
 var errPrivateDestination = errors.New("the destination is a private or internal address")
@@ -76,22 +75,22 @@ func blockedDestination(ip netip.Addr) bool {
 	return false
 }
 
+var interfaceAddrs = net.InterfaceAddrs
+
 // The machine's own addresses: a cloud host often has its public address on an interface, and a connection
 // to it lands on the machine itself, past any cloud firewall in front of it.
-func hostAddresses() map[netip.Addr]bool {
+func hostAddresses() (map[netip.Addr]bool, error) {
 	own := map[netip.Addr]bool{}
-	addrs, err := net.InterfaceAddrs()
+	addrs, err := interfaceAddrs()
 	if err != nil {
-		log.Warn().Err(err).Str("door", "socks5").
-			Msg("agent-vault: couldn't read this machine's network addresses, so the SOCKS5 port won't refuse them")
-		return own
+		return nil, err
 	}
 	for _, addr := range addrs {
 		if prefix, err := netip.ParsePrefix(addr.String()); err == nil {
 			own[prefix.Addr().WithZone("").Unmap()] = true
 		}
 	}
-	return own
+	return own, nil
 }
 
 // Runs on the resolved address of every socket the dialer opens, so a hostname that resolves to an internal
@@ -110,8 +109,13 @@ func guardControl(own map[netip.Addr]bool) func(network, address string, c sysca
 	}
 }
 
-func newGuardedUpstreamTransport() *http.Transport {
+// Fails rather than guarding with an empty list, which would let requests reach the machine's own addresses.
+func newGuardedUpstreamTransport() (*http.Transport, error) {
+	own, err := hostAddresses()
+	if err != nil {
+		return nil, fmt.Errorf("can't read this machine's network addresses, which the SOCKS5 port refuses (pass --socks5-allow-private-destinations to start without that check): %w", err)
+	}
 	transport := newUpstreamTransport()
-	transport.DialContext = (&net.Dialer{Control: guardControl(hostAddresses())}).DialContext
-	return transport
+	transport.DialContext = (&net.Dialer{Control: guardControl(own)}).DialContext
+	return transport, nil
 }

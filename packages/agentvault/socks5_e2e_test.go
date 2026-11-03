@@ -65,7 +65,10 @@ func newSocks5Fixture(t *testing.T, resolver sessionResolver, configure func(*pr
 	}
 	transport := newUpstreamTransport()
 	transport.TLSClientConfig = &tls.Config{RootCAs: upstreamPool}
-	guarded := newGuardedUpstreamTransport()
+	guarded, err := newGuardedUpstreamTransport()
+	if err != nil {
+		t.Fatal(err)
+	}
 	guarded.TLSClientConfig = &tls.Config{RootCAs: upstreamPool}
 
 	ps := &proxyServer{transport: transport, guardedTransport: guarded, ca: newCaManager(key, cert)}
@@ -610,7 +613,11 @@ func TestSocks5RetriesATemporaryAcceptError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ps := &proxyServer{transport: newUpstreamTransport(), guardedTransport: newGuardedUpstreamTransport(), ca: newCaManager(key, cert)}
+	guarded, err := newGuardedUpstreamTransport()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps := &proxyServer{transport: newUpstreamTransport(), guardedTransport: guarded, ca: newCaManager(key, cert)}
 	ps.cache = newSessionCache(&stubResolver{result: &resolveResult{SessionID: "s1"}}, ps.pollInterval)
 	server := newSocks5Server(ps, socks5TLSConfig(ps.ca, &Socks5Options{TLSName: "127.0.0.1"}))
 	done := make(chan error, 1)

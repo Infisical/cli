@@ -362,16 +362,22 @@ func serve(opts Options, s startup) error {
 	}
 
 	ps := &proxyServer{
-		opts:             opts,
-		ca:               ca,
-		transport:        newUpstreamTransport(),
-		guardedTransport: newGuardedUpstreamTransport(),
-		config:           config,
-		persisted:        state,
-		legacy:           s.legacy,
+		opts:      opts,
+		ca:        ca,
+		transport: newUpstreamTransport(),
+		config:    config,
+		persisted: state,
+		legacy:    s.legacy,
 	}
 	if opts.Socks5 != nil {
 		ps.socks5AllowPrivate = opts.Socks5.AllowPrivateDestinations
+		if !ps.socks5AllowPrivate {
+			guarded, err := newGuardedUpstreamTransport()
+			if err != nil {
+				return err
+			}
+			ps.guardedTransport = guarded
+		}
 	}
 	resolver, err := newInfisicalResolver(opts.ProxyToken)
 	if err != nil {

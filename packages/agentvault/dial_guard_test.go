@@ -2,7 +2,9 @@ package agentvault
 
 import (
 	"errors"
+	"net"
 	"net/netip"
+	"strings"
 	"testing"
 )
 
@@ -79,5 +81,15 @@ func TestGuardControlRefusesTheHostsOwnAddresses(t *testing.T) {
 	}
 	if err := control("tcp4", "8.8.8.8:443", nil); err != nil {
 		t.Errorf("a public address that isn't the host's was refused: %v", err)
+	}
+}
+
+func TestGuardRefusesToStartWithoutTheMachinesAddresses(t *testing.T) {
+	restore := interfaceAddrs
+	interfaceAddrs = func() ([]net.Addr, error) { return nil, errors.New("netlink: permission denied") }
+	t.Cleanup(func() { interfaceAddrs = restore })
+
+	if _, err := newGuardedUpstreamTransport(); err == nil || !strings.Contains(err.Error(), "--socks5-allow-private-destinations") {
+		t.Fatalf("err = %v, want a refusal that names the opt-out flag", err)
 	}
 }
