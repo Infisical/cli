@@ -43,8 +43,8 @@ func TestProfileCurrentShowsWhatCommandsHereUse(t *testing.T) {
 	}{
 		"a linked directory with no environment falls back to dev": {
 			setup: func() { linkDirectory(t, "secrets-management:\n  project-id: "+testProjectID+"\n") },
-			want: []string{"Project: " + testProjectID + "\n", "Project via: .infisical.yaml\n",
-				"Environment: dev\n", "Environment via: default\n", "Secret path: /\n", "Secret path via: default\n", "Project config: "},
+			want: []string{"Project: " + testProjectID + "\n", "Project via: .infisical.yaml (override with --projectId; machine identities may ignore it)\n",
+				"Environment: dev\n", "Environment via: default (override with --env)\n", "Secret path: /\n", "Secret path via: default (override with --path)\n", "Project config: "},
 			never: []string{"Token"},
 		},
 		"environment variables win over the config file": {
@@ -53,9 +53,17 @@ func TestProfileCurrentShowsWhatCommandsHereUse(t *testing.T) {
 				t.Setenv(util.INFISICAL_PROJECT_ID_NAME, "fromenv")
 				t.Setenv(util.INFISICAL_ENVIRONMENT_NAME, "prod")
 			},
-			want: []string{"Project: fromenv\n", "Project via: INFISICAL_PROJECT_ID environment variable\n",
-				"Environment: prod\n", "Environment via: INFISICAL_ENVIRONMENT environment variable\n",
-				"Secret path: /app\n", "Secret path via: .infisical.yaml\n"},
+			want: []string{"Project: fromenv\n", "Project via: INFISICAL_PROJECT_ID environment variable (override with --projectId)\n",
+				"Environment: prod\n", "Environment via: INFISICAL_ENVIRONMENT environment variable (override with --env)\n",
+				"Secret path: /app\n", "Secret path via: .infisical.yaml (override with --path)\n"},
+		},
+		"a legacy .infisical.json gets the same machine identity note": {
+			setup: func() {
+				if err := os.WriteFile(util.LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME, []byte(`{"workspaceId":"`+testProjectID+`"}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: []string{"Project via: .infisical.json (override with --projectId; machine identities may ignore it)\n"},
 		},
 		"no project": {
 			want:  []string{"Project: none. Run [infisical init]"},

@@ -785,13 +785,24 @@ func printSecretsManagerDefaults() {
 		util.PrintlnStdout("Project: none. Run [infisical init] to link this directory, or pass --projectId to each command.")
 	default:
 		util.PrintlnStdout("Project:", util.SanitizeDisplay(projectID))
-		util.PrintlnStdout("Project via:", source)
+		hint := overrideHint("projectId")
+		// secrets, run and export only take a machine identity's project from --projectId or
+		// INFISICAL_PROJECT_ID, never from the config file.
+		if source == util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME || source == util.LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME {
+			hint = " (override with --projectId; machine identities may ignore it)"
+		}
+		util.PrintlnStdout("Project via:", source+hint)
 	}
 
 	environment, source := util.ResolveEnvironmentNameWithSource(defaults)
 	util.PrintlnStdout("Environment:", util.SanitizeDisplay(environment))
-	util.PrintlnStdout("Environment via:", util.SanitizeDisplay(source))
+	util.PrintlnStdout("Environment via:", util.SanitizeDisplay(source)+overrideHint("env"))
 	secretPath, source := util.ResolveSecretPathWithSource(defaults)
 	util.PrintlnStdout("Secret path:", util.SanitizeDisplay(secretPath))
-	util.PrintlnStdout("Secret path via:", util.SanitizeDisplay(source))
+	util.PrintlnStdout("Secret path via:", util.SanitizeDisplay(source)+overrideHint("path"))
+}
+
+// The report is what a command uses when it's given no flags, so each line says which flag changes it.
+func overrideHint(flag string) string {
+	return " (override with --" + flag + ")"
 }
