@@ -150,10 +150,17 @@ func runAgentVaultSessionsRevoke(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Failed to build the API client")
 	}
 
+	byToken := token != ""
+	var identity string
+	if !byToken {
+		// Resolved before the deadline starts: it can open the login flow, which takes as long as the person does.
+		identity = resolveAgentVaultIdentityToken(cmd)
+		httpClient.SetAuthToken(identity)
+	}
+
 	ctx, cancel := context.WithTimeout(cmd.Context(), agentVaultExitRevokeTimeout)
 	defer cancel()
 
-	byToken := token != ""
 	var sessionID string
 	if byToken {
 		sessionID, err = revokeAgentVaultSessionByToken(ctx, httpClient, token)
@@ -162,8 +169,6 @@ func runAgentVaultSessionsRevoke(cmd *cobra.Command, args []string) {
 		}
 	} else {
 		sessionID = args[0]
-		identity := resolveAgentVaultIdentityToken(cmd)
-		httpClient.SetAuthToken(identity)
 		if err := api.CallRevokeAgentVaultSession(ctx, httpClient, sessionID); err != nil {
 			util.HandleError(err, agentVaultRevokeErrorMessages(ctx, err, false)...)
 		}
