@@ -116,8 +116,8 @@ func agentVaultSessionOutputFrom(minted api.AgentVaultSession, project agentVaul
 		Label:        minted.Label,
 		ExpiresAt:    minted.ExpiresAt,
 	}
-	if len(minted.AccessBundles) > 0 {
-		out.AccessBundle = minted.AccessBundles[0].Name
+	if minted.AccessBundle != nil {
+		out.AccessBundle = minted.AccessBundle.Name
 	}
 	return out
 }
@@ -237,10 +237,10 @@ func validateAgentVaultAccessBundles(bundles []string, source agentVaultSource) 
 
 func mintAgentVaultSession(httpClient *resty.Client, project agentVaultProject, accessBundles []string, ttl, label string) (api.AgentVaultSession, error) {
 	created, err := api.CallCreateAgentVaultSession(httpClient, api.CreateAgentVaultSessionRequest{
-		ProjectID:     project.ID,
-		AccessBundles: accessBundles,
-		TTL:           ttl,
-		Label:         label,
+		ProjectID:    project.ID,
+		AccessBundle: accessBundles[0],
+		TTL:          ttl,
+		Label:        label,
 	})
 	if err != nil {
 		return api.AgentVaultSession{}, err

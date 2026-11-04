@@ -31,7 +31,7 @@ func TestMintAgentVaultSessionSendsTheProject(t *testing.T) {
 		body, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(body, &sent)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"session":{"id":"s1","token":"agv_x","projectId":"` + projectFromFlag + `","label":null,"expiresAt":null,"createdAt":"2026-11-04T00:00:00Z","accessBundles":[{"id":"b1","name":"coding-agent"}]}}`))
+		_, _ = w.Write([]byte(`{"session":{"id":"s1","token":"agv_x","projectId":"` + projectFromFlag + `","label":null,"expiresAt":null,"createdAt":"2026-11-04T00:00:00Z","accessBundle":{"id":"b1","name":"coding-agent"}}}`))
 	}))
 	t.Cleanup(srv.Close)
 	old := config.INFISICAL_URL
@@ -42,13 +42,13 @@ func TestMintAgentVaultSessionSendsTheProject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sent["projectId"] != projectFromFlag || sent["ttl"] != "8h" {
+	if sent["projectId"] != projectFromFlag || sent["accessBundle"] != "coding-agent" || sent["ttl"] != "8h" {
 		t.Fatalf("body %v", sent)
 	}
 	if _, ok := sent["label"]; ok {
 		t.Fatalf("an empty label should stay out of the body: %v", sent)
 	}
-	if minted.Token != "agv_x" || minted.ProjectID != projectFromFlag || len(minted.AccessBundles) != 1 || minted.AccessBundles[0].Name != "coding-agent" {
+	if minted.Token != "agv_x" || minted.ProjectID != projectFromFlag || minted.AccessBundle == nil || minted.AccessBundle.Name != "coding-agent" {
 		t.Fatalf("minted %+v", minted)
 	}
 }
@@ -57,7 +57,7 @@ func TestAgentVaultSessionOutputFormats(t *testing.T) {
 	label, expires := "nightly deploy", "2026-11-05T00:00:00Z"
 	out := agentVaultSessionOutputFrom(api.AgentVaultSession{
 		ID: "s1", Token: "agv_x", ProjectID: projectFromFlag, Label: &label, ExpiresAt: &expires,
-		AccessBundles: []api.AgentVaultSessionAccessBundle{{ID: "b1", Name: "coding-agent"}},
+		AccessBundle: &api.AgentVaultSessionAccessBundle{ID: "b1", Name: "coding-agent"},
 	}, agentVaultProject{ID: projectFromFlag}, "coding-agent")
 	want := map[string]any{
 		"id": "s1", "token": "agv_x", "projectId": projectFromFlag, "accessBundle": "coding-agent",
