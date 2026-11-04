@@ -69,7 +69,7 @@ func replayableBody(req *http.Request) ([]byte, bool) {
 
 // handleUpstreamAuth runs only for a refreshable credential the proxy injected, so every other credential
 // sees the upstream's response untouched.
-func (ps *proxyServer) handleUpstreamAuth(req *http.Request, resp *http.Response, svc *resolvedService, sessionToken string, sent *credential, body []byte, replayable bool) (*http.Response, error) {
+func (ps *proxyServer) handleUpstreamAuth(upstream http.RoundTripper, req *http.Request, resp *http.Response, svc *resolvedService, sessionToken string, sent *credential, body []byte, replayable bool) (*http.Response, error) {
 	switch resp.StatusCode {
 	case http.StatusUnauthorized:
 		// An auth-error body can stay open indefinitely; draining it would stall the refresh.
@@ -103,7 +103,7 @@ func (ps *proxyServer) handleUpstreamAuth(req *http.Request, resp *http.Response
 			retry.Body = &bufferedBody{Reader: bytes.NewReader(body), data: body}
 		}
 		injectCredential(retry, &fresh)
-		retryResp, err := ps.transport.RoundTrip(retry)
+		retryResp, err := upstream.RoundTrip(retry)
 		if err != nil {
 			return nil, err
 		}
