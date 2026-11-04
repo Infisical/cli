@@ -239,6 +239,20 @@ func errSecretAssignmentInvalid(position int) *util.CLIError {
 		Message: fmt.Sprintf("Argument %d isn't in NAME=value form: pass each secret as NAME=value or NAME=@filepath. Nothing was written.", position)}
 }
 
+// errSecretArgumentInvalid names the secret by its key, never by its value, which may be a credential.
+func errSecretArgumentInvalid(invalid *util.SecretArgInvalid) *util.CLIError {
+	var problem string
+	switch invalid.Problem {
+	case util.SecretArgNoName:
+		problem = fmt.Sprintf("Argument %d has no secret name: pass it as NAME=value.", invalid.Position)
+	case util.SecretArgNoValue:
+		problem = fmt.Sprintf("Secret %s has no value: pass it as NAME=value or NAME=@filepath.", quoted(invalid.Key, "name"))
+	default:
+		problem = fmt.Sprintf("Secret name %s starts with a number: secret names must start with a letter or an underscore.", quoted(invalid.Key, "name"))
+	}
+	return &util.CLIError{Code: errCodeInvalidArgument, Message: problem + " Nothing was written."}
+}
+
 func errServiceTokenProjectMismatch(selected, tokenProject string) *util.CLIError {
 	return &util.CLIError{Code: errCodeTokenProjectMismatch,
 		Message: fmt.Sprintf("The service token is for project %s, not the selected project %s. Nothing was written: use a token for %s, or pass --projectId %s.",

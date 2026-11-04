@@ -171,6 +171,10 @@ func secretWriteError(err error, mode util.SecretWriteMode, scope errorScope) er
 	if errors.As(err, &repeated) {
 		return errSecretRepeated(repeated.Key)
 	}
+	var invalid *util.SecretArgInvalid
+	if errors.As(err, &invalid) {
+		return errSecretArgumentInvalid(invalid)
+	}
 	if mode == util.SecretWriteUpsert {
 		return err
 	}
@@ -270,17 +274,24 @@ func runSecretsWrite(cmd *cobra.Command, args []string, mode util.SecretWriteMod
 		util.HandleError(err, "Unable to parse flag")
 	}
 
-	// create and update refuse a repeated name from local input alone, before a login or the request a
-	// service token needs. The file has then been read, so the writer gets its secrets as arguments.
-	if mode != util.SecretWriteUpsert {
-		if processedArgs, err = util.CollectSecretArgs(mode, processedArgs, file); err != nil {
-			exitWithError(cmd, secretWriteError(err, mode, errorScope{}), "Unable to set secrets")
+	usesToken := token != nil && (token.Type == util.SERVICE_TOKEN_IDENTIFIER || token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER)
+	// set has always sent a token's values as typed, @filepath included, and keeps doing so for
+	// compatibility. create and update read the file the way a login session does.
+	writeArgs := processedArgs
+	if usesToken && mode == util.SecretWriteUpsert {
+		writeArgs = args
+	}
+
+	if writeArgs, err = util.CollectSecretArgs(mode, writeArgs, file); err != nil {
+		var invalid *util.SecretArgInvalid
+		if errors.As(err, &invalid) && mode == util.SecretWriteUpsert {
+			util.PrintErrorMessageAndExit(invalid.Error())
 		}
-		file = ""
+		exitWithError(cmd, secretWriteError(err, mode, errorScope{}), "Unable to set secrets")
 	}
 
 	var secretOperations []models.SecretSetOperation
-	if token != nil && (token.Type == util.SERVICE_TOKEN_IDENTIFIER || token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER) {
+	if usesToken {
 		// set has always required --projectId with a token. create and update also read .infisical.yaml,
 		// like every other secrets-manager command.
 		if projectId == "" && mode != util.SecretWriteUpsert {
@@ -296,13 +307,7 @@ func runSecretsWrite(cmd *cobra.Command, args []string, mode util.SecretWriteMod
 			util.PrintErrorMessageAndExit("When using service tokens or machine identities, you must set the --projectId flag")
 		}
 
-		// set has always sent a token's values as typed, @filepath included, and keeps doing so for
-		// compatibility. create and update read the file the way a login session does.
-		writeArgs := processedArgs
-		if mode == util.SecretWriteUpsert {
-			writeArgs = args
-		}
-		secretOperations, err = util.WriteRawSecrets(mode, writeArgs, secretType, environmentName, secretsPath, projectId, token, file, tags)
+		secretOperations, err = util.WriteRawSecrets(mode, writeArgs, secretType, environmentName, secretsPath, projectId, token, tags)
 
 		if err != nil {
 			exitWithError(cmd, secretWriteError(err, mode, errorScope{ProjectID: projectId, Environment: environmentName, SecretPath: secretsPath, SecretType: secretType}), "Unable to set secrets")
@@ -326,10 +331,10 @@ func runSecretsWrite(cmd *cobra.Command, args []string, mode util.SecretWriteMod
 			loggedInUserDetails = util.EstablishUserLoginSession()
 		}
 
-		secretOperations, err = util.WriteRawSecrets(mode, processedArgs, secretType, environmentName, secretsPath, projectId, &models.TokenDetails{
+		secretOperations, err = util.WriteRawSecrets(mode, writeArgs, secretType, environmentName, secretsPath, projectId, &models.TokenDetails{
 			Type:  "",
 			Token: loggedInUserDetails.UserCredentials.JTWToken,
-		}, file, tags)
+		}, tags)
 
 		if err != nil {
 			exitWithError(cmd, secretWriteError(err, mode, errorScope{ProjectID: projectId, Environment: environmentName, SecretPath: secretsPath, SecretType: secretType}), "Unable to set secrets")

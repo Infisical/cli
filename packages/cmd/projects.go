@@ -429,7 +429,7 @@ func secretsManagerProjectByID(cmd *cobra.Command, client *resty.Client, project
 // secretsManagerProjectBySlug exits with project_not_found or project_type_not_supported rather than
 // return a project the secrets-manager commands can't act on.
 func secretsManagerProjectBySlug(cmd *cobra.Command, client *resty.Client, slug string) api.ProjectSettings {
-	project, err := api.CallGetProjectSettingsBySlug(client, slug)
+	project, err := api.CallGetProjectBySlug(client, slug)
 	if err != nil {
 		exitWithError(cmd, classifyAPIError(err, errorScope{ProjectName: util.SuggestedValue(slug, "slug")}, func(cause error) *util.CLIError {
 			return errProjectNotFound(errorScope{ProjectName: util.SuggestedValue(slug, "slug")}, cause)

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -148,6 +149,41 @@ func TestSecretWriteRefusesRepeatedNamesBeforeAnyRequest(t *testing.T) {
 				if len(fake.requests) != 0 {
 					t.Errorf("%s, %s, %s: sent %v", tokenName, inputName, action, fake.requests)
 				}
+			}
+		}
+	}
+}
+
+// Arguments that can't be written are refused from the input alone, so a --tag is never created for a
+// write that then fails. The value is never repeated: it can be a pasted credential.
+func TestSecretWriteRefusesArgumentsThatCantBeWrittenBeforeAnyRequest(t *testing.T) {
+	cases := map[string]struct {
+		arg  string
+		want string
+	}{
+		"no value": {"NEW=", `Secret "NEW" has no value: pass it as NAME=value or NAME=@filepath. Nothing was written.`},
+		"no name":  {"=hunter2-value", "Argument 1 has no secret name: pass it as NAME=value. Nothing was written."},
+		// quoted shows a name that isn't a valid one as <name>, so a pasted token can't reach the message.
+		"name starts with digit": {"1KEY=hunter2-value", "Secret name <name> starts with a number: secret names must start with a letter or an underscore. Nothing was written."},
+	}
+	for name, c := range cases {
+		for _, action := range []string{"create", "update"} {
+			fake := &fakeServiceTokenAPI{}
+			fake.serve(t)
+			setup := func() { t.Setenv(util.INFISICAL_TOKEN_NAME, "identity-access-token") }
+			stderr, _, exited := runUnderSecretsManagerAfter(t, setup, buildNamespacedSecretsCmd,
+				"secrets", action, c.arg, "--tag", "newtag", "--projectId", tokenProjectID, "-o", "json")
+			var failure struct {
+				Error struct {
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			_ = json.Unmarshal([]byte(stderr), &failure)
+			if !exited || errorCode(t, stderr) != errCodeInvalidArgument || failure.Error.Message != c.want || strings.Contains(stderr, "hunter2") {
+				t.Errorf("%s, %s: exited=%v stderr=%s", name, action, exited, stderr)
+			}
+			if len(fake.requests) != 0 {
+				t.Errorf("%s, %s: sent %v", name, action, fake.requests)
 			}
 		}
 	}
