@@ -26,3 +26,19 @@ func TestPrettyAPIErrorRedactsCredentialsInTheRequest(t *testing.T) {
 		t.Errorf("the box repeats the token:\n%s", out)
 	}
 }
+
+func TestDisplayRequestURL(t *testing.T) {
+	token := "ghp" + "_" + strings.Repeat("aB3", 12)
+	cases := map[string]string{
+		// Shown as sent, so the error box (and the CLI's snapshot tests) read as before.
+		"http://x/api/v4/secrets?environment=dev&secretPath=%2F":   "http://x/api/v4/secrets?environment=dev&secretPath=%2F",
+		"http://x/api/v2/folders?path=%2Fa%0Ab%1B%5B31m":           "http://x/api/v2/folders?path=%2Fa%0Ab%1B%5B31m",
+		"http://x/api/v2/folders?path=%2F" + token:                 "http://x/api/v2/folders?path=/<redacted>",
+		"http://x/api/v2/folders?path=%2F" + token + "%0A%1B%5B2J": "http://x/api/v2/folders?path=/<redacted>[2J",
+	}
+	for raw, want := range cases {
+		if got := displayRequestURL(raw); got != want {
+			t.Errorf("displayRequestURL(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}

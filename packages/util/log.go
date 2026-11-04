@@ -165,11 +165,7 @@ func printPrettyAPIError(apiErr api.APIError) {
 		Foreground(lipgloss.Color(statusColor))
 
 	domain := extractDomainFromURL(apiErr.URL)
-	// The URL carries what the user typed (a --path in the query, a name in the path), so it is shown
-	// decoded: an encoded "/" in front of a pasted token would otherwise hide it from the redaction below.
-	if decoded, err := url.PathUnescape(apiErr.URL); err == nil {
-		apiErr.URL = decoded
-	}
+	apiErr.URL = displayRequestURL(apiErr.URL)
 
 	// Request details
 	content.WriteString(labelStyle.Render("Request: "))
@@ -282,6 +278,22 @@ func printPrettyAPIError(apiErr api.APIError) {
 	content.WriteString(supportMsg)
 
 	PrintlnStderr(RedactCredentials(content.String()))
+}
+
+// displayRequestURL is the request URL as the error box shows it. The URL carries what the user typed
+// (a --path in the query, a name in the path), where an encoded "/" in front of a pasted token hides it
+// from RedactCredentials. When decoding reveals a credential, the decoded URL is shown redacted, with
+// control characters an encoding could smuggle in (%0A, %1B) removed. Otherwise it's shown as it was
+// sent, still encoded, so the box reads as it always has.
+func displayRequestURL(raw string) string {
+	decoded, err := url.PathUnescape(raw)
+	if err != nil {
+		return raw
+	}
+	if redacted := RedactCredentials(decoded); redacted != decoded {
+		return SanitizeDisplay(redacted)
+	}
+	return raw
 }
 
 func getStatusCodeColor(statusCode int) string {
