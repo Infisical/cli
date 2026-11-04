@@ -82,7 +82,7 @@ With `-o json`, the same error is JSON on stderr:
 | `folder_not_found` | `folders get <name>` for a folder that doesn't exist |
 | `nothing_to_update` | `update` called without any change flags |
 | `confirmation_required` | A destructive command ran without a terminal and without `--yes` |
-| `confirmation_declined` | The slug typed at the prompt didn't match, or the prompt was cancelled |
+| `confirmation_declined` | The slug typed at the prompt didn't match, the prompt was cancelled, or the delete's environment, path or project changed while the prompt was open |
 
 ## Destructive commands
 
@@ -91,10 +91,10 @@ With `-o json`, the same error is JSON on stderr:
 - Without a terminal and without `--yes`, delete nothing. Fail with code `confirmation_required`, and suggest the same command with `--yes`.
 - `--force` skips a safeguard, such as a soft-delete grace period. It never skips the question.
 - A new destructive command never falls back to an implicit target (such as the project linked in `.infisical.yaml`).
-- The existing deletes under `secrets-manager` (`secrets delete`, `secrets folders delete` and `dynamic-secrets lease delete`) also ask, but keep their project fallbacks (`INFISICAL_PROJECT_ID`, then `.infisical.yaml`) for compatibility. Their question names the project and where it came from. The suggested rerun pins the resolved `--env`, `--path` and `--projectId` when they weren't typed, so running it without the same variables or workspace file can't delete somewhere else. The legacy top-level copies (`infisical secrets delete`, ...) keep deleting without asking, so existing scripts keep working.
+- The existing deletes under `secrets-manager` (`secrets delete`, `secrets folders delete` and `dynamic-secrets lease delete`) also ask, but keep their project fallbacks (`INFISICAL_PROJECT_ID`, then `.infisical.yaml`) for compatibility. Their question names the project and where it came from. The suggested rerun pins the resolved `--env`, `--path` and `--projectId` when they weren't typed, so running it without the same variables or workspace file can't delete somewhere else. After the question is answered, they resolve their target again, and delete nothing if it changed (a rewritten `.infisical.yaml` or a new git branch). The legacy top-level copies (`infisical secrets delete`, ...) keep deleting without asking, so existing scripts keep working.
 - The question goes to stderr, so `-o json` output stays clean when it's piped.
 
-For a new command, add the flags with `addConfirmFlags(cmd)`, then call `confirmDestructive(cmd, args, destructiveAction{...})` before deleting (`packages/cmd/confirm.go`). For a delete whose builder is shared with a legacy top-level command, add it to `confirmedUnderSecretsManager` in `sm.go` with a function that describes what the arguments delete and where (`deleteProject`, plus the resolved environment and path in `Scope`). The suggested rerun repeats the command under its full name, with the same arguments and flags. Only flags that hold identifiers (`--projectId`, `--env`, `--path`, ...) keep their values, and only when the value is a safe identifier. Any other flag's value becomes a `<placeholder>`, and credential flags are left out. To repeat a new identifier flag, add it to `rerunIdentifierFlags` in `confirm.go`.
+For a new command, add the flags with `addConfirmFlags(cmd)`, then call `confirmDestructive(cmd, args, destructiveAction{...})` before deleting (`packages/cmd/confirm.go`). For a delete whose builder is shared with a legacy top-level command, add it to `confirmedUnderSecretsManager` in `sm.go` with a function that describes what the arguments delete and where (`deleteProject`, plus the resolved environment and path in `Scope`). The suggested rerun repeats the command under its full name, with the same arguments and flags. Only flags that hold identifiers (`--projectId`, `--env`, `--path`, ...) keep their values, and only when the value is a safe identifier. Any other flag's value becomes a `<placeholder>`, and credential flags are left out. A domain from `INFISICAL_DOMAIN` or `.infisical.yaml` is added as `--domain`, so running the rerun elsewhere can't send a token from the environment to Infisical Cloud instead. To repeat a new identifier flag, add it to `rerunIdentifierFlags` in `confirm.go`.
 
 ## Backwards compatibility
 
