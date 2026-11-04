@@ -14,8 +14,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// The backend's rule for a folder name (isValidFolderName). Checking it here means a bad name, or a
-// nested path passed as the name, is refused before anything is sent.
+// The backend's rule for a new folder name (isValidFolderName), checked before create and rename send
+// anything. Lookups match the listed names exactly instead, so a folder created before the backend
+// enforced the rule can still be read, renamed and deleted.
 var folderNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 func buildFoldersCmd() *cobra.Command {
@@ -210,7 +211,7 @@ func (t foldersTarget) find(name string) (api.Folder, bool) {
 func (t foldersTarget) existing(cmd *cobra.Command, name string) api.Folder {
 	folder, ok := t.find(name)
 	if !ok {
-		exitWithError(cmd, errFolderNotFound(name, t.scope))
+		exitWithError(cmd, errFolderNotFound(name, t.scope, nil))
 	}
 	return folder
 }
@@ -244,9 +245,6 @@ func (t foldersTarget) printFolder(cmd *cobra.Command, folder api.Folder, notice
 }
 
 func runFoldersManagerGet(cmd *cobra.Command, args []string) {
-	if len(args) == 1 {
-		requireFolderName(cmd, args[0], "")
-	}
 	target := loadFoldersTarget(cmd, false)
 
 	if len(args) == 1 {
@@ -263,8 +261,8 @@ func runFoldersManagerGet(cmd *cobra.Command, args []string) {
 		}
 		printFormattedOutput(target.outputFormat, listed)
 	case len(target.folders) == 0:
-		printProjectsTip(cmd, fmt.Sprintf("There are no folders at %s %s. Create one with [infisical secrets-manager folders create <name> --path %s].",
-			util.SanitizeDisplay(target.path), target.where(), util.SuggestedValue(target.path, "path")))
+		printProjectsTip(cmd, fmt.Sprintf("There are no folders at %s %s. Create one with [infisical secrets-manager folders create <name> --path %s%s].",
+			util.SanitizeDisplay(target.path), target.where(), util.SuggestedValue(target.path, "path"), target.scope.envFlag()+target.scope.projectFlag()))
 	default:
 		target.printFolders(target.folders)
 	}
@@ -314,7 +312,6 @@ func folderUpdate(cmd *cobra.Command) (newName, description *string) {
 
 func runFoldersManagerUpdate(cmd *cobra.Command, args []string) {
 	name := args[0]
-	requireFolderName(cmd, name, "")
 	newName, description := folderUpdate(cmd)
 	if newName == nil && description == nil {
 		exitWithError(cmd, errNothingToUpdate([]string{"name", "description"}))
@@ -335,7 +332,7 @@ func runFoldersManagerUpdate(cmd *cobra.Command, args []string) {
 	folder, err := api.CallUpdateFolder(target.client, existing.ID, request)
 	if err != nil {
 		exitWithError(cmd, classifyAPIError(err, target.scope, func(cause error) *util.CLIError {
-			return errFolderNotFound(name, target.scope)
+			return errFolderNotFound(name, target.scope, cause)
 		}), "Unable to update the folder")
 	}
 
@@ -345,7 +342,6 @@ func runFoldersManagerUpdate(cmd *cobra.Command, args []string) {
 
 func runFoldersManagerDelete(cmd *cobra.Command, args []string) {
 	name := args[0]
-	requireFolderName(cmd, name, "")
 	target := loadFoldersTarget(cmd, true)
 	existing := target.existing(cmd, name)
 
@@ -368,7 +364,7 @@ func runFoldersManagerDelete(cmd *cobra.Command, args []string) {
 	})
 	if err != nil {
 		exitWithError(cmd, classifyAPIError(err, target.scope, func(cause error) *util.CLIError {
-			return errFolderNotFound(name, target.scope)
+			return errFolderNotFound(name, target.scope, cause)
 		}), "Unable to delete the folder")
 	}
 

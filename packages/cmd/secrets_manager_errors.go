@@ -292,12 +292,12 @@ func errSecretNotFound(names []string, scope errorScope) *util.CLIError {
 			Command: secretsManagerPrefix + " secrets create " + firstSecretName(names) + "=<value>" + scope.secretScopeFlags()}}}
 }
 
-func errFolderNotFound(name string, scope errorScope) *util.CLIError {
+func errFolderNotFound(name string, scope errorScope, cause error) *util.CLIError {
 	path := scope.SecretPath
 	if path == "" {
 		path = "/"
 	}
-	return &util.CLIError{Code: errCodeFolderNotFound,
+	return &util.CLIError{Code: errCodeFolderNotFound, Cause: cause,
 		Message: fmt.Sprintf("Folder %s doesn't exist in %s.", quoted(name, "name"), quoted(path, "path")),
 		Next: []util.NextStep{{Purpose: "To see the folders there",
 			Command: secretsManagerPrefix + " folders get --path " + util.SuggestedValue(path, "path") + scope.envFlag() + scope.projectFlag()}}}

@@ -51,7 +51,7 @@ func everyConstructedError() []*util.CLIError {
 		errProjectDeleteProtected("payments-api"),
 		errSecretExists([]string{"API_KEY"}, testScope),
 		errSecretNotFound([]string{"API_KEY", "DB_URL"}, testScope),
-		errFolderNotFound("api", testScope),
+		errFolderNotFound("api", testScope, nil),
 		errFolderExists("api", testScope),
 		errInvalidFolderName("app/api", ""),
 		errInvalidFolderName("my folder", "name"),
@@ -171,12 +171,12 @@ func TestSuggestedCommandsFollowCLIMD(t *testing.T) {
 
 func TestSuggestedCommandsCarryTheScope(t *testing.T) {
 	cases := map[string]string{
-		errEnvironmentNotFound("stagng", testScope, nil).Next[0].Command:         "infisical secrets-manager environments get --projectId " + testProjectID,
-		errSecretExists([]string{"API_KEY"}, testScope).Next[0].Command:          "infisical secrets-manager secrets update API_KEY=<value> --env stagng --path /app --projectId " + testProjectID,
-		errSecretNotFound([]string{"API_KEY"}, errorScope{}).Next[0].Command:     "infisical secrets-manager secrets create API_KEY=<value>",
-		errEnvironmentNotFound("x", errorScope{}, nil).Next[0].Command:           "infisical secrets-manager environments get",
-		errFolderNotFound("api", errorScope{Environment: "dev"}).Next[0].Command: "infisical secrets-manager folders get --path / --env dev",
-		errFolderNotFound("api", testScope).Next[0].Command:                      "infisical secrets-manager folders get --path /app --env stagng --projectId " + testProjectID,
+		errEnvironmentNotFound("stagng", testScope, nil).Next[0].Command:              "infisical secrets-manager environments get --projectId " + testProjectID,
+		errSecretExists([]string{"API_KEY"}, testScope).Next[0].Command:               "infisical secrets-manager secrets update API_KEY=<value> --env stagng --path /app --projectId " + testProjectID,
+		errSecretNotFound([]string{"API_KEY"}, errorScope{}).Next[0].Command:          "infisical secrets-manager secrets create API_KEY=<value>",
+		errEnvironmentNotFound("x", errorScope{}, nil).Next[0].Command:                "infisical secrets-manager environments get",
+		errFolderNotFound("api", errorScope{Environment: "dev"}, nil).Next[0].Command: "infisical secrets-manager folders get --path / --env dev",
+		errFolderNotFound("api", testScope, nil).Next[0].Command:                      "infisical secrets-manager folders get --path /app --env stagng --projectId " + testProjectID,
 	}
 	for got, want := range cases {
 		if got != want {
@@ -193,7 +193,7 @@ func TestUnsafeScopeValuesBecomePlaceholders(t *testing.T) {
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
-	if got := errFolderNotFound("qa\nrm -rf /", hostile).Next[0].Command; strings.ContainsAny(got, "\n;$`| ") && !strings.Contains(got, "<path>") {
+	if got := errFolderNotFound("qa\nrm -rf /", hostile, nil).Next[0].Command; strings.ContainsAny(got, "\n;$`| ") && !strings.Contains(got, "<path>") {
 		t.Errorf("unsafe characters reached a suggestion: %q", got)
 	}
 }
@@ -207,7 +207,7 @@ func TestMessagesNeverRepeatUnsafeInput(t *testing.T) {
 		errEnvironmentNotFound(pasted, scope, nil),
 		errSecretExists([]string{"OK", pasted}, scope),
 		errSecretNotFound([]string{pasted}, scope),
-		errFolderNotFound(pasted, scope),
+		errFolderNotFound(pasted, scope, nil),
 		errProjectNotFound(scope, nil),
 		errConfirmationDeclined(destructiveAction{Label: "the secret name", Expected: pasted}),
 	} {

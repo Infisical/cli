@@ -165,6 +165,11 @@ func printPrettyAPIError(apiErr api.APIError) {
 		Foreground(lipgloss.Color(statusColor))
 
 	domain := extractDomainFromURL(apiErr.URL)
+	// The URL carries what the user typed (a --path in the query, a name in the path), so it is shown
+	// decoded: an encoded "/" in front of a pasted token would otherwise hide it from the redaction below.
+	if decoded, err := url.PathUnescape(apiErr.URL); err == nil {
+		apiErr.URL = decoded
+	}
 
 	// Request details
 	content.WriteString(labelStyle.Render("Request: "))
@@ -276,7 +281,7 @@ func printPrettyAPIError(apiErr api.APIError) {
 	supportMsg := supportStyle.Render("If this issue continues, get support at ") + linkStyle.Render("https://infisical.com/slack")
 	content.WriteString(supportMsg)
 
-	PrintlnStderr(content.String())
+	PrintlnStderr(RedactCredentials(content.String()))
 }
 
 func getStatusCodeColor(statusCode int) string {

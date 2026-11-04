@@ -16,7 +16,8 @@ import (
 const testFolderID = "5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a"
 
 // fakeFoldersAPI answers the routes the folders commands call. Every project ID is a Secrets
-// Management project with dev and staging; the folders at /backend in dev are api and jobs.
+// Management project with dev and staging. The folders at /backend in dev are api and jobs; old.name,
+// which predates the backend's naming rule; and gone, which disappears before an update or delete lands.
 type fakeFoldersAPI struct {
 	projectType string
 	mu          sync.Mutex
@@ -55,7 +56,7 @@ func (f *fakeFoldersAPI) serve(t *testing.T) {
 			}})
 		case r.Method == http.MethodGet && route == "/v2/folders":
 			if r.URL.Query().Get("environment") == "dev" && r.URL.Query().Get("path") == "/backend" {
-				_, _ = fmt.Fprintf(w, `{"folders":[{"id":%q,"name":"api","description":"Public API"},{"id":"f2","name":"jobs"}]}`, testFolderID)
+				_, _ = fmt.Fprintf(w, `{"folders":[{"id":%q,"name":"api","description":"Public API"},{"id":"f2","name":"jobs"},{"id":"f3","name":"old.name"},{"id":"f4","name":"gone"}]}`, testFolderID)
 				return
 			}
 			_, _ = w.Write([]byte(`{"folders":[]}`))
@@ -63,6 +64,9 @@ func (f *fakeFoldersAPI) serve(t *testing.T) {
 			var request map[string]any
 			_ = json.Unmarshal(body, &request)
 			_, _ = fmt.Fprintf(w, `{"folder":{"id":"new","name":%q,"path":"/x"}}`, request["name"])
+		case (r.Method == http.MethodPatch || r.Method == http.MethodDelete) && strings.HasSuffix(route, "/f4"):
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"NotFound","message":"Folder with ID 'f4' not found","reqId":"req-gone"}`))
 		case r.Method == http.MethodPatch || r.Method == http.MethodDelete:
 			var request map[string]any
 			_ = json.Unmarshal(body, &request)
@@ -125,7 +129,7 @@ func TestFoldersGetListsAndShowsOne(t *testing.T) {
 	fake := &fakeFoldersAPI{}
 	_, stdout, exited := runFolders(t, fake, "get", "--path", "backend/", "--projectId", testProjectID, "-o", "json")
 	var listed []folderOutput
-	if exited || json.Unmarshal([]byte(stdout), &listed) != nil || len(listed) != 2 || listed[0].Path != "/backend/api" || listed[0].Environment != "dev" || listed[0].Description != "Public API" {
+	if exited || json.Unmarshal([]byte(stdout), &listed) != nil || len(listed) != 4 || listed[0].Path != "/backend/api" || listed[0].Environment != "dev" || listed[0].Description != "Public API" {
 		t.Errorf("list: exited=%v stdout=%s", exited, stdout)
 	}
 	if got := fake.sent("GET /v2/folders"); len(got) != 1 || !strings.Contains(got[0], "path=%2Fbackend") {
@@ -153,7 +157,7 @@ func TestFoldersRefuseBeforeWriting(t *testing.T) {
 		noRequest bool
 	}{
 		{"missing folder", append([]string{"get", "nope"}, scope...), errCodeFolderNotFound, false},
-		{"nested name", append([]string{"get", "backend/api"}, scope...), errCodeInvalidArgument, true},
+		{"a nested path as the name", append([]string{"get", "backend/api"}, scope...), errCodeFolderNotFound, false},
 		{"name with a space", append([]string{"create", "my folder"}, scope...), errCodeInvalidArgument, true},
 		{"create an existing folder", append([]string{"create", "api"}, scope...), errCodeFolderExists, false},
 		{"update without change flags", append([]string{"update", "api"}, scope...), errCodeNothingToUpdate, true},
@@ -303,5 +307,52 @@ func TestSecretsFoldersIsHiddenUnderSecretsManager(t *testing.T) {
 	}
 	if replacement := findCommand(t, []string{secretsManagerCommandName, "folders", "update"}); replacement.Hidden {
 		t.Error("secrets-manager folders update must be visible")
+	}
+}
+
+// Only new names are checked against the backend's rule, so a folder named before the rule existed
+// stays reachable.
+func TestFoldersReachNamesThatPredateTheRule(t *testing.T) {
+	scope := []string{"--path", "/backend", "--projectId", testProjectID, "-o", "json"}
+
+	_, stdout, exited := runFolders(t, &fakeFoldersAPI{}, append([]string{"get", "old.name"}, scope...)...)
+	if exited || !strings.Contains(stdout, `"id":"f3"`) {
+		t.Errorf("get: exited=%v stdout=%s", exited, stdout)
+	}
+	fake := &fakeFoldersAPI{}
+	_, _, exited = runFolders(t, fake, append([]string{"update", "old.name", "--name", "renamed"}, scope...)...)
+	if body := fake.body(t, "PATCH /v2/folders/f3"); exited || body["name"] != "renamed" {
+		t.Errorf("update: exited=%v body=%v", exited, body)
+	}
+	fake = &fakeFoldersAPI{}
+	_, _, exited = runFolders(t, fake, append([]string{"delete", "old.name", "--yes"}, scope...)...)
+	if exited || len(fake.sent("DELETE /v2/folders/f3")) != 1 {
+		t.Errorf("delete: exited=%v sent=%v", exited, fake.requests)
+	}
+}
+
+func TestFoldersKeepTheRequestOfAFolderThatDisappeared(t *testing.T) {
+	scope := []string{"--path", "/backend", "--projectId", testProjectID, "-o", "json"}
+	for _, args := range [][]string{{"update", "gone", "--name", "x"}, {"delete", "gone", "--yes"}} {
+		stderr, _, exited := runFolders(t, &fakeFoldersAPI{}, append(args, scope...)...)
+		var failure struct {
+			Error struct {
+				Code       string `json:"code"`
+				StatusCode int    `json:"statusCode"`
+				RequestID  string `json:"requestId"`
+			} `json:"error"`
+		}
+		_ = json.Unmarshal([]byte(stderr), &failure)
+		if !exited || failure.Error.Code != errCodeFolderNotFound || failure.Error.StatusCode != http.StatusNotFound || failure.Error.RequestID != "req-gone" {
+			t.Errorf("%s: exited=%v stderr=%s", args[0], exited, stderr)
+		}
+	}
+}
+
+func TestFoldersEmptyTipTargetsWhereYouLooked(t *testing.T) {
+	stderr, _, exited := runFolders(t, &fakeFoldersAPI{}, "get", "--env", "staging", "--path", "/nothing", "--projectId", testProjectID)
+	want := "[infisical secrets-manager folders create <name> --path /nothing --env staging --projectId " + testProjectID + "]"
+	if exited || !strings.Contains(stderr, want) {
+		t.Errorf("exited=%v stderr=%s want %s", exited, stderr, want)
 	}
 }
