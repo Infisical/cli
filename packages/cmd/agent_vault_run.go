@@ -114,8 +114,8 @@ Two ways to get a session, exactly one of them required:
   --access-bundle   mint one now over the named bundle, or set INFISICAL_AGENT_VAULT_ACCESS_BUNDLE
                     (needs your login or a machine identity). Revoked when the agent exits unless
                     --keep-session is set. The bundle is looked up in the Agent Vault project from
-                    --project-id, or else INFISICAL_AGENT_VAULT_PROJECT_ID, agent-vault.project-id
-                    in .infisical.yaml, or INFISICAL_PROJECT_ID, in that order.
+                    --project-id, or else INFISICAL_AGENT_VAULT_PROJECT_ID or INFISICAL_PROJECT_ID,
+                    in that order.
   --session-token   run with a session token minted in the dashboard, or set
                     INFISICAL_AGENT_VAULT_SESSION_TOKEN. Never revoked by this command.
 
@@ -856,7 +856,7 @@ func init() {
 	agentVaultRunCmd.Flags().String("session-token", "", "run with a session token minted in the dashboard instead of minting one (falls back to "+agentVaultSessionTokenEnv+")")
 	agentVaultRunCmd.Flags().String("ttl", "never", "lifetime of the session this command creates: one number and one unit, such as 30m, 8h or 7d (not 2h30m), or never")
 	agentVaultRunCmd.Flags().Bool("keep-session", false, "leave a minted session active when the agent exits")
-	agentVaultRunCmd.Flags().String("project-id", "", "Agent Vault project of the access bundle to mint over (falls back to "+agentVaultProjectIDEnv+", then agent-vault.project-id in .infisical.yaml, then INFISICAL_PROJECT_ID)")
+	agentVaultRunCmd.Flags().String("project-id", "", "Agent Vault project of the access bundle to mint over (falls back to "+agentVaultProjectIDEnv+", then INFISICAL_PROJECT_ID)")
 	agentVaultRunCmd.Flags().String("label", "", "describe what the session this command creates is for (up to 128 characters)")
 	agentVaultRunCmd.Flags().String("proxy", "", "address of the Agent Vault proxy as host:port (falls back to "+agentVaultProxyAddressEnv+")")
 	agentVaultRunCmd.Flags().String("ca-fingerprint", "", "abort unless the proxy's certificate authority matches this SHA256 fingerprint from Infisical")

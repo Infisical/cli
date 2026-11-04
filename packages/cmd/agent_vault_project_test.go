@@ -1,8 +1,8 @@
 package cmd
 
 import (
-	"os"
-	"path/filepath"
+	"bytes"
+	"io"
 	"strings"
 	"testing"
 
@@ -14,7 +14,6 @@ import (
 const (
 	projectFromFlag    = "11111111-1111-4111-8111-111111111111"
 	projectFromAgvEnv  = "22222222-2222-4222-8222-222222222222"
-	projectFromFile    = "33333333-3333-4333-8333-333333333333"
 	projectFromProjEnv = "44444444-4444-4444-8444-444444444444"
 )
 
@@ -28,29 +27,14 @@ func projectIDCmd(t *testing.T, args ...string) *cobra.Command {
 	return cmd
 }
 
-// isolateAgentVaultProject clears every source and moves into an empty folder, so no real .infisical.yaml is read.
-func isolateAgentVaultProject(t *testing.T) string {
+func isolateAgentVaultProject(t *testing.T) {
 	t.Helper()
 	t.Setenv(agentVaultProjectIDEnv, "")
 	t.Setenv(util.INFISICAL_PROJECT_ID_NAME, "")
-	dir := t.TempDir()
-	t.Chdir(dir)
-	return dir
-}
-
-func writeAgentVaultWorkspaceFile(t *testing.T, dir, projectID string) string {
-	t.Helper()
-	path := filepath.Join(dir, util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME)
-	content := "version: 1\nsecrets-management:\n  project-id: 99999999-9999-4999-8999-999999999999\nagent-vault:\n  project-id: " + projectID + "\n"
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return path
 }
 
 func TestResolveAgentVaultProjectOrder(t *testing.T) {
-	dir := isolateAgentVaultProject(t)
-	path := writeAgentVaultWorkspaceFile(t, dir, projectFromFile)
+	isolateAgentVaultProject(t)
 	t.Setenv(agentVaultProjectIDEnv, projectFromAgvEnv)
 	t.Setenv(util.INFISICAL_PROJECT_ID_NAME, projectFromProjEnv)
 
@@ -62,11 +46,6 @@ func TestResolveAgentVaultProjectOrder(t *testing.T) {
 	}{
 		{[]string{"--project-id", projectFromFlag}, projectFromFlag, "--project-id", nil},
 		{nil, projectFromAgvEnv, agentVaultProjectIDEnv, func() { t.Setenv(agentVaultProjectIDEnv, "") }},
-		{nil, projectFromFile, path, func() {
-			if err := os.Remove(path); err != nil {
-				t.Fatal(err)
-			}
-		}},
 		{nil, projectFromProjEnv, util.INFISICAL_PROJECT_ID_NAME, nil},
 	}
 	for _, step := range steps {
@@ -74,7 +53,7 @@ func TestResolveAgentVaultProjectOrder(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if project.ID != step.wantID || !sameAgentVaultProjectSource(project.Source, step.wantSource) {
+		if project.ID != step.wantID || project.Source != step.wantSource {
 			t.Fatalf("got %s from %s, want %s from %s", project.ID, project.Source, step.wantID, step.wantSource)
 		}
 		if project.FromFlag != (step.wantSource == "--project-id") {
@@ -84,16 +63,6 @@ func TestResolveAgentVaultProjectOrder(t *testing.T) {
 			step.drop()
 		}
 	}
-}
-
-// The temp folder is reached through a symlink on macOS, so a path source may name it either way.
-func sameAgentVaultProjectSource(got, want string) bool {
-	if got == want {
-		return true
-	}
-	gotPath, gotErr := filepath.EvalSymlinks(got)
-	wantPath, wantErr := filepath.EvalSymlinks(want)
-	return gotErr == nil && wantErr == nil && gotPath == wantPath
 }
 
 func TestResolveAgentVaultProjectRefusesAnEmptyFlag(t *testing.T) {
@@ -107,7 +76,7 @@ func TestResolveAgentVaultProjectRefusesAnEmptyFlag(t *testing.T) {
 }
 
 func TestResolveAgentVaultProjectRefusesANonUuidNamingItsSource(t *testing.T) {
-	dir := isolateAgentVaultProject(t)
+	isolateAgentVaultProject(t)
 
 	if _, err := resolveAgentVaultProject(projectIDCmd(t, "--project-id", "my-project")); err == nil || !strings.Contains(err.Error(), `"my-project" from --project-id`) {
 		t.Fatalf("flag: %v", err)
@@ -118,9 +87,9 @@ func TestResolveAgentVaultProjectRefusesANonUuidNamingItsSource(t *testing.T) {
 		t.Fatalf("braced uuid from %s: %v", util.INFISICAL_PROJECT_ID_NAME, err)
 	}
 
-	writeAgentVaultWorkspaceFile(t, dir, "nope")
-	if _, err := resolveAgentVaultProject(projectIDCmd(t)); err == nil || !strings.Contains(err.Error(), util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME) {
-		t.Fatalf("file: %v", err)
+	t.Setenv(agentVaultProjectIDEnv, "my-agent-vault")
+	if _, err := resolveAgentVaultProject(projectIDCmd(t)); err == nil || !strings.Contains(err.Error(), `"my-agent-vault" from `+agentVaultProjectIDEnv) {
+		t.Fatalf("%s: %v", agentVaultProjectIDEnv, err)
 	}
 }
 
@@ -131,23 +100,13 @@ func TestResolveAgentVaultProjectWithNothingSetNamesEverySource(t *testing.T) {
 	if err == nil {
 		t.Fatal("want an error when no project is set")
 	}
-	for _, source := range []string{"--project-id", agentVaultProjectIDEnv, "agent-vault.project-id", util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME, util.INFISICAL_PROJECT_ID_NAME} {
+	for _, source := range []string{"--project-id", agentVaultProjectIDEnv, util.INFISICAL_PROJECT_ID_NAME} {
 		if !strings.Contains(err.Error(), source) {
 			t.Errorf("the message should name %s: %q", source, err)
 		}
 	}
-}
-
-func TestResolveAgentVaultProjectSkipsAFileWithoutAnAgentVaultSection(t *testing.T) {
-	dir := isolateAgentVaultProject(t)
-	if err := os.WriteFile(filepath.Join(dir, util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME), []byte("version: 1\nsecrets-management:\n  project-id: abc\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv(util.INFISICAL_PROJECT_ID_NAME, projectFromProjEnv)
-
-	project, err := resolveAgentVaultProject(projectIDCmd(t))
-	if err != nil || project.ID != projectFromProjEnv {
-		t.Fatalf("got %+v, %v", project, err)
+	if strings.Contains(err.Error(), util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME) {
+		t.Errorf("the message should not offer a project file: %q", err)
 	}
 }
 
@@ -166,5 +125,50 @@ func TestAgentVaultProjectHintsOnlyFor404FromTheSharedVariable(t *testing.T) {
 	}
 	if hints := agentVaultProjectHints(&api.APIError{StatusCode: 404, DocumentationURL: "https://infisical.com/docs"}, shared); hints != nil {
 		t.Fatalf("a missing route is not a missing project: %v", hints)
+	}
+}
+
+func captureAgentVaultStdout(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	old := util.GetStdoutWriter
+	util.GetStdoutWriter = func() io.Writer { return &buf }
+	t.Cleanup(func() { util.GetStdoutWriter = old })
+	return &buf
+}
+
+func TestPrintAgentVaultProjectForProfile(t *testing.T) {
+	isolateAgentVaultProject(t)
+
+	out := captureAgentVaultStdout(t)
+	printAgentVaultProjectForProfile()
+	if out.Len() != 0 {
+		t.Fatalf("nothing set should print nothing, printed %q", out)
+	}
+
+	t.Setenv(util.INFISICAL_PROJECT_ID_NAME, projectFromProjEnv)
+	t.Setenv(agentVaultProjectIDEnv, projectFromAgvEnv)
+	printAgentVaultProjectForProfile()
+	if want := "Agent Vault project: " + projectFromAgvEnv + "\nAgent Vault project via: " + agentVaultProjectIDEnv + "\n"; out.String() != want {
+		t.Fatalf("printed %q, want %q", out, want)
+	}
+
+	out.Reset()
+	t.Setenv(agentVaultProjectIDEnv, "my-agent-vault")
+	printAgentVaultProjectForProfile()
+	if !strings.HasPrefix(out.String(), "Agent Vault project: ") || !strings.Contains(out.String(), `"my-agent-vault" from `+agentVaultProjectIDEnv) {
+		t.Fatalf("printed %q", out)
+	}
+}
+
+func TestAgentVaultProjectSourceKind(t *testing.T) {
+	for source, want := range map[string]string{
+		"--project-id":                 "flag",
+		agentVaultProjectIDEnv:         "agent-vault-env",
+		util.INFISICAL_PROJECT_ID_NAME: "project-env",
+	} {
+		if got := agentVaultProjectSourceKind(agentVaultProject{Source: source}); got != want {
+			t.Errorf("%s: got %s, want %s", source, got, want)
+		}
 	}
 }

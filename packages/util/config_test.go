@@ -4,11 +4,9 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/Infisical/infisical-merge/packages/models"
-	"gopkg.in/yaml.v3"
 )
 
 func TestWorkspaceConfigDomain(t *testing.T) {
@@ -429,28 +427,5 @@ func TestGetWorkSpaceFromFileReadsParentLegacyConfig(t *testing.T) {
 	}
 	if filepath.Base(found) != LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME {
 		t.Errorf("FindWorkspaceConfigFile = %q, want the legacy json file", found)
-	}
-}
-
-func TestWorkspaceConfigYamlAgentVaultProject(t *testing.T) {
-	dir := t.TempDir()
-	content := "version: 1\nsecrets-management:\n  project-id: sm\nagent-vault:\n  project-id: av\n"
-	if err := os.WriteFile(filepath.Join(dir, INFISICAL_WORKSPACE_CONFIG_FILE_NAME), []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := GetWorkSpaceFromFilePath(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.AgentVaultProjectID != "av" || cfg.WorkspaceId != "sm" {
-		t.Fatalf("got %+v", cfg)
-	}
-
-	written, err := yaml.Marshal(models.WorkspaceConfigFileYaml{Version: 1, SecretsManagement: models.SecretsManagementConfigSection{ProjectID: "sm"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(written), "agent-vault") {
-		t.Fatalf("a file written without an Agent Vault project should have no agent-vault section:\n%s", written)
 	}
 }

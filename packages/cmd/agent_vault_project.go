@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/api"
@@ -18,14 +17,14 @@ const agentVaultProjectIDEnv = "INFISICAL_AGENT_VAULT_PROJECT_ID"
 
 type agentVaultProject struct {
 	ID string
-	// The flag, the variable or the file the ID came from, as messages name it.
+	// The flag or the variable the ID came from, as messages name it.
 	Source   string
 	FromFlag bool
 }
 
 // resolveAgentVaultProject picks the Agent Vault project from --project-id, then INFISICAL_AGENT_VAULT_PROJECT_ID,
-// then agent-vault.project-id in .infisical.yaml, then INFISICAL_PROJECT_ID. The last is shared with Secrets
-// Management, so it comes after everything that can only name an Agent Vault project.
+// then INFISICAL_PROJECT_ID. The last is shared with Secrets Management, so it comes after the variable that can
+// only name an Agent Vault project.
 func resolveAgentVaultProject(cmd *cobra.Command) (agentVaultProject, error) {
 	if cmd.Flags().Changed("project-id") {
 		value, err := cmd.Flags().GetString("project-id")
@@ -48,8 +47,8 @@ func resolveAgentVaultProject(cmd *cobra.Command) (agentVaultProject, error) {
 	}
 	if !found {
 		return agentVaultProject{}, fmt.Errorf(
-			"no Agent Vault project is set. Pass --project-id, set %s, add agent-vault.project-id to %s, or set %s",
-			agentVaultProjectIDEnv, util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME, util.INFISICAL_PROJECT_ID_NAME)
+			"no Agent Vault project is set. Pass --project-id, or set %s or %s",
+			agentVaultProjectIDEnv, util.INFISICAL_PROJECT_ID_NAME)
 	}
 	return project, nil
 }
@@ -59,17 +58,6 @@ func resolveAgentVaultProjectFromEnvironment() (project agentVaultProject, found
 	if value := strings.TrimSpace(os.Getenv(agentVaultProjectIDEnv)); value != "" {
 		project, err = agentVaultProjectFrom(value, agentVaultProjectIDEnv)
 		return project, true, err
-	}
-
-	if path, findErr := util.FindWorkspaceConfigFile(); findErr == nil {
-		workspace, readErr := util.GetWorkSpaceFromFilePath(filepath.Dir(path))
-		if readErr != nil {
-			return agentVaultProject{}, false, fmt.Errorf("unable to read %s: %w", path, readErr)
-		}
-		if value := strings.TrimSpace(workspace.AgentVaultProjectID); value != "" {
-			project, err = agentVaultProjectFrom(value, path)
-			return project, true, err
-		}
 	}
 
 	if value := strings.TrimSpace(os.Getenv(util.INFISICAL_PROJECT_ID_NAME)); value != "" {
@@ -117,7 +105,7 @@ func agentVaultProjectSourceKind(project agentVaultProject) string {
 	case util.INFISICAL_PROJECT_ID_NAME:
 		return "project-env"
 	default:
-		return "config-file"
+		return "unknown"
 	}
 }
 

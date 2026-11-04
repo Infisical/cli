@@ -1,12 +1,17 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
@@ -99,25 +104,38 @@ func TestAgentVaultSessionOutputWithNoExpiryOrLabelPrintsNull(t *testing.T) {
 func TestValidateAgentVaultRevokeTarget(t *testing.T) {
 	id := "0b6f3a1e-1111-4111-8111-111111111111"
 	cases := []struct {
-		name       string
-		args       []string
-		tokenGiven bool
-		token      string
-		wantErr    string
+		name      string
+		args      []string
+		envToken  string
+		wantToken string
+		wantErr   string
 	}{
-		{"by id", []string{id}, false, "", ""},
-		{"by token", nil, true, "agv_x", ""},
-		{"both", []string{id}, true, "agv_x", "not both"},
-		{"neither", nil, false, "", "name the session"},
-		{"empty token", nil, true, "  ", "--session-token was given but is empty"},
-		{"not an id", []string{"agv_x"}, false, "", "is not a session ID"},
+		{"by id", []string{id}, "", "", ""},
+		{"by id ignores the variable", []string{id}, "agv_env", "", ""},
+		{"by token", []string{"--session-token", " agv_x "}, "", "agv_x", ""},
+		{"the flag beats the variable", []string{"--session-token", "agv_x"}, "agv_env", "agv_x", ""},
+		{"by the variable", nil, "agv_env", "agv_env", ""},
+		{"both", []string{id, "--session-token", "agv_x"}, "", "", "not both"},
+		{"neither", nil, "", "", "name the session to revoke"},
+		{"empty token", []string{"--session-token", "  "}, "agv_env", "", "--session-token was given but is empty"},
+		{"not an id", []string{"agv_x"}, "", "", "is not a session ID"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateAgentVaultRevokeTarget(tc.args, tc.tokenGiven, tc.token)
+			t.Setenv(agentVaultSessionTokenEnv, tc.envToken)
+			cmd := &cobra.Command{Use: "revoke", Run: func(*cobra.Command, []string) {}}
+			cmd.Flags().String("session-token", "", "")
+			if err := cmd.Flags().Parse(tc.args); err != nil {
+				t.Fatal(err)
+			}
+
+			token, err := validateAgentVaultRevokeTarget(cmd, cmd.Flags().Args())
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatal(err)
+				}
+				if token != tc.wantToken {
+					t.Fatalf("token %q, want %q", token, tc.wantToken)
 				}
 				return
 			}
@@ -128,24 +146,99 @@ func TestValidateAgentVaultRevokeTarget(t *testing.T) {
 	}
 }
 
-func TestRevokeAgentVaultSessionByTokenSendsOnlyTheToken(t *testing.T) {
-	var auth, path string
+func fakeAgentVaultRevokeServer(t *testing.T, auth, path *string) *httptest.Server {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		auth, path = r.Header.Get("Authorization"), r.Method+" "+r.URL.Path
+		*auth, *path = r.Header.Get("Authorization"), r.Method+" "+r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"session":{"id":"s1","revokedAt":"2026-11-04T00:00:00Z"}}`))
 	}))
 	t.Cleanup(srv.Close)
-	old := config.INFISICAL_URL
-	config.INFISICAL_URL = srv.URL + "/api"
-	t.Cleanup(func() { config.INFISICAL_URL = old })
+	return srv
+}
 
-	id, err := revokeAgentVaultSessionByToken(resty.New(), "agv_x")
+func useAgentVaultDomainExplicitlySet(t *testing.T, set bool) {
+	t.Helper()
+	old := config.INFISICAL_DOMAIN_EXPLICITLY_SET
+	config.INFISICAL_DOMAIN_EXPLICITLY_SET = set
+	t.Cleanup(func() { config.INFISICAL_DOMAIN_EXPLICITLY_SET = old })
+}
+
+func TestRevokeAgentVaultSessionByTokenSendsOnlyTheToken(t *testing.T) {
+	var auth, path string
+	srv := fakeAgentVaultRevokeServer(t, &auth, &path)
+	useInfisicalURL(t, srv.URL+"/api")
+	useAgentVaultDomainExplicitlySet(t, true)
+
+	id, err := revokeAgentVaultSessionByToken(context.Background(), resty.New(), "agv_x")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if id != "s1" || auth != "Bearer agv_x" || path != "POST /api/v1/agent-vault/session/revoke" {
 		t.Fatalf("id %q, auth %q, path %q", id, auth, path)
+	}
+}
+
+func TestRevokeAgentVaultSessionByTokenIgnoresTheDomainInARepoFile(t *testing.T) {
+	var auth, path string
+	srv := fakeAgentVaultRevokeServer(t, &auth, &path)
+	home := isolateSkillsHome(t)
+	if err := os.MkdirAll(filepath.Join(home, util.CONFIG_FOLDER_NAME), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	profile := `{"LoggedInUserDomain":"` + srv.URL + `"}`
+	if err := os.WriteFile(filepath.Join(home, util.CONFIG_FOLDER_NAME, util.CONFIG_FILE_NAME), []byte(profile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME), []byte("version: 1\ngeneral:\n  domain: https://evil.example\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(repo)
+	useInfisicalURL(t, "https://evil.example/api")
+	useAgentVaultDomainExplicitlySet(t, false)
+	warnings := captureWarnings(t)
+
+	if _, err := revokeAgentVaultSessionByToken(context.Background(), resty.New(), "agv_x"); err != nil {
+		t.Fatal(err)
+	}
+	if auth != "Bearer agv_x" || config.INFISICAL_URL != srv.URL+"/api" {
+		t.Fatalf("the token went to %s (auth %q)", config.INFISICAL_URL, auth)
+	}
+	if want := "Ignoring the domain in .infisical.yaml (or .infisical.json) for this session token, and using " + srv.URL + "."; !strings.Contains(warnings.String(), want) {
+		t.Fatalf("warned %q", warnings.String())
+	}
+}
+
+func TestRevokeAgentVaultSessionStopsAtItsDeadline(t *testing.T) {
+	var auth, path string
+	srv := fakeAgentVaultRevokeServer(t, &auth, &path)
+	useInfisicalURL(t, srv.URL+"/api")
+	useAgentVaultDomainExplicitlySet(t, true)
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	if _, err := revokeAgentVaultSessionByToken(ctx, resty.New(), "agv_x"); err == nil {
+		t.Fatal("a revoke past its deadline should fail")
+	}
+	if err := api.CallRevokeAgentVaultSession(ctx, resty.New(), "s1"); err == nil {
+		t.Fatal("a revoke by ID past its deadline should fail")
+	}
+	if auth != "" {
+		t.Fatal("nothing should be sent past the deadline")
+	}
+	if messages := agentVaultRevokeErrorMessages(ctx, errors.New("timeout"), true); len(messages) != 1 || !strings.Contains(messages[0], "did not answer within 30s") {
+		t.Fatalf("messages %v", messages)
+	}
+}
+
+func TestAgentVaultRevokeErrorMessages(t *testing.T) {
+	unauthorized := &api.APIError{StatusCode: http.StatusUnauthorized}
+	if messages := agentVaultRevokeErrorMessages(context.Background(), unauthorized, true); !strings.Contains(messages[0], "does not recognize this session token") {
+		t.Fatalf("by token: %v", messages)
+	}
+	if messages := agentVaultRevokeErrorMessages(context.Background(), unauthorized, false); messages[0] != "Unable to revoke the session" {
+		t.Fatalf("by ID: %v", messages)
 	}
 }
 

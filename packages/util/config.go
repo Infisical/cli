@@ -120,7 +120,6 @@ func workspaceConfigFromYaml(workspaceConfigYaml models.WorkspaceConfigFileYaml)
 		GitBranchToEnvironmentMapping: secretsManagement.Mappings.GitBranchToEnvironment,
 		DefaultSecretPath:             secretsManagement.DefaultSecretPath,
 		Domain:                        workspaceConfigYaml.General.Domain,
-		AgentVaultProjectID:           workspaceConfigYaml.AgentVault.ProjectID,
 	}
 
 	if secretsManagement.Environment != "" {

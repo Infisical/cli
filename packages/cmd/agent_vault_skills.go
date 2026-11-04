@@ -30,8 +30,8 @@ var agentVaultSkillsPushCmd = &cobra.Command{
 The folder holds one skill, with SKILL.md at its root. The name in the SKILL.md header picks the skill: a new
 name creates it, and an existing one gets a new version unless nothing changed.
 
-The skill belongs to the Agent Vault project from --project-id, or else INFISICAL_AGENT_VAULT_PROJECT_ID,
-agent-vault.project-id in .infisical.yaml, or INFISICAL_PROJECT_ID, in that order.`,
+The skill belongs to the Agent Vault project from --project-id, or else INFISICAL_AGENT_VAULT_PROJECT_ID or
+INFISICAL_PROJECT_ID, in that order.`,
 	Example:               "  infisical agent-vault skills push ./skills/code-review",
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.ExactArgs(1),
@@ -181,7 +181,7 @@ func readAgentVaultSkillFolder(dir string) ([]api.AgentVaultSkillFile, string, e
 }
 
 func init() {
-	agentVaultSkillsPushCmd.Flags().String("project-id", "", "Agent Vault project the skill belongs to (falls back to "+agentVaultProjectIDEnv+", then agent-vault.project-id in .infisical.yaml, then INFISICAL_PROJECT_ID)")
+	agentVaultSkillsPushCmd.Flags().String("project-id", "", "Agent Vault project the skill belongs to (falls back to "+agentVaultProjectIDEnv+", then INFISICAL_PROJECT_ID)")
 	agentVaultSkillsPushCmd.Flags().String("client-id", "", "universal auth client id of the machine identity to push as (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_ID)")
 	agentVaultSkillsPushCmd.Flags().String("client-secret", "", "universal auth client secret of that machine identity (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET)")
 

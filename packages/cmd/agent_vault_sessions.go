@@ -30,8 +30,8 @@ var agentVaultSessionsCreateCmd = &cobra.Command{
 	Short: "Create a session over an access bundle and print its token",
 	Long: `Create a session over an access bundle and print its token.
 
-The session belongs to the Agent Vault project from --project-id, or else INFISICAL_AGENT_VAULT_PROJECT_ID,
-agent-vault.project-id in .infisical.yaml, or INFISICAL_PROJECT_ID, in that order.
+The session belongs to the Agent Vault project from --project-id, or else INFISICAL_AGENT_VAULT_PROJECT_ID or
+INFISICAL_PROJECT_ID, in that order.
 
 Only the token is printed, so it can be captured into a variable. Pass -o json or -o yaml for the session's
 ID, project, access bundle, label and expiry as well. The session stays active until it expires or you revoke
@@ -128,18 +128,20 @@ var agentVaultSessionsRevokeCmd = &cobra.Command{
 	Long: `Revoke a session by its ID or its token.
 
 By ID, the session is revoked as you, or as the machine identity from --client-id and --client-secret, which
-needs access to it. By --session-token, the session token alone is enough: whoever holds it can end the session.
-Revoking a session that has already ended succeeds.`,
-	Example: `  infisical agent-vault sessions revoke 0b6f3a1e-...
-  infisical agent-vault sessions revoke --session-token "$INFISICAL_AGENT_VAULT_SESSION_TOKEN"`,
+needs access to it. Without an ID, the session token from --session-token, or else
+INFISICAL_AGENT_VAULT_SESSION_TOKEN, names the session, and the token alone is enough: whoever holds it can end
+the session. Revoking a session that has already ended succeeds.`,
+	Example: `  infisical agent-vault sessions revoke
+  infisical agent-vault sessions revoke 0b6f3a1e-...
+  infisical agent-vault sessions revoke --session-token "$TOKEN"`,
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.MaximumNArgs(1),
 	Run:                   runAgentVaultSessionsRevoke,
 }
 
 func runAgentVaultSessionsRevoke(cmd *cobra.Command, args []string) {
-	token, _ := cmd.Flags().GetString("session-token")
-	if err := validateAgentVaultRevokeTarget(args, cmd.Flags().Changed("session-token"), token); err != nil {
+	token, err := validateAgentVaultRevokeTarget(cmd, args)
+	if err != nil {
 		util.HandleError(err)
 	}
 
@@ -148,23 +150,22 @@ func runAgentVaultSessionsRevoke(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Failed to build the API client")
 	}
 
-	byToken := len(args) == 0
+	ctx, cancel := context.WithTimeout(cmd.Context(), agentVaultExitRevokeTimeout)
+	defer cancel()
+
+	byToken := token != ""
 	var sessionID string
 	if byToken {
-		sessionID, err = revokeAgentVaultSessionByToken(httpClient, strings.TrimSpace(token))
+		sessionID, err = revokeAgentVaultSessionByToken(ctx, httpClient, token)
 		if err != nil {
-			var apiErr *api.APIError
-			if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusUnauthorized {
-				util.HandleError(err, "Infisical does not recognize this session token. Check that it was copied whole")
-			}
-			util.HandleError(err, "Unable to revoke the session")
+			util.HandleError(err, agentVaultRevokeErrorMessages(ctx, err, true)...)
 		}
 	} else {
 		sessionID = args[0]
 		identity := resolveAgentVaultIdentityToken(cmd)
 		httpClient.SetAuthToken(identity)
-		if err := api.CallRevokeAgentVaultSession(context.Background(), httpClient, sessionID); err != nil {
-			util.HandleError(err, "Unable to revoke the session")
+		if err := api.CallRevokeAgentVaultSession(ctx, httpClient, sessionID); err != nil {
+			util.HandleError(err, agentVaultRevokeErrorMessages(ctx, err, false)...)
 		}
 		Telemetry.SetActor(telemetry.IdentityClaimsFromToken(identity))
 	}
@@ -177,30 +178,47 @@ func runAgentVaultSessionsRevoke(cmd *cobra.Command, args []string) {
 	fmt.Printf("Session %s is revoked\n", sessionID)
 }
 
-func validateAgentVaultRevokeTarget(args []string, tokenGiven bool, token string) error {
-	switch {
-	case len(args) == 1 && tokenGiven:
-		return errors.New("pass a session ID or --session-token, not both")
-	case len(args) == 1:
-		if _, err := uuid.Parse(args[0]); err != nil || len(args[0]) != 36 {
-			return fmt.Errorf("%q is not a session ID; pass the ID shown on the session in Infisical, or revoke by --session-token", args[0])
+// validateAgentVaultRevokeTarget returns the session token to revoke by, or "" to revoke the session ID in args.
+// A token in the environment is ignored when an ID is given, since the ID names the session outright.
+func validateAgentVaultRevokeTarget(cmd *cobra.Command, args []string) (string, error) {
+	if len(args) == 1 {
+		if cmd.Flags().Changed("session-token") {
+			return "", errors.New("pass a session ID or --session-token, not both")
 		}
-		return nil
-	case !tokenGiven:
-		return errors.New("name the session to revoke: pass its ID, or --session-token with its session token")
-	case strings.TrimSpace(token) == "":
-		return errors.New("--session-token was given but is empty; pass the session token, or pass the session's ID instead")
-	default:
-		return nil
+		if _, err := uuid.Parse(args[0]); err != nil || len(args[0]) != 36 {
+			return "", fmt.Errorf("%q is not a session ID; pass the ID shown on the session in Infisical, or revoke by --session-token", args[0])
+		}
+		return "", nil
 	}
+
+	token, _, err := resolveAgentVaultSessionToken(cmd)
+	if err != nil {
+		return "", err
+	}
+	if token == "" {
+		return "", fmt.Errorf("name the session to revoke: pass its ID, or --session-token, or set %s", agentVaultSessionTokenEnv)
+	}
+	return token, nil
 }
 
-func revokeAgentVaultSessionByToken(httpClient *resty.Client, token string) (string, error) {
-	res, err := api.CallRevokeAgentVaultSessionByToken(context.Background(), httpClient, token)
+func revokeAgentVaultSessionByToken(ctx context.Context, httpClient *resty.Client, token string) (string, error) {
+	useAgentVaultSessionTokenDomain()
+	res, err := api.CallRevokeAgentVaultSessionByToken(ctx, httpClient, token)
 	if err != nil {
 		return "", err
 	}
 	return res.Session.ID, nil
+}
+
+func agentVaultRevokeErrorMessages(ctx context.Context, err error, byToken bool) []string {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return []string{fmt.Sprintf("Infisical did not answer within %s, so the session may still be active. Try again, or revoke it in Infisical", agentVaultExitRevokeTimeout)}
+	}
+	var apiErr *api.APIError
+	if byToken && errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusUnauthorized {
+		return []string{"Infisical does not recognize this session token. Check that it was copied whole"}
+	}
+	return []string{"Unable to revoke the session"}
 }
 
 // The variable names one bundle and the flag is repeatable only so that passing it twice is refused by name.
@@ -245,7 +263,7 @@ func mintAgentVaultSessionOrExit(identity string, project agentVaultProject, acc
 }
 
 func init() {
-	agentVaultSessionsCreateCmd.Flags().String("project-id", "", "Agent Vault project to create the session in (falls back to "+agentVaultProjectIDEnv+", then agent-vault.project-id in .infisical.yaml, then INFISICAL_PROJECT_ID)")
+	agentVaultSessionsCreateCmd.Flags().String("project-id", "", "Agent Vault project to create the session in (falls back to "+agentVaultProjectIDEnv+", then INFISICAL_PROJECT_ID)")
 	agentVaultSessionsCreateCmd.Flags().StringArray("access-bundle", nil, "create the session over the access bundle with this `name` (falls back to "+agentVaultAccessBundleEnv+")")
 	agentVaultSessionsCreateCmd.Flags().String("ttl", "never", "lifetime of the session: one number and one unit, such as 30m, 8h or 7d (not 2h30m), or never")
 	agentVaultSessionsCreateCmd.Flags().String("label", "", "describe what the session is for (up to 128 characters)")
@@ -253,7 +271,7 @@ func init() {
 	agentVaultSessionsCreateCmd.Flags().String("client-secret", "", "universal auth client secret of that machine identity (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET)")
 	agentVaultSessionsCreateCmd.Flags().StringP("output", "o", "", "print the session's ID, token, project, access bundle, label and expiry as json or yaml, instead of only its token")
 
-	agentVaultSessionsRevokeCmd.Flags().String("session-token", "", "revoke the session this session token belongs to, instead of naming it by ID")
+	agentVaultSessionsRevokeCmd.Flags().String("session-token", "", "revoke the session this session token belongs to, instead of naming it by ID (falls back to "+agentVaultSessionTokenEnv+" when no ID is given)")
 	agentVaultSessionsRevokeCmd.Flags().String("client-id", "", "universal auth client id of the machine identity to revoke as (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_ID)")
 	agentVaultSessionsRevokeCmd.Flags().String("client-secret", "", "universal auth client secret of that machine identity (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET)")
 

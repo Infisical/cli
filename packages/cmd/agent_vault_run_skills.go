@@ -60,7 +60,7 @@ func agentVaultSessionTokenAPIURL() string {
 	}
 	apiURL := util.AppendAPIEndpoint(domain)
 	if fileDomain, valid := util.GetDomainFromFile(); valid && util.AppendAPIEndpoint(fileDomain) != apiURL {
-		util.PrintWarning(fmt.Sprintf("Ignoring the domain in .infisical.yaml (or .infisical.json) for this session token, and getting skills from %s. Pass --domain to choose another.", strings.TrimSuffix(apiURL, "/api")))
+		util.PrintWarning(fmt.Sprintf("Ignoring the domain in .infisical.yaml (or .infisical.json) for this session token, and using %s. Pass --domain to choose another.", strings.TrimSuffix(apiURL, "/api")))
 	}
 	return apiURL
 }
