@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Infisical/infisical-merge/packages/config"
+	"github.com/Infisical/infisical-merge/packages/models"
 	"github.com/Infisical/infisical-merge/packages/telemetry"
 	"github.com/Infisical/infisical-merge/packages/util"
 )
@@ -83,6 +84,18 @@ func isStructuredOutputRequested(cmd *cobra.Command) bool {
 		}
 	}
 	return false
+}
+
+// warnTokenOverridesSession tells a logged-in user that a token is used instead of their session. With
+// -o json or yaml (or another structured format) it's only logged: on stderr it would come before the
+// structured error, and stderr would no longer parse as one document.
+func warnTokenOverridesSession(cmd *cobra.Command, token *models.TokenDetails) {
+	message := fmt.Sprintf("Your logged-in session is being overwritten by the token provided from the %s.", token.Source)
+	if isStructuredOutputRequested(cmd) {
+		log.Debug().Msg(message)
+		return
+	}
+	util.PrintWarningWithWriter(message, cmd.ErrOrStderr())
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -202,7 +215,7 @@ func init() {
 			token, err := util.GetInfisicalToken(cmd)
 
 			if err == nil && token != nil && !ignoresEnvServiceToken(cmd, args, token) {
-				util.PrintWarningWithWriter(fmt.Sprintf("Your logged-in session is being overwritten by the token provided from the %s.", token.Source), cmd.ErrOrStderr())
+				warnTokenOverridesSession(cmd, token)
 			}
 		}
 

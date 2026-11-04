@@ -214,6 +214,13 @@ type environmentList struct {
 	PendingDeletion []api.DeletedEnvironment `json:"pendingDeletion"`
 }
 
+// The backend's not-found handler (and Fastify's default before it) names
+// that error "Not Found"; a handler's NotFoundError for a missing environment is named "NotFound".
+func isMissingRoute(err error) bool {
+	var apiErr *api.APIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound && apiErr.Name == "Not Found"
+}
+
 func runEnvironmentsGet(cmd *cobra.Command, args []string) {
 	target := loadEnvironmentsTarget(cmd, false)
 
@@ -221,12 +228,13 @@ func runEnvironmentsGet(cmd *cobra.Command, args []string) {
 		slug := args[0]
 		listed := target.existing(cmd, slug)
 		environment, err := api.CallGetEnvironmentBySlug(target.client, target.project.ID, slug)
-		var apiErr *api.APIError
-		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+		if isMissingRoute(err) {
 			environment, err = api.Environment{ID: listed.ID, Name: listed.Name, Slug: listed.Slug, ProjectID: target.project.ID}, nil
 		}
 		if err != nil {
-			exitWithError(cmd, classifyAPIError(err, target.scope, nil), "Unable to get the environment")
+			exitWithError(cmd, classifyAPIError(err, target.scope, func(cause error) *util.CLIError {
+				return errEnvironmentNotFound(slug, target.scope, cause)
+			}), "Unable to get the environment")
 		}
 		target.printEnvironment(cmd, environment, "")
 		Telemetry.CaptureEvent("cli-command:environments get", posthog.NewProperties().Set("version", util.CLI_VERSION))

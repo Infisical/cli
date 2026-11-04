@@ -58,7 +58,7 @@ func TestAgentVaultCredentialCallsRefuseAnOversizedBody(t *testing.T) {
 
 func TestCreateAgentVaultSessionRequestSendsALabelOnlyWhenGiven(t *testing.T) {
 	// Without --label the request body stays exactly what it was before sessions had labels.
-	unlabeled, err := json.Marshal(CreateAgentVaultSessionRequest{AccessBundles: []string{"coding-agent"}, TTL: "never"})
+	unlabeled, err := json.Marshal(CreateAgentVaultSessionRequest{AccessBundle: "coding-agent", TTL: "never"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestCreateAgentVaultSessionRequestSendsALabelOnlyWhenGiven(t *testing.T) {
 		t.Errorf("want no label key, got %s", unlabeled)
 	}
 
-	labeled, err := json.Marshal(CreateAgentVaultSessionRequest{AccessBundles: []string{"coding-agent"}, TTL: "never", Label: "nightly deploy"})
+	labeled, err := json.Marshal(CreateAgentVaultSessionRequest{AccessBundle: "coding-agent", TTL: "never", Label: "nightly deploy"})
 	if err != nil {
 		t.Fatal(err)
 	}
