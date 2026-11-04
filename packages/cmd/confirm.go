@@ -122,7 +122,27 @@ func rerunWithYes(cmd *cobra.Command, args []string, scope []scopeFlag) string {
 			parts = append(parts, "--"+f.Name+" "+util.SuggestedValue(f.Value, f.Name))
 		}
 	}
+	if domain := unpinnedDomain(cmd); domain != "" {
+		parts = append(parts, "--domain "+util.SuggestedDomain(domain))
+	}
 	return strings.Join(append(parts, "--yes"), " ")
+}
+
+// unpinnedDomain is the instance the command reached through INFISICAL_DOMAIN (or the legacy
+// INFISICAL_API_URL) or .infisical.yaml rather than --domain. The rerun names it: without it, running
+// the suggestion in another shell or directory falls back to Infisical Cloud and would send a token from
+// the environment there. A login profile's domain needs no pin, since the rerun uses the same profile.
+func unpinnedDomain(cmd *cobra.Command) string {
+	if cmd.Flags().Changed("domain") {
+		return ""
+	}
+	if domain, ok := util.GetEnvDomain(); ok {
+		return domain
+	}
+	if domain, valid := util.GetDomainFromFile(); valid {
+		return domain
+	}
+	return ""
 }
 
 // requireConfirmation gives cmd -y/--yes and makes it confirm before its Run deletes anything.
@@ -137,7 +157,30 @@ func requireConfirmation(cmd *cobra.Command, describe func(cmd *cobra.Command, a
 				exitWithError(cmd, err)
 				return
 			}
+			// The handler resolves its target again, and .infisical.yaml or the git branch can change
+			// while the question waits, so it only runs if the target is still the one confirmed.
+			if changed := scopeChange(action, describe, cmd, args); changed != nil {
+				exitWithError(cmd, changed)
+				return
+			}
 		}
 		run(cmd, args)
 	}
+}
+
+func scopeChange(confirmed destructiveAction, describe func(cmd *cobra.Command, args []string) (destructiveAction, bool), cmd *cobra.Command, args []string) error {
+	now, ok := describe(cmd, args)
+	if !ok {
+		return errConfirmedTargetChanged(confirmed, scopeFlag{}, scopeFlag{})
+	}
+	for i, before := range confirmed.Scope {
+		after := scopeFlag{Name: before.Name}
+		if i < len(now.Scope) {
+			after = now.Scope[i]
+		}
+		if after != before {
+			return errConfirmedTargetChanged(confirmed, before, after)
+		}
+	}
+	return nil
 }

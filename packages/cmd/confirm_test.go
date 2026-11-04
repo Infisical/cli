@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -252,5 +253,99 @@ func TestConfirmRerunNeverRepeatsUnsafeInput(t *testing.T) {
 	want := "infisical secrets-manager environments delete <value> --domain <domain> --projectId <projectId> --yes"
 	if got := cliErr.Next[0].Command; got != want {
 		t.Errorf("got %s, want %s", got, want)
+	}
+}
+
+// A domain from INFISICAL_DOMAIN or .infisical.yaml is pinned in the rerun: run elsewhere, the suggestion
+// would otherwise fall back to Infisical Cloud and send a token from the environment there.
+func TestConfirmRerunPinsADomainThatWasntTyped(t *testing.T) {
+	fakeTerminal(t, false, "", nil)
+	rerun := func(args ...string) string {
+		t.Helper()
+		var cliErr *util.CLIError
+		if err := runDelete(t, append([]string{"secrets-manager", "environments", "delete", "qa", "--projectId", testProjectID}, args...)...); !errors.As(err, &cliErr) {
+			t.Fatalf("want a CLIError, got %v", err)
+		}
+		return cliErr.Next[0].Command
+	}
+	base := "infisical secrets-manager environments delete qa --projectId " + testProjectID
+	cases := []struct {
+		name, envName, envValue, yaml string
+		args                          []string
+		want                          string
+	}{
+		{name: "nothing set", want: base + " --yes"},
+		{name: "INFISICAL_DOMAIN", envName: util.INFISICAL_DOMAIN_ENV_NAME, envValue: "https://eu.infisical.com", want: base + " --domain https://eu.infisical.com --yes"},
+		{name: "legacy INFISICAL_API_URL", envName: util.LEGACY_INFISICAL_API_URL_ENV_NAME, envValue: "https://infisical.example.com/api", want: base + " --domain https://infisical.example.com/api --yes"},
+		{name: ".infisical.yaml", yaml: "general:\n  domain: https://self-hosted.example.com\n", want: base + " --domain https://self-hosted.example.com --yes"},
+		{name: "typed --domain wins and appears once", envName: util.INFISICAL_DOMAIN_ENV_NAME, envValue: "https://eu.infisical.com",
+			args: []string{"--domain", "https://typed.example.com"}, want: "infisical secrets-manager environments delete qa --domain https://typed.example.com --projectId " + testProjectID + " --yes"},
+		{name: "a domain that isn't safe to print", envName: util.INFISICAL_DOMAIN_ENV_NAME, envValue: "https://user:pass@eu.infisical.com", want: base + " --domain <domain> --yes"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv(util.INFISICAL_DOMAIN_ENV_NAME, "")
+			t.Setenv(util.LEGACY_INFISICAL_API_URL_ENV_NAME, "")
+			t.Chdir(t.TempDir())
+			if c.envName != "" {
+				t.Setenv(c.envName, c.envValue)
+			}
+			if c.yaml != "" {
+				if err := os.WriteFile(util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME, []byte(c.yaml), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := rerun(c.args...); got != c.want {
+				t.Errorf("got  %s\nwant %s", got, c.want)
+			}
+		})
+	}
+}
+
+// The wrapped delete resolves its target again after the question, so if .infisical.yaml or the git
+// branch changed while it was open, nothing may be deleted.
+func TestRequireConfirmationRefusesATargetThatChangedWhileAsking(t *testing.T) {
+	stderr := captureStderr(t)
+	exits := 0
+	oldExit := exitProcess
+	exitProcess = func(int) { exits++ }
+	t.Cleanup(func() { exitProcess = oldExit })
+
+	confirmed := testDeleteAction
+	confirmed.Scope = []scopeFlag{{"env", "dev"}, {"path", "/"}, {"projectId", testProjectID}}
+	moved := confirmed
+	moved.Scope = []scopeFlag{{"env", "prod"}, {"path", "/"}, {"projectId", testProjectID}}
+
+	cases := []struct {
+		name     string
+		second   destructiveAction
+		ok       bool
+		wantRuns int
+		message  string
+	}{
+		{"unchanged", confirmed, true, 1, ""},
+		{"environment changed", moved, true, 0, `--env changed from "dev" to "prod" while you were confirming the delete of environment "qa"`},
+		{"no longer resolves", destructiveAction{}, false, 0, `the target of the delete of environment "qa" changed while you were confirming`},
+	}
+	for _, c := range cases {
+		fakeTerminal(t, true, "qa", nil)
+		stderr.Reset()
+		exits = 0
+		runs, calls := 0, 0
+		cmd := &cobra.Command{Use: "delete", Run: func(*cobra.Command, []string) { runs++ }}
+		requireConfirmation(cmd, func(*cobra.Command, []string) (destructiveAction, bool) {
+			calls++
+			if calls == 1 {
+				return confirmed, true
+			}
+			return c.second, c.ok
+		})
+		cmd.Run(cmd, []string{"qa"})
+		if runs != c.wantRuns || exits != 1-c.wantRuns || !strings.Contains(stderr.String(), c.message) {
+			t.Errorf("%s: runs=%d exits=%d stderr=%q", c.name, runs, exits, stderr.String())
+		}
+		if c.wantRuns == 0 && !strings.Contains(stderr.String(), "Nothing was deleted") {
+			t.Errorf("%s: must say nothing was deleted: %q", c.name, stderr.String())
+		}
 	}
 }

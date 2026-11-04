@@ -194,6 +194,18 @@ func errConfirmationRequired(action destructiveAction, rerun string) *util.CLIEr
 		Next:    []util.NextStep{{Purpose: "To delete it without asking", Command: rerun}}}
 }
 
+// errConfirmedTargetChanged is for a delete whose environment, path or project resolved differently
+// after the question was answered than when it was asked. before is empty when the target can no longer
+// be resolved at all.
+func errConfirmedTargetChanged(action destructiveAction, before, after scopeFlag) *util.CLIError {
+	message := fmt.Sprintf("Nothing was deleted: the target of the delete of %s changed while you were confirming. Run the command again.", action.Target)
+	if before.Name != "" {
+		message = fmt.Sprintf("Nothing was deleted: --%s changed from %s to %s while you were confirming the delete of %s. Run the command again.",
+			before.Name, quoted(before.Value, before.Name), quoted(after.Value, after.Name), action.Target)
+	}
+	return &util.CLIError{Code: errCodeConfirmationDeclined, Message: message}
+}
+
 func errConfirmationDeclined(action destructiveAction) *util.CLIError {
 	return &util.CLIError{Code: errCodeConfirmationDeclined,
 		Message: fmt.Sprintf("Nothing was deleted: the confirmation didn't match %s %s.", action.Label, quoted(action.Expected, "value"))}
