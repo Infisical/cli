@@ -66,6 +66,13 @@ func GetRestyClientWithPolicy(policy RetryPolicy) (*resty.Client, error) {
 	return applyRetryPolicy(httpClient, policy), nil
 }
 
+// GetRestyClientWithoutCustomHeaders is for hosts other than the Infisical API, such as cloud
+// metadata servers. INFISICAL_CUSTOM_HEADERS often carries proxy or access credentials meant only
+// for Infisical, so it must not reach them.
+func GetRestyClientWithoutCustomHeaders(policy RetryPolicy) *resty.Client {
+	return applyRetryPolicy(resty.New(), policy)
+}
+
 func GetInfisicalCustomHeadersMap() (map[string]string, error) {
 	customHeaders := os.Getenv("INFISICAL_CUSTOM_HEADERS")
 	if customHeaders == "" {
