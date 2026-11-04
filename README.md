@@ -77,6 +77,14 @@ _Arch Linux:_
 yay -S infisical-bin
 ```
 
+_Nix / NixOS:_
+
+```bash
+nix profile add nixpkgs#infisical
+```
+
+On NixOS, you can instead add `pkgs.infisical` to `environment.systemPackages` in your configuration. If flakes aren't enabled, add `--extra-experimental-features 'nix-command flakes'` to the `nix` command.
+
 ### Direct Download
 
 Download binaries from [GitHub Releases](https://github.com/Infisical/cli/releases).
