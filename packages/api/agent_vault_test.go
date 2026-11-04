@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -72,5 +73,46 @@ func TestCreateAgentVaultSessionRequestSendsALabelOnlyWhenGiven(t *testing.T) {
 	}
 	if !strings.Contains(string(labeled), `"label":"nightly deploy"`) {
 		t.Errorf("want the label in the body, got %s", labeled)
+	}
+}
+
+func TestCreateAgentVaultSessionRequestSendsTheProject(t *testing.T) {
+	body, err := json.Marshal(CreateAgentVaultSessionRequest{ProjectID: "p1", AccessBundles: []string{"coding-agent"}, TTL: "never"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"projectId":"p1"`) {
+		t.Errorf("want the project in the body, got %s", body)
+	}
+}
+
+func TestOnlyASkillCreateSendsTheProject(t *testing.T) {
+	created, _ := json.Marshal(CreateAgentVaultSkillRequest{ProjectID: "p1"})
+	published, _ := json.Marshal(AgentVaultSkillFilesRequest{})
+	if !strings.Contains(string(created), `"projectId":"p1"`) || strings.Contains(string(published), "projectId") {
+		t.Fatalf("create %s, publish %s", created, published)
+	}
+}
+
+func TestRevokeAgentVaultSessionByTokenUsesNoOtherCredential(t *testing.T) {
+	var auth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"statusCode":401,"message":"Invalid session token"}`))
+	}))
+	defer srv.Close()
+	old := config.INFISICAL_URL
+	config.INFISICAL_URL = srv.URL + "/api"
+	t.Cleanup(func() { config.INFISICAL_URL = old })
+
+	_, err := CallRevokeAgentVaultSessionByToken(context.Background(), resty.New(), "agv_x")
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("err %v, want a 401", err)
+	}
+	if auth != "Bearer agv_x" {
+		t.Fatalf("Authorization %q", auth)
 	}
 }

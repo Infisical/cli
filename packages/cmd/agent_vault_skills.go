@@ -28,7 +28,10 @@ var agentVaultSkillsPushCmd = &cobra.Command{
 	Long: `Create a skill from a folder, or publish the folder as its next version.
 
 The folder holds one skill, with SKILL.md at its root. The name in the SKILL.md header picks the skill: a new
-name creates it, and an existing one gets a new version unless nothing changed.`,
+name creates it, and an existing one gets a new version unless nothing changed.
+
+The skill belongs to the Agent Vault project from --project-id, or else INFISICAL_AGENT_VAULT_PROJECT_ID,
+agent-vault.project-id in .infisical.yaml, or INFISICAL_PROJECT_ID, in that order.`,
 	Example:               "  infisical agent-vault skills push ./skills/code-review",
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.ExactArgs(1),
@@ -37,6 +40,11 @@ name creates it, and an existing one gets a new version unless nothing changed.`
 		if err != nil {
 			util.HandleError(err)
 		}
+		project, err := resolveAgentVaultProject(cmd)
+		if err != nil {
+			util.HandleError(err)
+		}
+		echoAgentVaultProject(project)
 
 		identity := resolveAgentVaultIdentityToken(cmd)
 		httpClient, err := util.GetRestyClientWithCustomHeaders()
@@ -45,19 +53,19 @@ name creates it, and an existing one gets a new version unless nothing changed.`
 		}
 		httpClient.SetAuthToken(identity)
 
-		result, err := pushAgentVaultSkill(httpClient, name, api.AgentVaultSkillFilesRequest{Files: files})
+		result, err := pushAgentVaultSkill(httpClient, project.ID, name, files)
 		if err != nil {
-			util.HandleError(err)
+			util.HandleError(err, agentVaultProjectHints(err, project)...)
 		}
 		fmt.Println(result)
 	},
 }
 
-// pushAgentVaultSkill publishes a version of the skill with this name, or creates it. A create that loses a
+// pushAgentVaultSkill publishes a version of the skill with this name in the project, or creates it there. A create that loses a
 // race with another push of the same name gets 409, and publishes to the skill the other push made.
-func pushAgentVaultSkill(httpClient *resty.Client, name string, request api.AgentVaultSkillFilesRequest) (string, error) {
+func pushAgentVaultSkill(httpClient *resty.Client, projectID, name string, files []api.AgentVaultSkillFile) (string, error) {
 	publish := func(skillID string) (string, error) {
-		published, err := api.CallUpdateAgentVaultSkill(httpClient, skillID, request)
+		published, err := api.CallUpdateAgentVaultSkill(httpClient, skillID, api.AgentVaultSkillFilesRequest{Files: files})
 		if err != nil {
 			return "", fmt.Errorf("unable to publish a new version of %q: %w", name, err)
 		}
@@ -67,7 +75,7 @@ func pushAgentVaultSkill(httpClient *resty.Client, name string, request api.Agen
 		return fmt.Sprintf("%s: v%d", name, published.Version.Version), nil
 	}
 	find := func() (string, error) {
-		listed, err := api.CallListAgentVaultSkillsByName(httpClient, name)
+		listed, err := api.CallListAgentVaultSkillsByName(httpClient, projectID, name)
 		if err != nil {
 			return "", fmt.Errorf("unable to look up the skill %q: %w", name, err)
 		}
@@ -87,7 +95,7 @@ func pushAgentVaultSkill(httpClient *resty.Client, name string, request api.Agen
 		return publish(skillID)
 	}
 
-	created, err := api.CallCreateAgentVaultSkill(httpClient, request)
+	created, err := api.CallCreateAgentVaultSkill(httpClient, api.CreateAgentVaultSkillRequest{ProjectID: projectID, Files: files})
 	var apiErr *api.APIError
 	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusConflict {
 		if existing, findErr := find(); findErr == nil && existing != "" {
@@ -173,6 +181,7 @@ func readAgentVaultSkillFolder(dir string) ([]api.AgentVaultSkillFile, string, e
 }
 
 func init() {
+	agentVaultSkillsPushCmd.Flags().String("project-id", "", "Agent Vault project the skill belongs to (falls back to "+agentVaultProjectIDEnv+", then agent-vault.project-id in .infisical.yaml, then INFISICAL_PROJECT_ID)")
 	agentVaultSkillsPushCmd.Flags().String("client-id", "", "universal auth client id of the machine identity to push as (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_ID)")
 	agentVaultSkillsPushCmd.Flags().String("client-secret", "", "universal auth client secret of that machine identity (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET)")
 

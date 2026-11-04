@@ -180,6 +180,7 @@ type WorkspaceConfigFile struct {
 	GitBranchToEnvironmentMapping map[string]string `json:"gitBranchToEnvironmentMapping"`
 	DefaultSecretPath             string            `json:"defaultSecretPath,omitempty"`
 	Domain                        string            `json:"domain,omitempty"`
+	AgentVaultProjectID           string            `json:"-"`
 }
 
 type GeneralConfigSection struct {
@@ -211,10 +212,15 @@ type SecretsManagementConfigSection struct {
 	} `yaml:"mappings,omitempty"`
 }
 
+type AgentVaultConfigSection struct {
+	ProjectID string `yaml:"project-id,omitempty"`
+}
+
 type WorkspaceConfigFileYaml struct {
 	Version           int                            `yaml:"version"`
 	General           GeneralConfigSection           `yaml:"general"`
 	SecretsManagement SecretsManagementConfigSection `yaml:"secrets-management"`
+	AgentVault        AgentVaultConfigSection        `yaml:"agent-vault,omitempty"`
 }
 
 type SymmetricEncryptionResult struct {

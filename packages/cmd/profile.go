@@ -236,6 +236,7 @@ var profileCurrentCmd = &cobra.Command{
 			util.PrintlnStdout("Sub-organization:", labelWithID(subName, profile.SubOrganizationID))
 		}
 		util.PrintlnStdout("Domain:", util.DisplayDomain(profile.Domain))
+		printAgentVaultProjectForProfile()
 
 		Telemetry.CaptureEvent("cli-command:profile current", posthog.NewProperties().Set("version", util.CLI_VERSION))
 	},
