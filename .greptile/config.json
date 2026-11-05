@@ -1,0 +1,22 @@
+{
+  "rules": [
+    {
+      "id": "never-remove-or-rename-commands-or-flags",
+      "rule": "A command or flag that shipped must keep working with the same name, short form, type, and default. Flag any change that deletes a cobra command or flag, renames its Use or flag name, changes a flag's shorthand, type, or default, or removes it from its parent. The allowed way to retire one is Hidden: true on a command, or MarkHidden plus MarkDeprecated on a flag. Also flag edits to packages/cmd/testdata/command_surface.json that remove or change an existing entry; that file may only grow. See CLI.md.",
+      "severity": "high",
+      "scope": ["packages/cmd/**"]
+    },
+    {
+      "id": "suggested-commands-never-contain-secrets",
+      "rule": "Error messages, tips, and suggested next commands must never include a token, a secret value, or any other credential, even when the user passed one on the command line. Only interpolate values that are validated as UUIDs or slugs, and write secret values as a <value> placeholder. Flag any message or suggested command built from --token, a secret value, or unvalidated user input.",
+      "severity": "high",
+      "scope": ["packages/**"]
+    },
+    {
+      "id": "new-commands-follow-cli-md",
+      "rule": "New commands follow CLI.md: infisical <product> <resource> <action>, with actions get, create, update, delete (get without a name lists, no new list or set commands), workflow commands (run, export) directly under the product, and lifecycle actions (start, stop, install, uninstall) for long-running things. New Secrets Management commands go under secrets-manager, never under the legacy top-level secrets, run, export, or dynamic-secrets. Examples and suggested commands use the full product name (secrets-manager), not the sm alias. Destructive commands take -y/--yes and fail without a terminal instead of deleting.",
+      "severity": "medium",
+      "scope": ["packages/cmd/**"]
+    }
+  ]
+}

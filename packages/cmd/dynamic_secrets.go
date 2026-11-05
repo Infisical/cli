@@ -618,7 +618,7 @@ func listDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 
 // buildDynamicSecretsCmd builds the dynamic-secrets command tree. It is a constructor rather than
 // package-level commands because the tree is registered twice: as `infisical dynamic-secrets` and
-// `infisical sm dynamic-secrets`.
+// `infisical secrets-manager dynamic-secrets`.
 func buildDynamicSecretsCmd() *cobra.Command {
 	dynamicSecretCmd := &cobra.Command{
 		Example:               `infisical dynamic-secrets`,

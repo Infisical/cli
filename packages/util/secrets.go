@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -20,17 +21,17 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func GetPlainTextSecretsViaServiceToken(fullServiceToken string, environment string, secretPath string, includeImports bool, recursive bool, tagSlugs string, expandSecretReferences bool, includePersonalOverrides bool) ([]models.SingleEnvironmentVariable, error) {
+func serviceTokenClient(fullServiceToken string) (*resty.Client, api.GetServiceTokenDetailsResponse, error) {
 	serviceTokenParts := strings.SplitN(fullServiceToken, ".", 4)
 	if len(serviceTokenParts) < 4 {
-		return nil, fmt.Errorf("invalid service token entered. Please double check your service token and try again")
+		return nil, api.GetServiceTokenDetailsResponse{}, fmt.Errorf("invalid service token entered. Please double check your service token and try again")
 	}
 
 	serviceToken := fmt.Sprintf("%v.%v.%v", serviceTokenParts[0], serviceTokenParts[1], serviceTokenParts[2])
 
 	httpClient, err := GetRestyClientWithCustomHeaders()
 	if err != nil {
-		return nil, fmt.Errorf("unable to get client with custom headers [err=%v]", err)
+		return nil, api.GetServiceTokenDetailsResponse{}, fmt.Errorf("unable to get client with custom headers [err=%v]", err)
 	}
 
 	httpClient.SetAuthToken(serviceToken).
@@ -38,7 +39,20 @@ func GetPlainTextSecretsViaServiceToken(fullServiceToken string, environment str
 
 	serviceTokenDetails, err := api.CallGetServiceTokenDetailsV2(httpClient)
 	if err != nil {
-		return nil, fmt.Errorf("unable to get service token details. [err=%v]", err)
+		return nil, api.GetServiceTokenDetailsResponse{}, fmt.Errorf("unable to get service token details. [err=%w]", err)
+	}
+	return httpClient, serviceTokenDetails, nil
+}
+
+func GetServiceTokenProjectID(fullServiceToken string) (string, error) {
+	_, details, err := serviceTokenClient(fullServiceToken)
+	return details.Workspace, err
+}
+
+func GetPlainTextSecretsViaServiceToken(fullServiceToken string, environment string, secretPath string, includeImports bool, recursive bool, tagSlugs string, expandSecretReferences bool, includePersonalOverrides bool) ([]models.SingleEnvironmentVariable, error) {
+	httpClient, serviceTokenDetails, err := serviceTokenClient(fullServiceToken)
+	if err != nil {
+		return nil, err
 	}
 
 	// if multiple scopes are there then user needs to specify which environment and secret path
@@ -529,36 +543,53 @@ func DeleteBackupSecrets() error {
 	return os.RemoveAll(fullPathToSecretsBackupFolder)
 }
 
-func envFromWorkspaceConfig(workspaceFile models.WorkspaceConfigFile) string {
-	if env := GetEnvelopmentBasedOnGitBranch(workspaceFile); env != "" {
-		return env
+func environmentForGitBranch(workspaceFile models.WorkspaceConfigFile) (env, branch string) {
+	if len(workspaceFile.GitBranchToEnvironmentMapping) == 0 {
+		return "", ""
 	}
-
-	return workspaceFile.DefaultEnvironment
-}
-
-func GetEnvelopmentBasedOnGitBranch(workspaceFile models.WorkspaceConfigFile) string {
 	branch, err := getCurrentBranch()
 	if err != nil {
-		log.Debug().Msgf("getEnvelopmentBasedOnGitBranch: [err=%s]", err)
+		log.Debug().Msgf("environmentForGitBranch: [err=%s]", err)
+		return "", ""
 	}
-
-	envBasedOnGitBranch, ok := workspaceFile.GitBranchToEnvironmentMapping[branch]
-
-	log.Debug().Msgf("GetEnvelopmentBasedOnGitBranch: [envBasedOnGitBranch=%s] [ok=%t]", envBasedOnGitBranch, ok)
-
-	if err == nil && ok {
-		return envBasedOnGitBranch
-	} else {
-		log.Debug().Msgf("getEnvelopmentBasedOnGitBranch: [err=%s]", err)
-		return ""
+	env, ok := workspaceFile.GitBranchToEnvironmentMapping[branch]
+	log.Debug().Msgf("environmentForGitBranch: [env=%s] [ok=%t]", env, ok)
+	if !ok {
+		return "", ""
 	}
+	return env, branch
+}
+
+func isYAMLSecretsFile(fileName string) bool {
+	return strings.HasSuffix(fileName, ".yaml") || strings.HasSuffix(fileName, ".yml")
+}
+
+// repeatedDotenvKey is the first key that appears twice in a .env file, read the way parseSecrets
+// reads it, or "" when there's none.
+func repeatedDotenvKey(content string) string {
+	seen := map[string]bool{}
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") {
+			continue
+		}
+		key, _, found := strings.Cut(line, "=")
+		if !found {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		if seen[key] {
+			return key
+		}
+		seen[key] = true
+	}
+	return ""
 }
 
 func parseSecrets(fileName string, content string) (map[string]string, error) {
 	secrets := make(map[string]string)
 
-	if strings.HasSuffix(fileName, ".yaml") || strings.HasSuffix(fileName, ".yml") {
+	if isYAMLSecretsFile(fileName) {
 		// Handle YAML secrets
 		var yamlData map[string]interface{}
 		if err := yaml.Unmarshal([]byte(content), &yamlData); err != nil {
@@ -618,37 +649,152 @@ func validateSecretKey(key string) error {
 	return nil
 }
 
-func SetRawSecrets(secretArgs []string, secretType string, environmentName string, secretsPath string, projectId string, tokenDetails *models.TokenDetails, file string, tagSlugs []string) ([]models.SecretSetOperation, error) {
+// SecretWriteMode says which keys a write accepts: any (secrets set), only new ones (secrets create)
+// or only existing ones (secrets update).
+type SecretWriteMode int
+
+const (
+	SecretWriteUpsert SecretWriteMode = iota
+	SecretWriteCreateOnly
+	SecretWriteUpdateOnly
+)
+
+// SecretWriteConflict is returned before anything is written when keys are on the wrong side of a
+// create-only or update-only write: Keys already exist for a create, or don't for an update.
+type SecretWriteConflict struct {
+	Mode SecretWriteMode
+	Keys []string
+}
+
+func (e *SecretWriteConflict) Error() string {
+	if e.Mode == SecretWriteCreateOnly {
+		return fmt.Sprintf("secrets already exist: %s", strings.Join(e.Keys, ", "))
+	}
+	return fmt.Sprintf("secrets don't exist: %s", strings.Join(e.Keys, ", "))
+}
+
+// SecretWriteRepeated is returned before anything is written when a create-only or update-only write
+// names the same key twice, which would otherwise write the first value and then fail on the second.
+type SecretWriteRepeated struct {
+	Key string
+}
+
+func (e *SecretWriteRepeated) Error() string {
+	return fmt.Sprintf("secret %s is given more than once", e.Key)
+}
+
+// SecretArgProblem is what's wrong with one NAME=value argument.
+type SecretArgProblem int
+
+const (
+	SecretArgNoName SecretArgProblem = iota
+	SecretArgNoValue
+	SecretArgNameStartsWithNumber
+)
+
+type SecretArgInvalid struct {
+	Position int // 1-based, among the arguments, before the secrets read from a file
+	Key      string
+	Problem  SecretArgProblem
+}
+
+func (e *SecretArgInvalid) Error() string {
+	if e.Problem == SecretArgNameStartsWithNumber {
+		return "keys of secrets cannot start with a number. Modify the key name(s) and try again"
+	}
+	return "ensure that each secret has a none empty key and value. Modify the input and try again"
+}
+
+type SecretFileProblem int
+
+const (
+	SecretFileNotFound SecretFileProblem = iota
+	SecretFileUnreadable
+	SecretFileUnparsable
+	SecretFileInvalidKey
+	SecretFileEmptyValue
+	SecretFileNoSecrets
+)
+
+// SecretFileInvalid is a --file whose secrets can't be written. Error returns the message set has
+// always printed for it.
+type SecretFileInvalid struct {
+	File    string
+	Key     string
+	Problem SecretFileProblem
+	message string
+}
+
+func (e *SecretFileInvalid) Error() string { return e.message }
+
+// CollectSecretArgs checks the NAME=value arguments and adds the secrets in file to them, so
+// WriteRawSecrets gets only secrets it can write. For create and update it also refuses a repeated
+// name. It reads only local input, so a command runs it before any request
+func CollectSecretArgs(mode SecretWriteMode, secretArgs []string, file string) ([]string, error) {
+	for i, arg := range secretArgs {
+		key, value, _ := strings.Cut(arg, "=")
+		switch {
+		case key == "":
+			return nil, &SecretArgInvalid{Position: i + 1, Problem: SecretArgNoName}
+		case value == "":
+			return nil, &SecretArgInvalid{Position: i + 1, Key: key, Problem: SecretArgNoValue}
+		case unicode.IsNumber(rune(key[0])):
+			return nil, &SecretArgInvalid{Position: i + 1, Key: key, Problem: SecretArgNameStartsWithNumber}
+		}
+	}
+
 	if file != "" {
 		content, err := os.ReadFile(file)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				PrintErrorMessageAndExit("File does not exist")
+				return nil, &SecretFileInvalid{File: file, Problem: SecretFileNotFound, message: "File does not exist"}
 			}
-			return nil, fmt.Errorf("unable to process file [err=%v]", err)
+			return nil, &SecretFileInvalid{File: file, Problem: SecretFileUnreadable, message: fmt.Sprintf("unable to process file [err=%v]", err)}
+		}
+
+		// parseSecrets keeps the last of repeated .env keys, as set always has. YAML rejects them itself.
+		if mode != SecretWriteUpsert && !isYAMLSecretsFile(file) {
+			if key := repeatedDotenvKey(string(content)); key != "" {
+				return nil, &SecretWriteRepeated{Key: key}
+			}
 		}
 
 		parsedSecrets, err := parseSecrets(file, string(content))
 		if err != nil {
-			PrintErrorMessageAndExit(fmt.Sprintf("error parsing secrets: %v", err))
+			return nil, &SecretFileInvalid{File: file, Problem: SecretFileUnparsable, message: fmt.Sprintf("error parsing secrets: %v", err)}
 		}
 
 		// Step 2: Validate secrets
 		for key, value := range parsedSecrets {
 			if err := validateSecretKey(key); err != nil {
-				PrintErrorMessageAndExit(err.Error())
+				return nil, &SecretFileInvalid{File: file, Key: key, Problem: SecretFileInvalidKey, message: err.Error()}
 			}
 			if strings.TrimSpace(value) == "" {
-				PrintErrorMessageAndExit(fmt.Sprintf("Secret key '%s' has an empty value", key))
+				return nil, &SecretFileInvalid{File: file, Key: key, Problem: SecretFileEmptyValue, message: fmt.Sprintf("Secret key '%s' has an empty value", key)}
 			}
 			secretArgs = append(secretArgs, fmt.Sprintf("%s=%s", key, value))
 		}
 
 		if len(secretArgs) == 0 {
-			PrintErrorMessageAndExit("no valid secrets found in the file")
+			return nil, &SecretFileInvalid{File: file, Problem: SecretFileNoSecrets, message: "no valid secrets found in the file"}
 		}
 	}
 
+	if mode != SecretWriteUpsert {
+		seen := make(map[string]bool, len(secretArgs))
+		for _, arg := range secretArgs {
+			key, _, _ := strings.Cut(arg, "=")
+			if seen[key] {
+				return nil, &SecretWriteRepeated{Key: key}
+			}
+			seen[key] = true
+		}
+	}
+
+	return secretArgs, nil
+}
+
+func WriteRawSecrets(mode SecretWriteMode, secretArgs []string, secretType string, environmentName string, secretsPath string, projectId string, tokenDetails *models.TokenDetails, tagSlugs []string) ([]models.SecretSetOperation, error) {
 	if tokenDetails == nil {
 		return nil, fmt.Errorf("unable to process set secret operations, token details are missing")
 	}
@@ -683,7 +829,36 @@ func SetRawSecrets(secretArgs []string, secretType string, environmentName strin
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("unable to retrieve secrets [err=%v]", err)
+		return nil, fmt.Errorf("unable to retrieve secrets [err=%w]", err)
+	}
+
+	sharedSecretMapByName := make(map[string]models.SingleEnvironmentVariable, len(secrets))
+	personalSecretMapByName := make(map[string]models.SingleEnvironmentVariable, len(secrets))
+
+	for _, secret := range secrets {
+		if secret.Type == SECRET_TYPE_PERSONAL {
+			personalSecretMapByName[secret.Key] = secret
+		} else {
+			sharedSecretMapByName[secret.Key] = secret
+		}
+	}
+
+	// Checked before tags are created, so a refused create or update writes nothing at all.
+	if mode != SecretWriteUpsert {
+		existing := sharedSecretMapByName
+		if secretType != SECRET_TYPE_SHARED {
+			existing = personalSecretMapByName
+		}
+		conflict := &SecretWriteConflict{Mode: mode}
+		for _, arg := range secretArgs {
+			key, _, _ := strings.Cut(arg, "=")
+			if _, exists := existing[key]; exists == (mode == SecretWriteCreateOnly) && !slices.Contains(conflict.Keys, key) {
+				conflict.Keys = append(conflict.Keys, key)
+			}
+		}
+		if len(conflict.Keys) > 0 {
+			return nil, conflict
+		}
 	}
 
 	uniqueSlugs := make(map[string]struct{}, len(tagSlugs))
@@ -704,30 +879,8 @@ func SetRawSecrets(secretArgs []string, secretType string, environmentName strin
 	secretsToModify := []api.RawSecret{}
 	secretOperations := []models.SecretSetOperation{}
 
-	sharedSecretMapByName := make(map[string]models.SingleEnvironmentVariable, len(secrets))
-	personalSecretMapByName := make(map[string]models.SingleEnvironmentVariable, len(secrets))
-
-	for _, secret := range secrets {
-		if secret.Type == SECRET_TYPE_PERSONAL {
-			personalSecretMapByName[secret.Key] = secret
-		} else {
-			sharedSecretMapByName[secret.Key] = secret
-		}
-	}
-
 	for _, arg := range secretArgs {
-		splitKeyValueFromArg := strings.SplitN(arg, "=", 2)
-		if splitKeyValueFromArg[0] == "" || splitKeyValueFromArg[1] == "" {
-			PrintErrorMessageAndExit("ensure that each secret has a none empty key and value. Modify the input and try again")
-		}
-
-		if unicode.IsNumber(rune(splitKeyValueFromArg[0][0])) {
-			PrintErrorMessageAndExit("keys of secrets cannot start with a number. Modify the key name(s) and try again")
-		}
-
-		// Key and value from argument
-		key := splitKeyValueFromArg[0]
-		value := splitKeyValueFromArg[1]
+		key, value, _ := strings.Cut(arg, "=")
 
 		var existingSecret models.SingleEnvironmentVariable
 		var doesSecretExist bool
@@ -816,7 +969,7 @@ func SetRawSecrets(secretArgs []string, secretType string, environmentName strin
 
 		err = api.CallCreateRawSecretsV3(httpClient, createSecretRequest)
 		if err != nil {
-			return nil, fmt.Errorf("unable to process new secret creations [err=%v]", err)
+			return nil, fmt.Errorf("unable to process new secret creations [err=%w]", err)
 		}
 	}
 
@@ -833,7 +986,7 @@ func SetRawSecrets(secretArgs []string, secretType string, environmentName strin
 
 		err = api.CallUpdateRawSecretsV3(httpClient, updateSecretRequest)
 		if err != nil {
-			return nil, fmt.Errorf("unable to process secret update request [err=%v]", err)
+			return nil, fmt.Errorf("unable to process secret update request [err=%w]", err)
 		}
 	}
 
@@ -855,12 +1008,12 @@ func GetOrCreateTag(client *resty.Client, projectId string, slug string) (api.Se
 				Color: "",
 			})
 			if createErr != nil {
-				return api.SecretTag{}, fmt.Errorf("could not create tag %q: [err=%v]", slug, createErr)
+				return api.SecretTag{}, fmt.Errorf("could not create tag %q: [err=%w]", slug, createErr)
 			}
 
 			return newTag, nil
 		}
 	}
 
-	return api.SecretTag{}, fmt.Errorf("unable to resolve tag slug %q [err=%v]", slug, err)
+	return api.SecretTag{}, fmt.Errorf("unable to resolve tag slug %q [err=%w]", slug, err)
 }
