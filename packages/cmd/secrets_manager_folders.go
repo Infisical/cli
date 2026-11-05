@@ -176,7 +176,7 @@ func loadFoldersTarget(cmd *cobra.Command, explicitProject bool) foldersTarget {
 	environments := environmentsTarget{project: project, scope: scope}
 	if _, ok := environments.active(environment); !ok {
 		if pending, ok := environments.pending(environment); ok {
-			exitWithError(cmd, errEnvironmentPending(environment, pending.DeleteAfter, scope))
+			exitWithError(cmd, errEnvironmentPendingForFolders(environment, pending.DeleteAfter, scope))
 		}
 		exitWithError(cmd, errEnvironmentNotFound(environment, scope, nil))
 	}

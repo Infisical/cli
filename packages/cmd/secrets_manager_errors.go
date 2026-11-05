@@ -188,6 +188,17 @@ func errEnvironmentPending(slug, deleteAfter string, scope errorScope) *util.CLI
 			Command: secretsManagerPrefix + " environments delete " + util.SuggestedValue(slug, "slug") + " --force" + scope.projectFlag()}}}
 }
 
+func errEnvironmentPendingForFolders(slug, deleteAfter string, scope errorScope) *util.CLIError {
+	until := ""
+	if day := formatDay(deleteAfter); day != "" {
+		until = " until " + day
+	}
+	return &util.CLIError{Code: errCodeEnvironmentPending,
+		Message: fmt.Sprintf("Environment %s in project %q is pending deletion%s, so its folders can't be used.", quoted(slug, "env"), scope.projectLabel(), until),
+		Next: []util.NextStep{{Purpose: "To see the active environments",
+			Command: secretsManagerPrefix + " environments get" + scope.projectFlag()}}}
+}
+
 // errProjectRequired is for a destructive command run without --projectId: it never falls back to
 // INFISICAL_PROJECT_ID or the workspace file (see CLI.md).
 func errProjectRequired(what string) *util.CLIError {

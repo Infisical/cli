@@ -356,3 +356,32 @@ func TestFoldersEmptyTipTargetsWhereYouLooked(t *testing.T) {
 		t.Errorf("exited=%v stderr=%s want %s", exited, stderr, want)
 	}
 }
+
+// An environment pending deletion can't hold folders, but the way forward is another --env: the
+// error must never suggest deleting the environment.
+func TestFoldersInAnEnvironmentPendingDeletion(t *testing.T) {
+	for _, action := range [][]string{{"get"}, {"create", "x"}, {"update", "api", "--name", "y"}} {
+		args := append(action, "--env", "qa", "--path", "/backend", "--projectId", testProjectID, "-o", "json")
+		fake := &fakeFoldersAPI{}
+		stderr, _, exited := runFolders(t, fake, args...)
+		var failure struct {
+			Error struct {
+				Code    string   `json:"code"`
+				Message string   `json:"message"`
+				Next    []string `json:"next"`
+			} `json:"error"`
+		}
+		_ = json.Unmarshal([]byte(stderr), &failure)
+		want := []string{"infisical secrets-manager environments get --projectId " + testProjectID}
+		if !exited || failure.Error.Code != errCodeEnvironmentPending ||
+			!strings.Contains(failure.Error.Message, `Environment "qa" in project "payments-api" is pending deletion until `) ||
+			!strings.HasSuffix(failure.Error.Message, ", so its folders can't be used.") ||
+			strings.Contains(stderr, "--force") || strings.Contains(stderr, "environments delete") ||
+			len(failure.Error.Next) != 1 || failure.Error.Next[0] != want[0] {
+			t.Errorf("%v: exited=%v stderr=%s", action, exited, stderr)
+		}
+		if len(fake.writes()) != 0 {
+			t.Errorf("%v: wrote %v", action, fake.writes())
+		}
+	}
+}

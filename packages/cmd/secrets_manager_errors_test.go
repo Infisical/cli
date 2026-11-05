@@ -36,6 +36,7 @@ func everyConstructedError() []*util.CLIError {
 		errEnvironmentNotFound("stagng", testScope, cause),
 		errEnvironmentExists("qa", testScope),
 		errEnvironmentPending("qa", "2026-11-12T10:00:00.000Z", testScope),
+		errEnvironmentPendingForFolders("qa", "2026-11-12T10:00:00.000Z", testScope),
 		errProjectRequired("an environment"),
 		errEmptyFlag("name"),
 		errProjectSlugAndID(),
