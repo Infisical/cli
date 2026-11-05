@@ -33,10 +33,13 @@ var agentVaultSessionsCreateCmd = &cobra.Command{
 The session belongs to the Agent Vault project from --project-id, or else INFISICAL_AGENT_VAULT_PROJECT_ID or
 INFISICAL_PROJECT_ID, in that order.
 
-Only the token is printed, so it can be captured into a variable. Pass -o json or -o yaml for the session's
-ID, project, access bundle, label and expiry as well. The session stays active until it expires or you revoke
-it with 'infisical agent-vault sessions revoke'.`,
-	Example: `  export INFISICAL_AGENT_VAULT_SESSION_TOKEN=$(infisical agent-vault sessions create --access-bundle coding-agent --ttl 8h)
+Only the token is printed, so it can be captured into a variable:
+
+  export INFISICAL_AGENT_VAULT_SESSION_TOKEN=$(infisical agent-vault sessions create --access-bundle coding-agent --ttl 8h)
+
+Pass -o json or -o yaml for the session's ID, project, access bundle, label and expiry as well. The session
+stays active until it expires or you revoke it with 'infisical agent-vault sessions revoke'.`,
+	Example: `  infisical agent-vault sessions create --access-bundle coding-agent --ttl 8h
   infisical agent-vault sessions create --project-id 4f0c... --access-bundle coding-agent --label "nightly deploy" -o json`,
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.NoArgs,
@@ -59,23 +62,23 @@ func runAgentVaultSessionsCreate(cmd *cobra.Command, args []string) {
 	}
 	// Checked before the session exists, so a typo never leaves one behind with its token unprinted.
 	if outputFormat != "" && outputFormat != util.OUTPUT_FORMAT_JSON && outputFormat != util.OUTPUT_FORMAT_YAML {
-		util.HandleError(fmt.Errorf("--output must be json or yaml, got %s; leave it out to print only the token", quoted(outputFormat, "format")))
+		exitWithError(cmd, errAgentVaultInvalidOutput(outputFormat))
 	}
 
 	accessBundles, bundleSource, err := resolveAgentVaultAccessBundles(cmd)
 	if err != nil {
-		util.HandleError(err)
+		exitWithError(cmd, err)
 	}
 	if bundleSource == agentVaultSourceNone {
-		util.HandleError(fmt.Errorf("an access bundle is required; pass --access-bundle <name> or set %s", agentVaultAccessBundleEnv))
+		exitWithError(cmd, errAgentVaultAccessBundleRequired())
 	}
 	if err := validateAgentVaultAccessBundles(accessBundles, bundleSource); err != nil {
-		util.HandleError(err)
+		exitWithError(cmd, err)
 	}
 
 	project, err := resolveAgentVaultProject(cmd)
 	if err != nil {
-		util.HandleError(err)
+		exitWithError(cmd, err)
 	}
 	echoAgentVaultProject(cmd, project)
 
@@ -85,7 +88,11 @@ func runAgentVaultSessionsCreate(cmd *cobra.Command, args []string) {
 
 	stdoutIsTerminal := isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
 	identity := resolveAgentVaultIdentity(cmd, stdoutIsTerminal)
-	minted := mintAgentVaultSessionOrExit(identity, project, accessBundles, ttl, label)
+	minted, err := mintAgentVaultSession(newAgentVaultAPIClient(identity), project, accessBundles, ttl, label)
+	if err != nil {
+		exitWithError(cmd, classifyAgentVaultAPIError(err, project),
+			append([]string{"Unable to mint an Agent Vault session"}, agentVaultProjectHints(err, project)...)...)
+	}
 
 	Telemetry.SetActor(telemetry.IdentityClaimsFromToken(identity))
 	Telemetry.CaptureEvent("cli-command:agent-vault sessions create", posthog.NewProperties().
@@ -100,7 +107,7 @@ func runAgentVaultSessionsCreate(cmd *cobra.Command, args []string) {
 		fmt.Println(minted.Token)
 		return
 	}
-	formatted, err := util.FormatOutput(outputFormat, agentVaultSessionOutputFrom(*minted, project, accessBundles[0]), nil)
+	formatted, err := util.FormatOutput(outputFormat, agentVaultSessionOutputFrom(minted, project, accessBundles[0]), nil)
 	if err != nil {
 		util.HandleError(err, "Unable to format the session")
 	}
@@ -233,12 +240,11 @@ func agentVaultRevokeErrorMessages(ctx context.Context, err error, byToken bool)
 // The variable names one bundle and the flag is repeatable only so that passing it twice is refused by name.
 func validateAgentVaultAccessBundles(bundles []string, source agentVaultSource) error {
 	if len(bundles) > 1 {
-		return errors.New("a session carries one access bundle; pass --access-bundle once")
+		return errAgentVaultOneAccessBundle()
 	}
 	for _, name := range bundles {
 		if !agentVaultBundleNameRe.MatchString(name) {
-			return fmt.Errorf("%q from %s is not an access bundle name; names are lowercase letters, numbers and hyphens, for example 'coding-agent'",
-				name, agentVaultSourceName(source, "--access-bundle", agentVaultAccessBundleEnv))
+			return errAgentVaultInvalidAccessBundle(name, source)
 		}
 	}
 	return nil
@@ -257,14 +263,17 @@ func mintAgentVaultSession(httpClient *resty.Client, project agentVaultProject, 
 	return created.Session, nil
 }
 
-func mintAgentVaultSessionOrExit(identity string, project agentVaultProject, accessBundles []string, ttl, label string) *api.AgentVaultSession {
+func newAgentVaultAPIClient(identity string) *resty.Client {
 	httpClient, err := util.GetRestyClientWithCustomHeaders()
 	if err != nil {
 		util.HandleError(err, "Failed to build the API client")
 	}
 	httpClient.SetAuthToken(identity)
+	return httpClient
+}
 
-	minted, err := mintAgentVaultSession(httpClient, project, accessBundles, ttl, label)
+func mintAgentVaultSessionOrExit(identity string, project agentVaultProject, accessBundles []string, ttl, label string) *api.AgentVaultSession {
+	minted, err := mintAgentVaultSession(newAgentVaultAPIClient(identity), project, accessBundles, ttl, label)
 	if err != nil {
 		util.HandleError(err, append([]string{"Unable to mint an Agent Vault session"}, agentVaultProjectHints(err, project)...)...)
 	}

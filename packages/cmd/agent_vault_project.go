@@ -31,10 +31,8 @@ func resolveAgentVaultProject(cmd *cobra.Command) (agentVaultProject, error) {
 		if err != nil {
 			return agentVaultProject{}, fmt.Errorf("unable to read --project-id: %w", err)
 		}
-		// Same reasoning as the empty --session-token: "$PROJECT" with the variable unset should not fall
-		// through to a project the operator did not name.
 		if strings.TrimSpace(value) == "" {
-			return agentVaultProject{}, fmt.Errorf("--project-id was given but is empty; pass the Agent Vault project's ID, or drop the flag and set %s", agentVaultProjectIDEnv)
+			return agentVaultProject{}, errAgentVaultEmptyProjectID()
 		}
 		project, err := agentVaultProjectFrom(value, "--project-id")
 		project.FromFlag = true
@@ -46,14 +44,11 @@ func resolveAgentVaultProject(cmd *cobra.Command) (agentVaultProject, error) {
 		return agentVaultProject{}, err
 	}
 	if !found {
-		return agentVaultProject{}, fmt.Errorf(
-			"no Agent Vault project is set. Pass --project-id, or set %s or %s",
-			agentVaultProjectIDEnv, util.INFISICAL_PROJECT_ID_NAME)
+		return agentVaultProject{}, errAgentVaultProjectRequired()
 	}
 	return project, nil
 }
 
-// resolveAgentVaultProjectFromEnvironment is every source but the flag, for commands that have none.
 func resolveAgentVaultProjectFromEnvironment() (project agentVaultProject, found bool, err error) {
 	if value := strings.TrimSpace(os.Getenv(agentVaultProjectIDEnv)); value != "" {
 		project, err = agentVaultProjectFrom(value, agentVaultProjectIDEnv)
@@ -71,7 +66,7 @@ func agentVaultProjectFrom(value, source string) (agentVaultProject, error) {
 	value = strings.TrimSpace(value)
 	// uuid.Parse also takes the braced and urn: spellings, which the server would refuse.
 	if _, err := uuid.Parse(value); err != nil || len(value) != 36 {
-		return agentVaultProject{}, fmt.Errorf("%s from %s is not a project ID; copy the ID from the Agent Vault project's settings in Infisical", quoted(value, "project ID"), source)
+		return agentVaultProject{}, errAgentVaultInvalidProjectID(value, source)
 	}
 	return agentVaultProject{ID: strings.ToLower(value), Source: source}, nil
 }

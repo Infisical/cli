@@ -58,7 +58,7 @@ With `-o json`, the same error is JSON on stderr:
 
 ### How to return one
 
-- Return a `*util.CLIError` (`packages/util/cli_error.go`) from one of the constructors in `packages/cmd/secrets_manager_errors.go`, and print it with `exitWithError(cmd, err)`. That function picks text, JSON, or YAML from `-o`, and exits `1`.
+- Return a `*util.CLIError` (`packages/util/cli_error.go`) from one of the constructors in `packages/cmd/secrets_manager_errors.go` (Agent Vault's are in `packages/cmd/agent_vault_errors.go`), and print it with `exitWithError(cmd, err)`. That function picks text, JSON, or YAML from `-o`, and exits `1`.
 - Pass API errors through `classifyAPIError(err, scope, notFound)`. It uses only what is stable: the status code, the error names the backend guarantees (`TokenError`, `PermissionDenied`, `ProjectMembershipNotFound`), and, for a 404, the `notFound` error the caller passes when the request had one subject (an environment by slug, a project by ID). `scope` is the `errorScope` the command was working on. A 403 `ProjectMembershipNotFound` becomes `project_not_found` for the project `scope` names, so someone who isn't a member is told the same as for a project that doesn't exist, and the project's ID isn't echoed back. It never reads the message text, which the backend can reword at any time. Any other error comes back unchanged and prints as it always did, including the backend's own message.
 - A backend error that can only be told apart by its message (a slug that's taken, delete protection, a plan limit) has no code until the backend gives it a stable error name. Never match on message text to add one.
 - Build every value in a suggested command with `util.SuggestedValue` (or `util.SuggestedDomain` for `--domain`). Anything that isn't a UUID, slug, secret name, or folder path becomes a `<placeholder>`.
@@ -70,7 +70,7 @@ With `-o json`, the same error is JSON on stderr:
 | `permission_denied` | The role doesn't allow the action (403) |
 | `project_not_linked` | No `--projectId`, no `INFISICAL_PROJECT_ID`, and no `.infisical.yaml` |
 | `project_config_invalid` | The directory's `.infisical.yaml` (or a legacy `.infisical.json`) exists but can't be read. Suggests `infisical init` |
-| `project_not_found` | The project doesn't exist, or the caller isn't a member of it (404, or 403 `ProjectMembershipNotFound`) |
+| `project_not_found` | The project doesn't exist, or the caller isn't a member of it (404, or 403 `ProjectMembershipNotFound`). For Agent Vault, also a project that isn't an Agent Vault one |
 | `project_type_not_supported` | A project of another product was passed to a `secrets-manager` command |
 | `environment_not_found` | The environment slug doesn't exist in the project (404) |
 | `environment_exists` | `environments create` (or `update --slug`) with a slug an active environment has. Nothing is written |
@@ -80,7 +80,10 @@ With `-o json`, the same error is JSON on stderr:
 | `token_project_mismatch` | `secrets create` or `update` with a service token for a different project than the one selected. Nothing is written |
 | `invalid_argument` | An argument the command can't use, such as the same secret name given twice to `secrets create`, or a secret with no name or no value, or a name that starts with a number. Nothing is written |
 | `project_delete_protected` | `projects delete` on a project with delete protection on, read from its settings. Nothing is deleted |
-| `project_required` | A delete ran without `--projectId`. Deletes never use `INFISICAL_PROJECT_ID` or `.infisical.yaml` |
+| `project_required` | A delete ran without `--projectId`. Deletes never use `INFISICAL_PROJECT_ID` or `.infisical.yaml`. For Agent Vault, no project from `--project-id`, `INFISICAL_AGENT_VAULT_PROJECT_ID` or `INFISICAL_PROJECT_ID` |
+| `invalid_project_id` | An Agent Vault project ID from `--project-id` or a variable isn't a project ID |
+| `access_bundle_required` | `agent-vault sessions create` without `--access-bundle` or `INFISICAL_AGENT_VAULT_ACCESS_BUNDLE` |
+| `invalid_access_bundle` | An access bundle name from `--access-bundle` or `INFISICAL_AGENT_VAULT_ACCESS_BUNDLE` isn't a valid name. Nothing is sent |
 | `secret_exists` | `secrets create` on a key that exists. Nothing is written |
 | `secret_not_found` | `secrets update` on a key that doesn't exist. Nothing is written |
 | `folder_not_found` | `folders get`, `update` or `delete` on a folder that doesn't exist at `--path` |

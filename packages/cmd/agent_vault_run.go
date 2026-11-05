@@ -205,7 +205,7 @@ func resolveAgentVaultAccessBundles(cmd *cobra.Command) (bundles []string, sourc
 			return nil, agentVaultSourceNone, err
 		}
 		if bundles = nonBlank(values); len(bundles) == 0 {
-			return nil, agentVaultSourceFlag, fmt.Errorf("--access-bundle was given but names no bundle; pass a name like 'coding-agent'")
+			return nil, agentVaultSourceFlag, errAgentVaultEmptyAccessBundle()
 		}
 		return bundles, agentVaultSourceFlag, nil
 	}
