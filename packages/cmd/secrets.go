@@ -30,6 +30,10 @@ func maskSecretValue(value string) string {
 }
 
 func runSecrets(cmd *cobra.Command, args []string) {
+	listSecrets(cmd, false)
+}
+
+func listSecrets(cmd *cobra.Command, valuesOnly bool) {
 	environmentName := util.ResolveEnvironmentName(cmd)
 
 	token, err := util.GetInfisicalToken(cmd)
@@ -125,7 +129,11 @@ func runSecrets(cmd *cobra.Command, args []string) {
 	} else {
 		if plainOutput {
 			for _, secret := range secrets {
-				util.PrintfStdout("%s=%s\n", secret.Key, secret.Value)
+				if valuesOnly {
+					util.PrintlnStdout(secret.Value)
+				} else {
+					util.PrintfStdout("%s=%s\n", secret.Key, secret.Value)
+				}
 			}
 		} else {
 			visualize.PrintAllSecretDetails(secrets)
@@ -174,6 +182,10 @@ func secretWriteError(err error, mode util.SecretWriteMode, scope errorScope) er
 	var invalid *util.SecretArgInvalid
 	if errors.As(err, &invalid) {
 		return errSecretArgumentInvalid(invalid)
+	}
+	var badFile *util.SecretFileInvalid
+	if errors.As(err, &badFile) && mode != util.SecretWriteUpsert {
+		return errSecretFileInvalid(badFile)
 	}
 	if mode == util.SecretWriteUpsert {
 		return err
@@ -284,8 +296,9 @@ func runSecretsWrite(cmd *cobra.Command, args []string, mode util.SecretWriteMod
 
 	if writeArgs, err = util.CollectSecretArgs(mode, writeArgs, file); err != nil {
 		var invalid *util.SecretArgInvalid
-		if errors.As(err, &invalid) && mode == util.SecretWriteUpsert {
-			util.PrintErrorMessageAndExit(invalid.Error())
+		var badFile *util.SecretFileInvalid
+		if mode == util.SecretWriteUpsert && (errors.As(err, &invalid) || errors.As(err, &badFile) && badFile.Problem != util.SecretFileUnreadable) {
+			util.PrintErrorMessageAndExit(err.Error())
 		}
 		exitWithError(cmd, secretWriteError(err, mode, errorScope{}), "Unable to set secrets")
 	}

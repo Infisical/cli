@@ -197,3 +197,37 @@ func TestWriteRawSecretsKeepsServiceTokenAPIErrors(t *testing.T) {
 		t.Errorf("the message must read as before: %v", err)
 	}
 }
+
+// A --file that can't be written from is an error the command formats, never an exit from here, and
+// keeps the message set has always printed.
+func TestCollectSecretArgsReturnsFileProblems(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	cases := []struct {
+		file    string
+		problem SecretFileProblem
+		key     string
+		message string
+	}{
+		{filepath.Join(dir, "missing.env"), SecretFileNotFound, "", "File does not exist"},
+		{write("bad.yaml", "A: [unclosed\n"), SecretFileUnparsable, "", "error parsing secrets: "},
+		{write("digit.env", "1KEY=v\n"), SecretFileInvalidKey, "1KEY", "secret key '1KEY' cannot start with a number"},
+		{write("empty-value.env", "KEY=\n"), SecretFileEmptyValue, "KEY", "Secret key 'KEY' has an empty value"},
+		{write("nothing.env", "# only a comment\n"), SecretFileNoSecrets, "", "no valid secrets found in the file"},
+	}
+	for _, mode := range []SecretWriteMode{SecretWriteCreateOnly, SecretWriteUpdateOnly, SecretWriteUpsert} {
+		for _, c := range cases {
+			_, err := CollectSecretArgs(mode, nil, c.file)
+			var badFile *SecretFileInvalid
+			if !errors.As(err, &badFile) || badFile.Problem != c.problem || badFile.Key != c.key || !strings.HasPrefix(err.Error(), c.message) {
+				t.Errorf("mode %d, %s: got %#v (%v)", mode, filepath.Base(c.file), err, err)
+			}
+		}
+	}
+}

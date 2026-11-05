@@ -714,6 +714,28 @@ func (e *SecretArgInvalid) Error() string {
 	return "ensure that each secret has a none empty key and value. Modify the input and try again"
 }
 
+type SecretFileProblem int
+
+const (
+	SecretFileNotFound SecretFileProblem = iota
+	SecretFileUnreadable
+	SecretFileUnparsable
+	SecretFileInvalidKey
+	SecretFileEmptyValue
+	SecretFileNoSecrets
+)
+
+// SecretFileInvalid is a --file whose secrets can't be written. Error returns the message set has
+// always printed for it.
+type SecretFileInvalid struct {
+	File    string
+	Key     string
+	Problem SecretFileProblem
+	message string
+}
+
+func (e *SecretFileInvalid) Error() string { return e.message }
+
 // CollectSecretArgs checks the NAME=value arguments and adds the secrets in file to them, so
 // WriteRawSecrets gets only secrets it can write. For create and update it also refuses a repeated
 // name. It reads only local input, so a command runs it before any request
@@ -734,9 +756,9 @@ func CollectSecretArgs(mode SecretWriteMode, secretArgs []string, file string) (
 		content, err := os.ReadFile(file)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				PrintErrorMessageAndExit("File does not exist")
+				return nil, &SecretFileInvalid{File: file, Problem: SecretFileNotFound, message: "File does not exist"}
 			}
-			return nil, fmt.Errorf("unable to process file [err=%v]", err)
+			return nil, &SecretFileInvalid{File: file, Problem: SecretFileUnreadable, message: fmt.Sprintf("unable to process file [err=%v]", err)}
 		}
 
 		// parseSecrets keeps the last of repeated .env keys, as set always has. YAML rejects them itself.
@@ -748,22 +770,22 @@ func CollectSecretArgs(mode SecretWriteMode, secretArgs []string, file string) (
 
 		parsedSecrets, err := parseSecrets(file, string(content))
 		if err != nil {
-			PrintErrorMessageAndExit(fmt.Sprintf("error parsing secrets: %v", err))
+			return nil, &SecretFileInvalid{File: file, Problem: SecretFileUnparsable, message: fmt.Sprintf("error parsing secrets: %v", err)}
 		}
 
 		// Step 2: Validate secrets
 		for key, value := range parsedSecrets {
 			if err := validateSecretKey(key); err != nil {
-				PrintErrorMessageAndExit(err.Error())
+				return nil, &SecretFileInvalid{File: file, Key: key, Problem: SecretFileInvalidKey, message: err.Error()}
 			}
 			if strings.TrimSpace(value) == "" {
-				PrintErrorMessageAndExit(fmt.Sprintf("Secret key '%s' has an empty value", key))
+				return nil, &SecretFileInvalid{File: file, Key: key, Problem: SecretFileEmptyValue, message: fmt.Sprintf("Secret key '%s' has an empty value", key)}
 			}
 			secretArgs = append(secretArgs, fmt.Sprintf("%s=%s", key, value))
 		}
 
 		if len(secretArgs) == 0 {
-			PrintErrorMessageAndExit("no valid secrets found in the file")
+			return nil, &SecretFileInvalid{File: file, Problem: SecretFileNoSecrets, message: "no valid secrets found in the file"}
 		}
 	}
 

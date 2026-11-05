@@ -75,7 +75,7 @@ With `-o json`, the same error is JSON on stderr:
 | `environment_not_found` | The environment slug doesn't exist in the project (404) |
 | `environment_exists` | `environments create` (or `update --slug`) with a slug an active environment has. Nothing is written |
 | `environment_pending_deletion` | The slug belongs to an environment pending deletion, which keeps it until the grace period ends. Suggests `delete --force` |
-| `invalid_flag_value` | A flag is missing or was given a value the command can't use, such as an empty `--name`. Nothing is sent |
+| `invalid_flag_value` | A flag is missing or was given a value the command can't use, such as an empty `--name`, or a `--file` that doesn't exist, can't be parsed, or has a secret with no value. Nothing is sent |
 | `service_token_not_supported` | A service token was used with a command whose API routes reject service tokens. Suggests the alternative that works |
 | `token_project_mismatch` | `secrets create` or `update` with a service token for a different project than the one selected. Nothing is written |
 | `invalid_argument` | An argument the command can't use, such as the same secret name given twice to `secrets create`, or a secret with no name or no value, or a name that starts with a number. Nothing is written |

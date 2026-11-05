@@ -253,6 +253,26 @@ func errSecretArgumentInvalid(invalid *util.SecretArgInvalid) *util.CLIError {
 	return &util.CLIError{Code: errCodeInvalidArgument, Message: problem + " Nothing was written."}
 }
 
+func errSecretFileInvalid(badFile *util.SecretFileInvalid) *util.CLIError {
+	file := quoted(badFile.File, "file")
+	var problem string
+	switch badFile.Problem {
+	case util.SecretFileNotFound:
+		problem = fmt.Sprintf("--file %s doesn't exist.", file)
+	case util.SecretFileUnreadable:
+		problem = fmt.Sprintf("--file %s can't be read.", file)
+	case util.SecretFileUnparsable:
+		problem = fmt.Sprintf("--file %s isn't a valid .env or YAML file.", file)
+	case util.SecretFileInvalidKey:
+		problem = fmt.Sprintf("Secret name %s in --file %s isn't valid: names can't be empty, start with a number, or contain spaces.", quoted(badFile.Key, "name"), file)
+	case util.SecretFileEmptyValue:
+		problem = fmt.Sprintf("Secret %s in --file %s has no value.", quoted(badFile.Key, "name"), file)
+	default:
+		problem = fmt.Sprintf("--file %s has no secrets.", file)
+	}
+	return &util.CLIError{Code: errCodeInvalidFlagValue, Message: problem + " Nothing was written."}
+}
+
 func errServiceTokenProjectMismatch(selected, tokenProject string) *util.CLIError {
 	return &util.CLIError{Code: errCodeTokenProjectMismatch,
 		Message: fmt.Sprintf("The service token is for project %s, not the selected project %s. Nothing was written: use a token for %s, or pass --projectId %s.",
