@@ -10,29 +10,24 @@ import (
 // The legacy top-level copies keep working for existing scripts but leave `infisical --help`, so
 // people find the `secrets-manager` paths. Both copies come from one builder and share their help.
 func TestLegacyTopLevelCommandsAreHiddenButWork(t *testing.T) {
+	pairs := map[string][]string{"export": {secretsManagerCommandName, "secrets", "export"}}
 	for _, build := range secretsManagementCommands {
-		name := build().Name()
+		pairs[build().Name()] = []string{secretsManagerCommandName, build().Name()}
+	}
+	for name, underPath := range pairs {
 		top := findCommand(t, []string{name})
-		underPath := []string{secretsManagerCommandName, name}
-		if name == "export" {
-			// export moved under secrets; `secrets-manager export` stays, hidden, for existing scripts.
-			if !findCommand(t, underPath).Hidden {
-				t.Errorf("infisical secrets-manager export is listed in infisical secrets-manager --help")
-			}
-			underPath = []string{secretsManagerCommandName, "secrets", "export"}
-		}
 		under := findCommand(t, underPath)
 		if !top.Hidden {
 			t.Errorf("infisical %s is listed in infisical --help", name)
 		}
 		if under.Hidden {
-			t.Errorf("infisical secrets-manager %s is hidden", name)
+			t.Errorf("infisical %s is hidden", strings.Join(underPath, " "))
 		}
 		if found, _, err := RootCmd.Find([]string{name}); err != nil || found != top {
 			t.Errorf("infisical %s no longer resolves: %v", name, err)
 		}
 		if top.Short != under.Short || top.Example != under.Example {
-			t.Errorf("infisical %s and infisical secrets-manager %s have different help", name, name)
+			t.Errorf("infisical %s and infisical %s have different help", name, strings.Join(underPath, " "))
 		}
 	}
 }

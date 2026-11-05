@@ -571,44 +571,6 @@
     "type": "|string|shared"
   },
   "infisical secrets-manager": {},
-  "infisical secrets-manager agent-proxy": {},
-  "infisical secrets-manager agent-proxy connect": {
-    "allow-readable-brokered-secrets": "|bool|false",
-    "client-id": "|string|",
-    "client-secret": "|string|",
-    "env": "e|string|",
-    "no-proxy": "|string|",
-    "path": "|string|/",
-    "projectId": "|string|",
-    "proxy": "|string|",
-    "token": "|string|"
-  },
-  "infisical secrets-manager agent-proxy run": {
-    "allow-host": "|stringArray|[]",
-    "allow-read": "|stringArray|[]",
-    "allow-write": "|stringArray|[]",
-    "env": "e|string|",
-    "log-file": "|string|",
-    "no-sandbox": "|bool|false",
-    "pass-env": "|stringArray|[]",
-    "path": "|string|/",
-    "poll-interval": "|int|60",
-    "projectId": "|string|",
-    "proxy": "|string|",
-    "sandbox": "|bool|true",
-    "set-env": "|stringArray|[]",
-    "token": "|string|",
-    "unmatched-host": "|string|allow"
-  },
-  "infisical secrets-manager agent-proxy start": {
-    "client-id": "|string|",
-    "client-secret": "|string|",
-    "log-file": "|string|",
-    "log-format": "|string|console",
-    "poll-interval": "|int|60",
-    "port": "|int|17322",
-    "unmatched-host": "|string|allow"
-  },
   "infisical secrets-manager dynamic-secrets": {
     "env": "|string|dev",
     "output": "o|string|",
@@ -708,19 +670,6 @@
     "output": "o|string|",
     "projectId": "|string|",
     "slug": "|string|",
-    "token": "|string|"
-  },
-  "infisical secrets-manager export": {
-    "env": "e|string|dev",
-    "expand": "|bool|true",
-    "format": "f|string|dotenv",
-    "include-imports": "|bool|true",
-    "output-file": "o|string|",
-    "path": "|string|/",
-    "projectId": "|string|",
-    "secret-overriding": "|bool|true",
-    "tags": "t|string|",
-    "template": "|string|",
     "token": "|string|"
   },
   "infisical secrets-manager folders": {},
@@ -841,51 +790,6 @@
     "secret-overriding": "|bool|true",
     "tags": "t|string|",
     "token": "|string|"
-  },
-  "infisical secrets-manager secrets agent-proxy": {
-    "env": "|string|dev",
-    "tags": "t|string|"
-  },
-  "infisical secrets-manager secrets agent-proxy connect": {
-    "allow-readable-brokered-secrets": "|bool|false",
-    "client-id": "|string|",
-    "client-secret": "|string|",
-    "env": "e|string|",
-    "no-proxy": "|string|",
-    "path": "|string|/",
-    "projectId": "|string|",
-    "proxy": "|string|",
-    "tags": "t|string|",
-    "token": "|string|"
-  },
-  "infisical secrets-manager secrets agent-proxy run": {
-    "allow-host": "|stringArray|[]",
-    "allow-read": "|stringArray|[]",
-    "allow-write": "|stringArray|[]",
-    "env": "e|string|",
-    "log-file": "|string|",
-    "no-sandbox": "|bool|false",
-    "pass-env": "|stringArray|[]",
-    "path": "|string|/",
-    "poll-interval": "|int|60",
-    "projectId": "|string|",
-    "proxy": "|string|",
-    "sandbox": "|bool|true",
-    "set-env": "|stringArray|[]",
-    "tags": "t|string|",
-    "token": "|string|",
-    "unmatched-host": "|string|allow"
-  },
-  "infisical secrets-manager secrets agent-proxy start": {
-    "client-id": "|string|",
-    "client-secret": "|string|",
-    "env": "|string|dev",
-    "log-file": "|string|",
-    "log-format": "|string|console",
-    "poll-interval": "|int|60",
-    "port": "|int|17322",
-    "tags": "t|string|",
-    "unmatched-host": "|string|allow"
   },
   "infisical secrets-manager secrets create": {
     "env": "|string|dev",
@@ -1008,44 +912,6 @@
     "token-only": "|bool|false"
   },
   "infisical sm": {},
-  "infisical sm agent-proxy": {},
-  "infisical sm agent-proxy connect": {
-    "allow-readable-brokered-secrets": "|bool|false",
-    "client-id": "|string|",
-    "client-secret": "|string|",
-    "env": "e|string|",
-    "no-proxy": "|string|",
-    "path": "|string|/",
-    "projectId": "|string|",
-    "proxy": "|string|",
-    "token": "|string|"
-  },
-  "infisical sm agent-proxy run": {
-    "allow-host": "|stringArray|[]",
-    "allow-read": "|stringArray|[]",
-    "allow-write": "|stringArray|[]",
-    "env": "e|string|",
-    "log-file": "|string|",
-    "no-sandbox": "|bool|false",
-    "pass-env": "|stringArray|[]",
-    "path": "|string|/",
-    "poll-interval": "|int|60",
-    "projectId": "|string|",
-    "proxy": "|string|",
-    "sandbox": "|bool|true",
-    "set-env": "|stringArray|[]",
-    "token": "|string|",
-    "unmatched-host": "|string|allow"
-  },
-  "infisical sm agent-proxy start": {
-    "client-id": "|string|",
-    "client-secret": "|string|",
-    "log-file": "|string|",
-    "log-format": "|string|console",
-    "poll-interval": "|int|60",
-    "port": "|int|17322",
-    "unmatched-host": "|string|allow"
-  },
   "infisical sm dynamic-secrets": {
     "env": "|string|dev",
     "output": "o|string|",
@@ -1145,19 +1011,6 @@
     "output": "o|string|",
     "projectId": "|string|",
     "slug": "|string|",
-    "token": "|string|"
-  },
-  "infisical sm export": {
-    "env": "e|string|dev",
-    "expand": "|bool|true",
-    "format": "f|string|dotenv",
-    "include-imports": "|bool|true",
-    "output-file": "o|string|",
-    "path": "|string|/",
-    "projectId": "|string|",
-    "secret-overriding": "|bool|true",
-    "tags": "t|string|",
-    "template": "|string|",
     "token": "|string|"
   },
   "infisical sm folders": {},
@@ -1278,51 +1131,6 @@
     "secret-overriding": "|bool|true",
     "tags": "t|string|",
     "token": "|string|"
-  },
-  "infisical sm secrets agent-proxy": {
-    "env": "|string|dev",
-    "tags": "t|string|"
-  },
-  "infisical sm secrets agent-proxy connect": {
-    "allow-readable-brokered-secrets": "|bool|false",
-    "client-id": "|string|",
-    "client-secret": "|string|",
-    "env": "e|string|",
-    "no-proxy": "|string|",
-    "path": "|string|/",
-    "projectId": "|string|",
-    "proxy": "|string|",
-    "tags": "t|string|",
-    "token": "|string|"
-  },
-  "infisical sm secrets agent-proxy run": {
-    "allow-host": "|stringArray|[]",
-    "allow-read": "|stringArray|[]",
-    "allow-write": "|stringArray|[]",
-    "env": "e|string|",
-    "log-file": "|string|",
-    "no-sandbox": "|bool|false",
-    "pass-env": "|stringArray|[]",
-    "path": "|string|/",
-    "poll-interval": "|int|60",
-    "projectId": "|string|",
-    "proxy": "|string|",
-    "sandbox": "|bool|true",
-    "set-env": "|stringArray|[]",
-    "tags": "t|string|",
-    "token": "|string|",
-    "unmatched-host": "|string|allow"
-  },
-  "infisical sm secrets agent-proxy start": {
-    "client-id": "|string|",
-    "client-secret": "|string|",
-    "env": "|string|dev",
-    "log-file": "|string|",
-    "log-format": "|string|console",
-    "poll-interval": "|int|60",
-    "port": "|int|17322",
-    "tags": "t|string|",
-    "unmatched-host": "|string|allow"
   },
   "infisical sm secrets create": {
     "env": "|string|dev",

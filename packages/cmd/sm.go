@@ -21,7 +21,6 @@ const (
 // because a cobra command can only have one parent, so every registration needs its own instance.
 var secretsManagementCommands = []func() *cobra.Command{
 	buildRunCmd,
-	buildExportCmd,
 	buildSecretsCmd,
 	buildDynamicSecretsCmd,
 }
@@ -37,10 +36,7 @@ const (
 var hiddenUnderSecretsManager = [][]string{
 	{"secrets", "set"},
 	{"secrets", "generate-example-env"},
-	{"secrets", "agent-proxy"},
 	{"secrets", "folders"},
-	{"agent-proxy"},
-	{"export"},
 }
 
 // Deletes under `secrets-manager` ask for confirmation (see CLI.md). The legacy top-level copies keep
@@ -158,7 +154,10 @@ func init() {
 		secretsManagerCmd.AddCommand(buildCommand())
 	}
 
-	secretsManagerCmd.AddCommand(buildAgentProxyCmd())
+	legacyExport := buildExportCmd()
+	legacyExport.Hidden = true
+	RootCmd.AddCommand(legacyExport)
+
 	secretsManagerCmd.AddCommand(buildProjectsCmd())
 	secretsManagerCmd.AddCommand(buildEnvironmentsCmd())
 	secretsManagerCmd.AddCommand(buildFoldersCmd())
