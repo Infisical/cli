@@ -97,36 +97,45 @@ func Execute() {
 
 // resolveDomain picks the domain by precedence: --domain flag > env > .infisical.yaml > default (flagValue).
 // Must run after flag parsing (PersistentPreRun, not init) so cmd.Flags().Changed is reliable.
-func resolveDomain(cmd *cobra.Command, flagValue string) string {
+func resolveDomain(cmd *cobra.Command, flagValue string) (string, error) {
 	if cmd.Flags().Changed("domain") {
-		return flagValue
+		return flagValue, nil
 	}
 
 	if envDomain, ok := util.GetEnvDomain(); ok {
-		return envDomain
-	}
-
-	// Agent Vault commands send session tokens and mint sessions, and a .infisical.yaml can arrive with a cloned
-	// repo, so they skip it. The domain comes from the flag, the variables, or the logged-in profile (applied when the
-	// login loads).
-	if isAgentVaultCommand(cmd) {
-		return flagValue
+		return envDomain, nil
 	}
 
 	domain, valid := util.GetDomainFromFile()
+
+	// Agent Vault commands send session tokens and mint sessions, and a .infisical.yaml can arrive with a cloned
+	// repo, so they skip it. The domain comes from the flag, the variables, or the logged-in profile (applied when the
+	// login loads). A file that names another instance stops the command instead, so a user who relied on it is not
+	// sent to the profile's instance without knowing.
+	if isAgentVaultCommand(cmd) {
+		effectiveDomain := util.ActiveProfileDomain()
+		if effectiveDomain == "" {
+			effectiveDomain = flagValue
+		}
+		if domain != "" && valid && util.AppendAPIEndpoint(effectiveDomain) != util.AppendAPIEndpoint(domain) {
+			return "", fmt.Errorf(".infisical.yaml sets the domain %s, but Agent Vault commands don't read it. Pass --domain %s or set INFISICAL_DOMAIN.", domain, domain)
+		}
+		return flagValue, nil
+	}
+
 	if domain == "" {
-		return flagValue
+		return flagValue, nil
 	}
 
 	if !valid {
 		util.PrintWarningWithWriter("The 'general.domain' field in .infisical.yaml (or 'domain' in a legacy .infisical.json) is not a valid URL (must be an http:// or https:// URL with a host). It will be ignored.", cmd.ErrOrStderr())
-		return flagValue
+		return flagValue, nil
 	}
 
 	// A .infisical.yaml is usually committed to the repo, so a malicious one could redirect requests
 	// and credentials. Always surface where traffic is going (even under --silent); it goes to stderr.
 	util.PrintWarningWithWriter(fmt.Sprintf("Using domain '%s' from .infisical.yaml (or a legacy .infisical.json); all requests and credentials will be sent there.", domain), cmd.ErrOrStderr())
-	return domain
+	return domain, nil
 }
 
 func isAgentVaultCommand(cmd *cobra.Command) bool {
@@ -206,7 +215,11 @@ func init() {
 		_, envDomainSet := util.GetEnvDomain()
 		config.INFISICAL_DOMAIN_EXPLICITLY_SET = cmd.Flags().Changed("domain") || envDomainSet
 
-		config.INFISICAL_URL = util.AppendAPIEndpoint(resolveDomain(cmd, config.INFISICAL_URL))
+		domain, err := resolveDomain(cmd, config.INFISICAL_URL)
+		if err != nil {
+			util.HandleError(err)
+		}
+		config.INFISICAL_URL = util.AppendAPIEndpoint(domain)
 
 		if !util.IsRunningInDocker() && !silent && !isStructuredOutputRequested(cmd) {
 			util.CheckForUpdateWithWriter(cmd.ErrOrStderr())

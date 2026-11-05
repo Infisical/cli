@@ -192,7 +192,7 @@ func recentLocked(entries map[string]refusedEntry, key string) (refusedEntry, bo
 	return refusedEntry{}, false
 }
 
-var errSessionGone = errors.New("session is no longer valid")
+var errSessionGone = errors.New("session is no longer valid, or it belongs to a different Agent Vault project than this proxy")
 
 // The name the server puts on a 401 that is about this proxy's own token rather than the session it asked
 // about. Without it the two are the same status and the same error class.
