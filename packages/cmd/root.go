@@ -130,8 +130,8 @@ func resolveDomain(cmd *cobra.Command, flagValue string) (string, error) {
 		if effectiveDomain == "" {
 			effectiveDomain = flagValue
 		}
-		if domain != "" && valid && util.AppendAPIEndpoint(effectiveDomain) != util.AppendAPIEndpoint(domain) {
-			return "", fmt.Errorf(".infisical.yaml sets the domain %s, but Agent Vault commands don't read it. Pass --domain %s or set INFISICAL_DOMAIN.", domain, domain)
+		if domain != "" && valid && util.AppendAPIEndpoint(effectiveDomain) != util.AppendAPIEndpoint(domain) && !agentVaultRunNeverContactsInfisical(cmd) {
+			return "", fmt.Errorf(".infisical.yaml names a server that Agent Vault commands don't read. Pass --domain <domain> or set INFISICAL_DOMAIN.")
 		}
 		return effectiveDomain, nil
 	}
@@ -149,6 +149,27 @@ func resolveDomain(cmd *cobra.Command, flagValue string) (string, error) {
 	// and credentials. Always surface where traffic is going (even under --silent); it goes to stderr.
 	util.PrintWarningWithWriter(fmt.Sprintf("Using domain '%s' from .infisical.yaml (or a legacy .infisical.json); all requests and credentials will be sent there.", domain), cmd.ErrOrStderr())
 	return domain, nil
+}
+
+// A run on a session token with --no-skills mints nothing and installs no skills, so no domain is used and a
+// repo file naming another server can't misdirect anything.
+func agentVaultRunNeverContactsInfisical(cmd *cobra.Command) bool {
+	if cmd != agentVaultRunCmd {
+		return false
+	}
+	if noSkills, err := cmd.Flags().GetBool("no-skills"); err != nil || !noSkills {
+		return false
+	}
+	_, tokenSource, err := resolveAgentVaultSessionToken(cmd)
+	if err != nil {
+		return false
+	}
+	_, bundleSource, err := resolveAgentVaultAccessBundles(cmd)
+	if err != nil {
+		return false
+	}
+	useToken, _, err := decideAgentVaultSession(tokenSource, bundleSource)
+	return err == nil && useToken
 }
 
 func isAgentVaultCommand(cmd *cobra.Command) bool {

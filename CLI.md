@@ -83,6 +83,7 @@ With `-o json`, the same error is JSON on stderr:
 | `project_required` | A delete ran without `--projectId`. Deletes never use `INFISICAL_PROJECT_ID` or `.infisical.yaml`. For Agent Vault, no project from `--project-id`, `INFISICAL_AGENT_VAULT_PROJECT_ID` or `INFISICAL_PROJECT_ID` |
 | `invalid_project_id` | An Agent Vault project ID from `--project-id` or a variable isn't a project ID |
 | `access_bundle_required` | `agent-vault sessions create` without `--access-bundle` or `INFISICAL_AGENT_VAULT_ACCESS_BUNDLE` |
+| `access_bundle_not_granted` | `agent-vault sessions create` with an access bundle the caller (or the user a session is on behalf of) can't use, or that doesn't exist (400 `AccessBundleNotGranted`) |
 | `invalid_access_bundle` | An access bundle name from `--access-bundle` or `INFISICAL_AGENT_VAULT_ACCESS_BUNDLE` isn't a valid name. Nothing is sent |
 | `secret_exists` | `secrets create` on a key that exists. Nothing is written |
 | `secret_not_found` | `secrets update` on a key that doesn't exist. Nothing is written |

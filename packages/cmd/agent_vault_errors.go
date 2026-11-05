@@ -10,9 +10,10 @@ import (
 )
 
 const (
-	errCodeAccessBundleRequired = "access_bundle_required"
-	errCodeInvalidAccessBundle  = "invalid_access_bundle"
-	errCodeInvalidProjectID     = "invalid_project_id"
+	errCodeAccessBundleRequired   = "access_bundle_required"
+	errCodeAccessBundleNotGranted = "access_bundle_not_granted"
+	errCodeInvalidAccessBundle    = "invalid_access_bundle"
+	errCodeInvalidProjectID       = "invalid_project_id"
 )
 
 func errAgentVaultInvalidOutput(format string) *util.CLIError {
@@ -23,6 +24,11 @@ func errAgentVaultInvalidOutput(format string) *util.CLIError {
 func errAgentVaultAccessBundleRequired() *util.CLIError {
 	return &util.CLIError{Code: errCodeAccessBundleRequired,
 		Message: fmt.Sprintf("An access bundle is required: pass --access-bundle <name> or set %s.", agentVaultAccessBundleEnv)}
+}
+
+func errAgentVaultAccessBundleNotGranted(bundle string, cause error) *util.CLIError {
+	return &util.CLIError{Code: errCodeAccessBundleNotGranted, Cause: cause,
+		Message: fmt.Sprintf("Access bundle %s isn't granted to you in this Agent Vault project, or doesn't exist. Check the name, or ask an Agent Vault admin to grant it.", quoted(bundle, "access bundle"))}
 }
 
 func errAgentVaultEmptyAccessBundle() *util.CLIError {
@@ -82,14 +88,18 @@ func errAgentVaultProjectNotAMember(project agentVaultProject, cause error) *uti
 }
 
 // classifyAgentVaultAPIError is classifyAPIError for a request scoped to one Agent Vault project. A 404 from a
-// route the backend doesn't have yet is left alone, so an older Infisical still prints its own answer.
-func classifyAgentVaultAPIError(err error, project agentVaultProject) error {
+// route the backend doesn't have yet is left alone, so an older Infisical still prints its own answer. accessBundle
+// is the bundle the request named, or empty when it named none.
+func classifyAgentVaultAPIError(err error, project agentVaultProject, accessBundle string) error {
 	var apiErr *api.APIError
 	if !errors.As(err, &apiErr) {
 		return err
 	}
 	if apiErr.StatusCode == http.StatusForbidden && apiErr.Name == "ProjectMembershipNotFound" {
 		return errAgentVaultProjectNotAMember(project, err)
+	}
+	if apiErr.StatusCode == http.StatusBadRequest && apiErr.Name == "AccessBundleNotGranted" && accessBundle != "" {
+		return errAgentVaultAccessBundleNotGranted(accessBundle, err)
 	}
 	var notFound func(cause error) *util.CLIError
 	// The route-missing answer is named "Not Found" and the app's own 404s "NotFound", so the name tells them apart

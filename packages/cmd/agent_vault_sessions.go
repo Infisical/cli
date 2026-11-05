@@ -90,7 +90,7 @@ func runAgentVaultSessionsCreate(cmd *cobra.Command, args []string) {
 	identity := resolveAgentVaultIdentity(cmd, stdoutIsTerminal)
 	minted, err := mintAgentVaultSession(newAgentVaultAPIClient(identity), project, accessBundles, ttl, label)
 	if err != nil {
-		exitWithError(cmd, classifyAgentVaultAPIError(err, project),
+		exitWithError(cmd, classifyAgentVaultAPIError(err, project, accessBundles[0]),
 			append([]string{"Unable to mint an Agent Vault session"}, agentVaultProjectHints(err, project)...)...)
 	}
 

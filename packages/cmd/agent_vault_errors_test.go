@@ -24,6 +24,7 @@ func agentVaultConstructedErrors() []*util.CLIError {
 		errAgentVaultEmptyAccessBundle(),
 		errAgentVaultOneAccessBundle(),
 		errAgentVaultInvalidAccessBundle("Coding Agent", agentVaultSourceFlag),
+		errAgentVaultAccessBundleNotGranted("coding-agent", cause),
 		errAgentVaultEmptyProjectID(),
 		errAgentVaultProjectRequired(),
 		errAgentVaultInvalidProjectID("my-project", "--project-id"),
@@ -139,6 +140,8 @@ func TestAgentVaultSessionsCreateErrorsAreStructured(t *testing.T) {
 			setup:  func() { t.Setenv(util.INFISICAL_PROJECT_ID_NAME, projectFromProjEnv) },
 			status: 404, apiName: "NotFound", code: errCodeProjectNotFound, message: "may name a Secrets Management project"},
 		{name: "not a member", args: withProject("--access-bundle", "coding-agent"), status: 403, apiName: "ProjectMembershipNotFound", code: errCodeProjectNotFound, message: "from --project-id doesn't exist"},
+		{name: "access bundle not granted", args: withProject("--access-bundle", "coding-agent"), status: 400, apiName: "AccessBundleNotGranted",
+			code: errCodeAccessBundleNotGranted, message: `Access bundle "coding-agent" isn't granted to you`},
 		{name: "permission denied", args: withProject("--access-bundle", "coding-agent"), status: 403, apiName: "PermissionDenied", code: errCodePermissionDenied},
 		{name: "token rejected", args: withProject("--access-bundle", "coding-agent"), status: 401, apiName: "UnauthorizedError", code: errCodeAuthRequired},
 	}
@@ -209,16 +212,20 @@ func TestAgentVaultSessionsCreateErrorsNeverRepeatAPastedToken(t *testing.T) {
 func TestClassifyAgentVaultAPIErrorLeavesAMissingRouteAlone(t *testing.T) {
 	project := agentVaultProject{ID: projectFromFlag, Source: "--project-id"}
 	missingRoute := apiError(404, infisicalRouteMissingName, "Route POST:/api/v1/agent-vault/sessions not found")
-	if got := classifyAgentVaultAPIError(missingRoute, project); got != missingRoute {
+	if got := classifyAgentVaultAPIError(missingRoute, project, "x"); got != missingRoute {
 		t.Errorf("a missing route should print as before, got %v", got)
 	}
-	if got := classifyAgentVaultAPIError(apiError(404, infisicalRouteMissingName, "reworded"), project); got == nil || codeOf(got) != "" {
+	if got := classifyAgentVaultAPIError(apiError(404, infisicalRouteMissingName, "reworded"), project, "x"); got == nil || codeOf(got) != "" {
 		t.Errorf("a missing route is told apart by its name, not its message, got %v", got)
 	}
-	if got := classifyAgentVaultAPIError(apiError(403, "ProjectMembershipNotFound", ""), project); strings.Contains(got.Error(), projectFromFlag) {
+	if got := classifyAgentVaultAPIError(apiError(403, "ProjectMembershipNotFound", ""), project, "x"); strings.Contains(got.Error(), projectFromFlag) {
 		t.Errorf("a non-member's error should not repeat the project ID, got %q", got.Error())
 	}
-	if got := classifyAgentVaultAPIError(apiError(400, "BadRequest", "No access bundle named 'x'"), project); codeOf(got) != "" {
-		t.Errorf("a 400 is told apart only by its message, so it keeps no code, got %v", got)
+	if got := classifyAgentVaultAPIError(apiError(400, "BadRequest", "No access bundle named 'x'"), project, "x"); codeOf(got) != "" {
+		t.Errorf("a 400 without a stable name is told apart only by its message, so it keeps no code, got %v", got)
+	}
+	notGranted := classifyAgentVaultAPIError(apiError(400, "AccessBundleNotGranted", "No access bundle named 'x' is granted"), project, "x")
+	if codeOf(notGranted) != errCodeAccessBundleNotGranted || strings.Contains(notGranted.Error(), "is granted") {
+		t.Errorf("a 400 AccessBundleNotGranted should get its code and keep the server's message out, got %v", notGranted)
 	}
 }
