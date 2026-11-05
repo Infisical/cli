@@ -29,6 +29,7 @@ func buildRunCmd() *cobra.Command {
 	runCmd := &cobra.Command{
 		Example: `
 	infisical run --env=dev -- npm run dev
+	infisical run --path=/global --path=/app -- npm start
 	infisical run --command "first-command && second-command; more-commands..."
 	`,
 		Use:                   "run [any infisical run command flags] -- [your application start command]",
@@ -49,7 +50,7 @@ func buildRunCmd() *cobra.Command {
 	runCmd.Flags().Int("watch-interval", 10, "interval in seconds to check for secret changes")
 	runCmd.Flags().StringP("command", "c", "", "chained commands to execute (e.g. \"npm install && npm run dev; echo ...\")")
 	runCmd.Flags().StringP("tags", "t", "", "filter secrets by tag slugs ")
-	runCmd.Flags().StringArray("path", []string{"/"}, "get secrets within a folder path (can be specified multiple times)")
+	runCmd.Flags().StringArray("path", []string{"/"}, "get secrets within a folder path (can be specified multiple times to merge secrets; later paths override earlier ones for duplicate keys)")
 	runCmd.Flags().String("project-config-dir", "", "explicitly set the directory where the .infisical.yaml (or legacy .infisical.json) resides")
 
 	return runCmd
@@ -434,9 +435,14 @@ func executeCommandWithWatchMode(commandFlag string, args []string, watchModeInt
 }
 
 func fetchSecrets(request models.GetMultiPathSecretsParameters, projectConfigDir string, secretOverriding bool, token *models.TokenDetails) ([]models.SingleEnvironmentVariable, error) {
+	paths := request.SecretsPaths
+	if len(paths) == 0 {
+		paths = []string{"/"}
+	}
+
 	var allSecrets []models.SingleEnvironmentVariable
 
-	for _, path := range request.SecretsPaths {
+	for _, path := range paths {
 		params := models.GetAllSecretsParameters{
 			Environment:              request.Environment,
 			WorkspaceId:              request.WorkspaceId,
@@ -480,9 +486,11 @@ func formatSecretsForShell(secrets []models.SingleEnvironmentVariable) models.In
 	// check to see if there are any reserved key words in secrets to inject
 	filterReservedEnvVars(secretsByKey)
 
+	dedupedSecrets := make([]models.SingleEnvironmentVariable, 0, len(secretsByKey))
 	// now add infisical secrets
 	for k, v := range secretsByKey {
 		environmentVariables[k] = v.Value
+		dedupedSecrets = append(dedupedSecrets, v)
 	}
 
 	env := make([]string, 0, len(environmentVariables))
@@ -492,7 +500,7 @@ func formatSecretsForShell(secrets []models.SingleEnvironmentVariable) models.In
 
 	return models.InjectableEnvironmentResult{
 		Variables:    env,
-		ETag:         util.GenerateETagFromSecrets(secrets),
+		ETag:         util.GenerateETagFromSecrets(dedupedSecrets),
 		SecretsCount: len(secretsByKey),
 	}
 }
