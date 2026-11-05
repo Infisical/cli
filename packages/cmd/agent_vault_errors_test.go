@@ -138,7 +138,7 @@ func TestAgentVaultSessionsCreateErrorsAreStructured(t *testing.T) {
 		{name: "project 404 from INFISICAL_PROJECT_ID", args: []string{"--access-bundle", "coding-agent"},
 			setup:  func() { t.Setenv(util.INFISICAL_PROJECT_ID_NAME, projectFromProjEnv) },
 			status: 404, apiName: "NotFound", code: errCodeProjectNotFound, message: "may name a Secrets Management project"},
-		{name: "not a member", args: withProject("--access-bundle", "coding-agent"), status: 403, apiName: "ProjectMembershipNotFound", code: errCodeProjectNotFound},
+		{name: "not a member", args: withProject("--access-bundle", "coding-agent"), status: 403, apiName: "ProjectMembershipNotFound", code: errCodeProjectNotFound, message: "from --project-id doesn't exist"},
 		{name: "permission denied", args: withProject("--access-bundle", "coding-agent"), status: 403, apiName: "PermissionDenied", code: errCodePermissionDenied},
 		{name: "token rejected", args: withProject("--access-bundle", "coding-agent"), status: 401, apiName: "UnauthorizedError", code: errCodeAuthRequired},
 	}
@@ -211,6 +211,12 @@ func TestClassifyAgentVaultAPIErrorLeavesAMissingRouteAlone(t *testing.T) {
 	missingRoute := apiError(404, infisicalRouteMissingName, "Route POST:/api/v1/agent-vault/sessions not found")
 	if got := classifyAgentVaultAPIError(missingRoute, project); got != missingRoute {
 		t.Errorf("a missing route should print as before, got %v", got)
+	}
+	if got := classifyAgentVaultAPIError(apiError(404, infisicalRouteMissingName, "reworded"), project); got == nil || codeOf(got) != "" {
+		t.Errorf("a missing route is told apart by its name, not its message, got %v", got)
+	}
+	if got := classifyAgentVaultAPIError(apiError(403, "ProjectMembershipNotFound", ""), project); strings.Contains(got.Error(), projectFromFlag) {
+		t.Errorf("a non-member's error should not repeat the project ID, got %q", got.Error())
 	}
 	if got := classifyAgentVaultAPIError(apiError(400, "BadRequest", "No access bundle named 'x'"), project); codeOf(got) != "" {
 		t.Errorf("a 400 is told apart only by its message, so it keeps no code, got %v", got)

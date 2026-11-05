@@ -71,6 +71,16 @@ func errAgentVaultProjectNotFound(project agentVaultProject, cause error) *util.
 	return &util.CLIError{Code: errCodeProjectNotFound, Cause: cause, Message: message}
 }
 
+// A non-member is told the same as for a project that doesn't exist, without the ID, so the error can't be used to
+// confirm one.
+func errAgentVaultProjectNotAMember(project agentVaultProject, cause error) *util.CLIError {
+	return &util.CLIError{
+		Code:    errCodeProjectNotFound,
+		Cause:   cause,
+		Message: fmt.Sprintf("The Agent Vault project from %s doesn't exist, or you don't have access to it.", project.Source),
+	}
+}
+
 // classifyAgentVaultAPIError is classifyAPIError for a request scoped to one Agent Vault project. A 404 from a
 // route the backend doesn't have yet is left alone, so an older Infisical still prints its own answer.
 func classifyAgentVaultAPIError(err error, project agentVaultProject) error {
@@ -79,10 +89,12 @@ func classifyAgentVaultAPIError(err error, project agentVaultProject) error {
 		return err
 	}
 	if apiErr.StatusCode == http.StatusForbidden && apiErr.Name == "ProjectMembershipNotFound" {
-		return errAgentVaultProjectNotFound(project, err)
+		return errAgentVaultProjectNotAMember(project, err)
 	}
 	var notFound func(cause error) *util.CLIError
-	if !isInfisicalRouteMissing(err) {
+	// The route-missing answer is named "Not Found" and the app's own 404s "NotFound", so the name tells them apart
+	// without reading the message.
+	if !(apiErr.StatusCode == http.StatusNotFound && apiErr.Name == infisicalRouteMissingName) {
 		notFound = func(cause error) *util.CLIError { return errAgentVaultProjectNotFound(project, cause) }
 	}
 	return classifyAPIError(err, errorScope{ProjectID: project.ID}, notFound)
