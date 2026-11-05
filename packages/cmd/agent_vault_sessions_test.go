@@ -118,7 +118,8 @@ func TestValidateAgentVaultRevokeTarget(t *testing.T) {
 		{"both", []string{id, "--session-token", "agv_x"}, "", "", "not both"},
 		{"neither", nil, "", "", "name the session to revoke"},
 		{"empty token", []string{"--session-token", "  "}, "agv_env", "", "--session-token was given but is empty"},
-		{"not an id", []string{"agv_x"}, "", "", "is not a session ID"},
+		{"a token as the argument", []string{"agv_secretvalue"}, "", "", "looks like a session token, not a session ID"},
+		{"not an id", []string{"secret-ish-value"}, "", "", "the argument is not a session ID"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -141,6 +142,11 @@ func TestValidateAgentVaultRevokeTarget(t *testing.T) {
 			}
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("err %v, want %q", err, tc.wantErr)
+			}
+			for _, arg := range cmd.Flags().Args() {
+				if strings.Contains(err.Error(), arg) {
+					t.Fatalf("the error echoes the argument %q: %v", arg, err)
+				}
 			}
 		})
 	}
@@ -205,8 +211,8 @@ func TestRevokeAgentVaultSessionByTokenIgnoresTheDomainInARepoFile(t *testing.T)
 	if auth != "Bearer agv_x" || config.INFISICAL_URL != srv.URL+"/api" {
 		t.Fatalf("the token went to %s (auth %q)", config.INFISICAL_URL, auth)
 	}
-	if want := "Ignoring the domain in .infisical.yaml (or .infisical.json) for this session token, and using " + srv.URL + "."; !strings.Contains(warnings.String(), want) {
-		t.Fatalf("warned %q", warnings.String())
+	if warnings.Len() != 0 {
+		t.Fatalf("an Agent Vault command does not read the file, so has nothing to warn about: %q", warnings.String())
 	}
 }
 

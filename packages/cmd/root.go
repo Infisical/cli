@@ -106,6 +106,12 @@ func resolveDomain(cmd *cobra.Command, flagValue string) string {
 		return envDomain
 	}
 
+	// Agent Vault commands send session tokens and mint sessions, and a .infisical.yaml can arrive with a cloned
+	// repo, so they use only a domain the user chose: the flag, the variables, or the logged-in profile.
+	if isAgentVaultCommand(cmd) {
+		return flagValue
+	}
+
 	domain, valid := util.GetDomainFromFile()
 	if domain == "" {
 		return flagValue
@@ -120,6 +126,15 @@ func resolveDomain(cmd *cobra.Command, flagValue string) string {
 	// and credentials. Always surface where traffic is going (even under --silent); it goes to stderr.
 	util.PrintWarningWithWriter(fmt.Sprintf("Using domain '%s' from .infisical.yaml (or a legacy .infisical.json); all requests and credentials will be sent there.", domain), cmd.ErrOrStderr())
 	return domain
+}
+
+func isAgentVaultCommand(cmd *cobra.Command) bool {
+	for current := cmd; current != nil; current = current.Parent() {
+		if current == agentVaultCmd {
+			return true
+		}
+	}
+	return false
 }
 
 // Commands that manage profiles/sessions themselves print their own outcome,

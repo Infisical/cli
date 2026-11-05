@@ -8,6 +8,8 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -518,6 +520,24 @@ func TestResolveAgentVaultSessionLabelRefusesASessionToken(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), tc.names) || !strings.Contains(err.Error(), "--label") {
 			t.Errorf("the message should name --label and %q, got %q", tc.names, err)
+		}
+	}
+}
+
+func TestAgentVaultLoginReadErrorShowsAllButAMissingLogin(t *testing.T) {
+	if err := agentVaultLoginReadError(nil); err != nil {
+		t.Fatalf("no error: %v", err)
+	}
+	if err := agentVaultLoginReadError(util.ErrUserNotLoggedIn); err != nil {
+		t.Fatalf("a missing login should go to the sign-in path, not be shown as an error: %v", err)
+	}
+	for _, want := range []error{
+		fmt.Errorf("%w: profile 'work' belongs to eu.infisical.com", util.ErrProfileDomainMismatch),
+		fmt.Errorf("%w: profile 'work' does not exist", util.ErrProfileNotFound),
+		errors.New("failed to fetch credentials from keyring because [err=locked]"),
+	} {
+		if got := agentVaultLoginReadError(want); got != want {
+			t.Fatalf("got %v, want %v", got, want)
 		}
 	}
 }

@@ -73,7 +73,7 @@ func agentVaultProjectFrom(value, source string) (agentVaultProject, error) {
 	if _, err := uuid.Parse(value); err != nil || len(value) != 36 {
 		return agentVaultProject{}, fmt.Errorf("%q from %s is not a project ID; copy the ID from the Agent Vault project's settings in Infisical", value, source)
 	}
-	return agentVaultProject{ID: value, Source: source}, nil
+	return agentVaultProject{ID: strings.ToLower(value), Source: source}, nil
 }
 
 // A flag was typed for this run; anything else is ambient, so the command says which project it picked up.

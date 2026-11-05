@@ -662,7 +662,10 @@ func resolveAgentVaultIdentity(cmd *cobra.Command, allowLoginWizard bool) string
 	}
 
 	details, err := util.GetCurrentLoggedInUserDetails(true)
-	if err != nil || !details.IsUserLoggedIn || details.LoginExpired {
+	if err = agentVaultLoginReadError(err); err != nil {
+		util.HandleError(err, "Unable to read your Infisical login")
+	}
+	if !details.IsUserLoggedIn || details.LoginExpired {
 		if !allowLoginWizard {
 			util.HandleError(fmt.Errorf("your Infisical login has expired or is missing, and this command's output is being captured, so it can't sign you in. Run 'infisical login' first, set %s, or pass --client-id and --client-secret", util.INFISICAL_TOKEN_NAME))
 		}
@@ -673,6 +676,15 @@ func resolveAgentVaultIdentity(cmd *cobra.Command, allowLoginWizard bool) string
 	}
 	failIfTokenExpired(details.UserCredentials.JTWToken, "your login")
 	return details.UserCredentials.JTWToken
+}
+
+// A login missing from the keyring is a missing login, which signing in fixes. Any other error (a broken config
+// file, an unreadable keyring, a profile for another domain) would not be fixed by the wizard, so it is shown.
+func agentVaultLoginReadError(err error) error {
+	if err == nil || errors.Is(err, util.ErrUserNotLoggedIn) {
+		return nil
+	}
+	return err
 }
 
 // Windows resolves variable names case-insensitively, so os.Getenv finds a lowercase spelling and the run

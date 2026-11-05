@@ -65,6 +65,34 @@ func TestResolveAgentVaultProjectOrder(t *testing.T) {
 	}
 }
 
+func TestResolveAgentVaultProjectLowercasesTheID(t *testing.T) {
+	isolateAgentVaultProject(t)
+
+	const upper = "ABCDEF12-AAAA-4AAA-8AAA-AAAAAAAAAAAA"
+	want := strings.ToLower(upper)
+	sources := []struct {
+		name string
+		set  func() *cobra.Command
+	}{
+		{"--project-id", func() *cobra.Command { return projectIDCmd(t, "--project-id", upper) }},
+		{agentVaultProjectIDEnv, func() *cobra.Command { t.Setenv(agentVaultProjectIDEnv, upper); return projectIDCmd(t) }},
+		{util.INFISICAL_PROJECT_ID_NAME, func() *cobra.Command {
+			t.Setenv(agentVaultProjectIDEnv, "")
+			t.Setenv(util.INFISICAL_PROJECT_ID_NAME, upper)
+			return projectIDCmd(t)
+		}},
+	}
+	for _, source := range sources {
+		project, err := resolveAgentVaultProject(source.set())
+		if err != nil {
+			t.Fatalf("%s: %v", source.name, err)
+		}
+		if project.Source != source.name || project.ID != want {
+			t.Fatalf("%s: got %s from %s, want %s", source.name, project.ID, project.Source, want)
+		}
+	}
+}
+
 func TestResolveAgentVaultProjectRefusesAnEmptyFlag(t *testing.T) {
 	isolateAgentVaultProject(t)
 	t.Setenv(agentVaultProjectIDEnv, projectFromAgvEnv)

@@ -46,7 +46,8 @@ func newAgentVaultSkillsHTTPClient() (*resty.Client, error) {
 }
 
 // A session token goes only to a domain the user chose: --domain, the domain variables, or the logged-in
-// profile. A .infisical.json can arrive with a cloned repo, so the domain it names never receives the token.
+// profile, else US Cloud. A command holding only the token has not loaded the profile, so nothing else would
+// point it at the profile's domain.
 func useAgentVaultSessionTokenDomain() {
 	if !config.INFISICAL_DOMAIN_EXPLICITLY_SET {
 		config.INFISICAL_URL = agentVaultSessionTokenAPIURL()
@@ -58,11 +59,7 @@ func agentVaultSessionTokenAPIURL() string {
 	if domain == "" {
 		domain = util.INFISICAL_DEFAULT_US_URL
 	}
-	apiURL := util.AppendAPIEndpoint(domain)
-	if fileDomain, valid := util.GetDomainFromFile(); valid && util.AppendAPIEndpoint(fileDomain) != apiURL {
-		util.PrintWarning(fmt.Sprintf("Ignoring the domain in .infisical.yaml (or .infisical.json) for this session token, and using %s. Pass --domain to choose another.", strings.TrimSuffix(apiURL, "/api")))
-	}
-	return apiURL
+	return util.AppendAPIEndpoint(domain)
 }
 
 // The waits before each retry of a list that answered 401 on a minted run.

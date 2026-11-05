@@ -190,8 +190,12 @@ func validateAgentVaultRevokeTarget(cmd *cobra.Command, args []string) (string, 
 		if cmd.Flags().Changed("session-token") {
 			return "", errors.New("pass a session ID or --session-token, not both")
 		}
+		// The argument is never echoed: a token passed here by mistake would otherwise land in the terminal or a CI log.
+		if strings.HasPrefix(strings.TrimSpace(args[0]), "agv_") {
+			return "", fmt.Errorf("that looks like a session token, not a session ID. Pass it with --session-token, or set %s", agentVaultSessionTokenEnv)
+		}
 		if _, err := uuid.Parse(args[0]); err != nil || len(args[0]) != 36 {
-			return "", fmt.Errorf("%q is not a session ID; pass the ID shown on the session in Infisical, or revoke by --session-token", args[0])
+			return "", errors.New("the argument is not a session ID; pass the ID shown on the session in Infisical, or revoke by --session-token")
 		}
 		return "", nil
 	}
