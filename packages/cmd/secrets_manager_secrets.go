@@ -37,6 +37,7 @@ infisical secrets-manager secrets create --file .env --env dev`))
 		"Change the values of existing secrets, failing without writing anything if one doesn't exist",
 		`infisical secrets-manager secrets update API_KEY=new-value --env dev
 infisical secrets-manager secrets update DB_URL=postgres://db/app --tag backend --env prod`))
+	secretsCmd.AddCommand(buildExportCmd())
 }
 
 func buildSecretsWriteCmd(action string, mode util.SecretWriteMode, short, example string) *cobra.Command {

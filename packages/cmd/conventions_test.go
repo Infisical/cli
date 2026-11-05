@@ -99,17 +99,9 @@ var conventionRules = []conventionRule{
 // conventionExceptions lists commands that predate CLI.md, with the rules each one breaks. It is
 // the remaining cleanup: remove an entry once the command is fixed. New commands must not be added.
 var conventionExceptions = map[string][]string{
-	"infisical secrets-manager dynamic-secrets":              {"short"},
-	"infisical secrets-manager dynamic-secrets lease":        {"plural-resource"},
-	"infisical secrets-manager dynamic-secrets lease create": {"examples", "short"},
-	"infisical secrets-manager dynamic-secrets lease delete": {"examples", "short"},
-	"infisical secrets-manager dynamic-secrets lease list":   {"action", "examples", "short"},
-	"infisical secrets-manager dynamic-secrets lease renew":  {"action", "examples", "short"},
-	"infisical secrets-manager export":                       {"short"},
-	"infisical secrets-manager run":                          {"short"},
-	"infisical secrets-manager secrets":                      {"short"},
-	"infisical secrets-manager secrets delete":               {"examples", "short"},
-	"infisical secrets-manager secrets get":                  {"examples", "short"},
+	"infisical secrets-manager dynamic-secrets lease":       {"plural-resource"},
+	"infisical secrets-manager dynamic-secrets lease list":  {"action"},
+	"infisical secrets-manager dynamic-secrets lease renew": {"action"},
 }
 
 func visibleCommands(cmd *cobra.Command) []*cobra.Command {

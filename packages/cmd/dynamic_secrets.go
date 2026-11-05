@@ -621,8 +621,9 @@ func listDynamicSecretLeaseByName(cmd *cobra.Command, args []string) {
 // `infisical secrets-manager dynamic-secrets`.
 func buildDynamicSecretsCmd() *cobra.Command {
 	dynamicSecretCmd := &cobra.Command{
-		Example:               `infisical dynamic-secrets`,
-		Short:                 "Used to list dynamic secrets",
+		Short: "List the dynamic secrets at a path, and manage their leases",
+		Example: `infisical secrets-manager dynamic-secrets --env prod --path /databases
+infisical secrets-manager dynamic-secrets lease create my-db-credentials --env prod --path /databases`,
 		Use:                   "dynamic-secrets",
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.NoArgs,
@@ -630,43 +631,46 @@ func buildDynamicSecretsCmd() *cobra.Command {
 	}
 
 	dynamicSecretLeaseCmd := &cobra.Command{
-		Example:               `lease`,
-		Short:                 "Manage leases for dynamic secrets",
+		Short: "Create, list, renew, and delete the leases of a dynamic secret",
+		Example: `infisical secrets-manager dynamic-secrets lease create my-db-credentials --env prod --path /databases
+infisical secrets-manager dynamic-secrets lease list my-db-credentials --env prod --path /databases`,
 		Use:                   "lease",
 		DisableFlagsInUseLine: true,
 	}
 
 	dynamicSecretLeaseCreateCmd := &cobra.Command{
-		Example:               `lease create <dynamic secret name>"`,
-		Short:                 "Used to lease dynamic secret by name",
-		Use:                   "create [dynamic-secret]",
+		Short: "Create a lease on a dynamic secret and print its credentials",
+		Example: `infisical secrets-manager dynamic-secrets lease create my-db-credentials --env prod --path /databases
+infisical secrets-manager dynamic-secrets lease create my-db-credentials --env prod --path /databases --ttl 1h -o json`,
+		Use:                   "create <dynamic-secret>",
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.ExactArgs(1),
 		Run:                   createDynamicSecretLeaseByName,
 	}
 
 	dynamicSecretLeaseRenewCmd := &cobra.Command{
-		Example:               `lease renew <dynamic secret name>"`,
-		Short:                 "Used to renew dynamic secret lease by name",
-		Use:                   "renew [lease-id]",
+		Short:                 "Extend a lease's lifetime",
+		Example:               `infisical secrets-manager dynamic-secrets lease renew <lease-id> --env prod --path /databases --ttl 2h`,
+		Use:                   "renew <lease-id>",
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.ExactArgs(1),
 		Run:                   renewDynamicSecretLeaseByName,
 	}
 
 	dynamicSecretLeaseRevokeCmd := &cobra.Command{
-		Example:               `lease delete <dynamic secret name>"`,
-		Short:                 "Used to delete dynamic secret lease by name",
-		Use:                   "delete [lease-id]",
+		Short: "Delete a lease, which revokes its credentials",
+		Example: `infisical secrets-manager dynamic-secrets lease delete <lease-id> --env prod --path /databases --projectId <project-id>
+infisical secrets-manager dynamic-secrets lease delete <lease-id> --env prod --path /databases --projectId <project-id> --yes`,
+		Use:                   "delete <lease-id>",
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.ExactArgs(1),
 		Run:                   revokeDynamicSecretLeaseByName,
 	}
 
 	dynamicSecretLeaseListCmd := &cobra.Command{
-		Example:               `lease list <dynamic secret name>"`,
-		Short:                 "Used to list leases of a dynamic secret by name",
-		Use:                   "list [dynamic-secret]",
+		Short:                 "List the leases of a dynamic secret",
+		Example:               `infisical secrets-manager dynamic-secrets lease list my-db-credentials --env prod --path /databases`,
+		Use:                   "list <dynamic-secret>",
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.ExactArgs(1),
 		Run:                   listDynamicSecretLeaseByName,
@@ -674,7 +678,7 @@ func buildDynamicSecretsCmd() *cobra.Command {
 
 	dynamicSecretLeaseCreateCmd.Flags().StringP("path", "p", "/", "The path from where dynamic secret should be leased from")
 	dynamicSecretLeaseCreateCmd.Flags().String("token", "", "Create dynamic secret leases using machine identity access token")
-	dynamicSecretLeaseCreateCmd.Flags().String("projectId", "", "Manually set the projectId to fetch leased from when using machine identity based auth")
+	dynamicSecretLeaseCreateCmd.Flags().String("projectId", "", projectIDFallsBack+", unless --project-slug is set")
 	dynamicSecretLeaseCreateCmd.Flags().String("project-slug", "", "Manually set the project-slug to create lease in")
 	dynamicSecretLeaseCreateCmd.Flags().String("ttl", "", "The lease lifetime TTL. If not provided the default TTL of dynamic secret will be used.")
 	dynamicSecretLeaseCreateCmd.Flags().Bool("plain", false, "Print leased credentials without formatting, one per line")
@@ -692,14 +696,14 @@ func buildDynamicSecretsCmd() *cobra.Command {
 
 	dynamicSecretLeaseListCmd.Flags().StringP("path", "p", "/", "The path from where dynamic secret should be leased from")
 	dynamicSecretLeaseListCmd.Flags().String("token", "", "Fetch dynamic secret leases machine identity access token")
-	dynamicSecretLeaseListCmd.Flags().String("projectId", "", "Manually set the projectId to fetch leased from when using machine identity based auth")
+	dynamicSecretLeaseListCmd.Flags().String("projectId", "", projectIDFallsBack+", unless --project-slug is set")
 	dynamicSecretLeaseListCmd.Flags().String("project-slug", "", "Manually set the project-slug to list leases from")
 	util.AddOutputFlagsToCmd(dynamicSecretLeaseListCmd, "The output to format the dynamic secret leases in.")
 	dynamicSecretLeaseCmd.AddCommand(dynamicSecretLeaseListCmd)
 
 	dynamicSecretLeaseRenewCmd.Flags().StringP("path", "p", "/", "The path from where dynamic secret should be leased from")
 	dynamicSecretLeaseRenewCmd.Flags().String("token", "", "Renew dynamic secrets machine identity access token")
-	dynamicSecretLeaseRenewCmd.Flags().String("projectId", "", "Manually set the projectId to fetch leased from when using machine identity based auth")
+	dynamicSecretLeaseRenewCmd.Flags().String("projectId", "", projectIDFallsBack+", unless --project-slug is set")
 	dynamicSecretLeaseRenewCmd.Flags().String("project-slug", "", "Manually set the project-slug to renew lease in")
 	dynamicSecretLeaseRenewCmd.Flags().String("ttl", "", "The lease lifetime TTL. If not provided the default TTL of dynamic secret will be used.")
 	util.AddOutputFlagsToCmd(dynamicSecretLeaseRenewCmd, "The output to format the dynamic secret lease renewal in.")
@@ -707,7 +711,7 @@ func buildDynamicSecretsCmd() *cobra.Command {
 
 	dynamicSecretLeaseRevokeCmd.Flags().StringP("path", "p", "/", "The path from where dynamic secret should be leased from")
 	dynamicSecretLeaseRevokeCmd.Flags().String("token", "", "Delete dynamic secrets using machine identity access token")
-	dynamicSecretLeaseRevokeCmd.Flags().String("projectId", "", "Manually set the projectId to fetch leased from when using machine identity based auth")
+	dynamicSecretLeaseRevokeCmd.Flags().String("projectId", "", projectIDFallsBack+", unless --project-slug is set")
 	dynamicSecretLeaseRevokeCmd.Flags().String("project-slug", "", "Manually set the project-slug to revoke lease from")
 	util.AddOutputFlagsToCmd(dynamicSecretLeaseRevokeCmd, "The output to format the dynamic secret lease revocation in.")
 	dynamicSecretLeaseCmd.AddCommand(dynamicSecretLeaseRevokeCmd)

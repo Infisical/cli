@@ -842,8 +842,11 @@ func getSecretsByKeys(secrets []models.SingleEnvironmentVariable) map[string]mod
 
 func buildSecretsCmd() *cobra.Command {
 	secretsCmd := &cobra.Command{
-		Example:               `infisical secrets`,
-		Short:                 "Used to create, read update and delete secrets",
+		Short: "List, read, create, update, and delete the secrets of an environment",
+		Example: `# List the secrets at / in the dev environment of the project linked to this directory
+infisical secrets-manager secrets get
+infisical secrets-manager secrets create API_KEY=abc123 --env dev
+infisical secrets-manager secrets delete API_KEY --type shared --env dev --projectId <project-id>`,
 		Use:                   "secrets",
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.NoArgs,
@@ -851,9 +854,16 @@ func buildSecretsCmd() *cobra.Command {
 	}
 
 	secretsGetCmd := &cobra.Command{
-		Example:               `secrets get <secret name A> <secret name B>..."`,
-		Short:                 "Used to retrieve secrets by name",
-		Use:                   "get [secrets]",
+		Short: "List the secrets at a path, or show some by name",
+		Example: `infisical secrets-manager secrets get --env prod --path /backend
+infisical secrets-manager secrets get DB_PASSWORD API_KEY --env prod -o json
+
+# Only the values, one per line
+infisical secrets-manager secrets get DB_PASSWORD --env prod --plain
+
+# To write them to a file, use export
+infisical secrets-manager secrets export --env prod --output-file .env`,
+		Use:                   "get [name]...",
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.MinimumNArgs(1),
 		Run:                   getSecretsByNames,
@@ -878,9 +888,11 @@ func buildSecretsCmd() *cobra.Command {
 	}
 
 	secretsDeleteCmd := &cobra.Command{
-		Example:               `secrets delete <secret name A> <secret name B>..."`,
-		Short:                 "Used to delete secrets by name",
-		Use:                   "delete [secrets]",
+		Short: "Delete secrets by name",
+		Example: `# --type defaults to personal, so shared secrets need --type shared
+infisical secrets-manager secrets delete API_KEY --type shared --env dev --projectId <project-id>
+infisical secrets-manager secrets delete API_KEY DB_URL --type shared --env prod --path /backend --projectId <project-id> --yes`,
+		Use:                   "delete <name>...",
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.MinimumNArgs(1),
 		Run:                   runSecretsDelete,
@@ -893,7 +905,7 @@ func buildSecretsCmd() *cobra.Command {
 	secretsCmd.AddCommand(secretsGenerateExampleEnvCmd)
 
 	secretsGetCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
-	secretsGetCmd.Flags().String("projectId", "", "manually set the project ID to fetch secrets from when using machine identity based auth")
+	secretsGetCmd.Flags().String("projectId", "", projectIDForReads)
 	secretsGetCmd.Flags().String("path", "/", "get secrets within a folder path")
 	secretsGetCmd.Flags().Bool("plain", false, "print values without formatting, one per line")
 	secretsGetCmd.Flags().Bool("raw-value", false, "deprecated. Returns only the value of secret, only works with one secret. Use --plain instead")
@@ -907,7 +919,7 @@ func buildSecretsCmd() *cobra.Command {
 
 	secretsCmd.AddCommand(secretsSetCmd)
 	secretsSetCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
-	secretsSetCmd.Flags().String("projectId", "", "manually set the project ID to for setting secrets when using machine identity based auth")
+	secretsSetCmd.Flags().String("projectId", "", projectIDForSet)
 	secretsSetCmd.Flags().String("path", "/", "set secrets within a folder path")
 	secretsSetCmd.Flags().String("type", util.SECRET_TYPE_SHARED, "the type of secret to create: personal or shared")
 	secretsSetCmd.Flags().String("file", "", "Load secrets from the specified file. File format: .env or YAML (comments: # or //). This option is mutually exclusive with command-line secrets arguments.")
@@ -917,7 +929,7 @@ func buildSecretsCmd() *cobra.Command {
 
 	secretsDeleteCmd.Flags().String("type", "personal", "the type of secret to delete: personal or shared  (default: personal)")
 	secretsDeleteCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
-	secretsDeleteCmd.Flags().String("projectId", "", "manually set the projectId to delete secrets from when using machine identity based auth")
+	secretsDeleteCmd.Flags().String("projectId", "", projectIDFallsBack)
 	secretsDeleteCmd.Flags().String("path", "/", "get secrets within a folder path")
 	util.AddOutputFlagsToCmd(secretsDeleteCmd, "The output to format the secrets in.")
 	secretsCmd.AddCommand(secretsDeleteCmd)
@@ -926,7 +938,7 @@ func buildSecretsCmd() *cobra.Command {
 	secretsCmd.AddCommand(buildAgentProxyCmd())
 
 	secretsCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
-	secretsCmd.Flags().String("projectId", "", "manually set the projectId to fetch secrets when using machine identity based auth")
+	secretsCmd.Flags().String("projectId", "", projectIDForReads)
 	secretsCmd.PersistentFlags().String("env", "dev", "Used to select the environment name on which actions should be taken on")
 	secretsCmd.Flags().Bool("expand", true, "Parse shell parameter expansions in your secrets, and process your referenced secrets")
 	secretsCmd.Flags().Bool("include-imports", true, "Imported linked secrets ")

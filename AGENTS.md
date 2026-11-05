@@ -11,7 +11,7 @@ This file provides guidance to coding agents working in this repository.
 
 ## Repository structure
 
-- **`packages/cmd/`**: every cobra command. Secrets Management commands live under `infisical secrets-manager` (alias `sm`) in `sm.go`. The same builders also register the legacy top-level `secrets`, `run`, `export`, and `dynamic-secrets`.
+- **`packages/cmd/`**: every cobra command. Secrets Management commands live under `infisical secrets-manager` (alias `sm`) in `sm.go`. The same builders also register the hidden legacy top-level `secrets`, `run`, `export`, and `dynamic-secrets`.
 - **`packages/api/`**: HTTP calls to the Infisical API and their request and response models.
 - **`packages/util/`**: shared helpers. Flag and environment resolution (`helper.go`), `.infisical.yaml` handling (`config.go`), output formatting, and error printing (`log.go`).
 - **`packages/visualize/`**: table output.

@@ -105,11 +105,6 @@ func TestSmFlagsMatchTopLevel(t *testing.T) {
 				if smFlags[flag] == signature {
 					continue
 				}
-				// Only the description of --projectId may differ, and only where sm.go sets it.
-				if usage, rewritten := projectIDUsageUnderSecretsManager[name]; rewritten && kind == "local" && flag == "projectId" &&
-					strings.TrimSuffix(smFlags[flag], usage) == strings.TrimSuffix(signature, top.LocalFlags().Lookup("projectId").Usage) {
-					continue
-				}
 				t.Errorf("%s: %s flag --%s differs under sm: top=%q sm=%q", name, kind, flag, signature, smFlags[flag])
 			}
 			for flag := range smFlags {
@@ -271,7 +266,7 @@ func TestSecretsManagerHidesLegacyCommands(t *testing.T) {
 			t.Errorf("top-level `%s` should stay visible", strings.Join(path, " "))
 		}
 	}
-	for _, path := range [][]string{{"secrets"}, {"secrets", "get"}, {"projects"}, {"run"}, {"export"}, {"dynamic-secrets"}} {
+	for _, path := range [][]string{{"secrets"}, {"secrets", "get"}, {"secrets", "export"}, {"projects"}, {"run"}, {"dynamic-secrets"}} {
 		if findCommand(t, smPath(path)).Hidden {
 			t.Errorf("secrets-manager %s should be visible", strings.Join(path, " "))
 		}

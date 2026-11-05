@@ -16,8 +16,8 @@ const (
 	secretsManagerAlias       = "sm"
 )
 
-// secretsManagementCommands live both at the top level (`infisical run`) and under the
-// Secrets Management namespace (`infisical secrets-manager run`). Each entry is a constructor
+// secretsManagementCommands live under `infisical secrets-manager` and, hidden, at the top level
+// (`infisical run`), where they keep working for existing scripts. Each entry is a constructor
 // because a cobra command can only have one parent, so every registration needs its own instance.
 var secretsManagementCommands = []func() *cobra.Command{
 	buildRunCmd,
@@ -32,25 +32,6 @@ const (
 	projectIDForSet    = "ID of the project (falls back to INFISICAL_PROJECT_ID, then, with a login session, .infisical.yaml or a legacy .infisical.json; required with a token otherwise)"
 )
 
-// projectIDUsageUnderSecretsManager says how each shared command finds its project. The builders'
-// own text only mentions machine identities and predates the fallbacks. It stays on the top-level
-// copies, whose help doesn't change.
-var projectIDUsageUnderSecretsManager = map[string]string{
-	"secrets":                      projectIDForReads,
-	"secrets get":                  projectIDForReads,
-	"secrets set":                  projectIDForSet,
-	"secrets delete":               projectIDFallsBack,
-	"secrets folders get":          projectIDForReads,
-	"secrets folders create":       projectIDFallsBack,
-	"secrets folders delete":       projectIDFallsBack,
-	"run":                          projectIDForReads,
-	"export":                       projectIDForReads,
-	"dynamic-secrets lease create": projectIDFallsBack + ", unless --project-slug is set",
-	"dynamic-secrets lease list":   projectIDFallsBack + ", unless --project-slug is set",
-	"dynamic-secrets lease renew":  projectIDFallsBack + ", unless --project-slug is set",
-	"dynamic-secrets lease delete": projectIDFallsBack + ", unless --project-slug is set",
-}
-
 // hiddenUnderSecretsManager are kept working under `secrets-manager` for backwards compatibility,
 // but no longer listed in its help. The top-level copies are unchanged.
 var hiddenUnderSecretsManager = [][]string{
@@ -59,6 +40,7 @@ var hiddenUnderSecretsManager = [][]string{
 	{"secrets", "agent-proxy"},
 	{"secrets", "folders"},
 	{"agent-proxy"},
+	{"export"},
 }
 
 // Deletes under `secrets-manager` ask for confirmation (see CLI.md). The legacy top-level copies keep
@@ -150,14 +132,14 @@ func init() {
 	secretsManagerCmd := &cobra.Command{
 		Use:     secretsManagerCommandName,
 		Aliases: []string{secretsManagerAlias},
-		Short:   "Secrets Management commands (secrets, folders, projects, environments, dynamic-secrets, run, export)",
+		Short:   "Secrets Management commands (secrets, folders, projects, environments, dynamic-secrets, run)",
 		Example: `  infisical secrets-manager secrets get DB_PASSWORD
   infisical secrets-manager projects create --name my-app
   infisical secrets-manager environments create qa --projectId <project-id>
   infisical secrets-manager folders create api --path /backend
   infisical secrets-manager dynamic-secrets lease create my-db-credentials
   infisical secrets-manager run --env=dev -- npm run dev
-  infisical secrets-manager export --env=prod --format=json`,
+  infisical secrets-manager secrets export --env=prod --format=json`,
 		DisableFlagsInUseLine: true,
 		// Without Args and Run, cobra prints help and exits 0 for `infisical secrets-manager rnu`,
 		// so a typo would look like success. NoArgs turns it into an "unknown command" error instead.
@@ -170,7 +152,9 @@ func init() {
 	}
 
 	for _, buildCommand := range secretsManagementCommands {
-		RootCmd.AddCommand(buildCommand())
+		legacy := buildCommand()
+		legacy.Hidden = true
+		RootCmd.AddCommand(legacy)
 		secretsManagerCmd.AddCommand(buildCommand())
 	}
 
@@ -191,14 +175,6 @@ func init() {
 			panic(fmt.Sprintf("secrets-manager %s is not registered", path))
 		}
 		requireConfirmation(cmd, describe)
-	}
-
-	for path, usage := range projectIDUsageUnderSecretsManager {
-		cmd, rest, err := secretsManagerCmd.Find(strings.Fields(path))
-		if err != nil || len(rest) != 0 || cmd.Flags().Lookup("projectId") == nil {
-			panic(fmt.Sprintf("secrets-manager %s has no --projectId", path))
-		}
-		cmd.Flags().Lookup("projectId").Usage = usage
 	}
 
 	for _, path := range hiddenUnderSecretsManager {

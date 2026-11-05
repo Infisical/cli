@@ -909,6 +909,19 @@
     "type": "|string|personal",
     "yes": "y|bool|false"
   },
+  "infisical secrets-manager secrets export": {
+    "env": "e|string|dev",
+    "expand": "|bool|true",
+    "format": "f|string|dotenv",
+    "include-imports": "|bool|true",
+    "output-file": "o|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "secret-overriding": "|bool|true",
+    "tags": "t|string|",
+    "template": "|string|",
+    "token": "|string|"
+  },
   "infisical secrets-manager secrets folders": {
     "env": "|string|dev",
     "tags": "t|string|"
@@ -1332,6 +1345,19 @@
     "token": "|string|",
     "type": "|string|personal",
     "yes": "y|bool|false"
+  },
+  "infisical sm secrets export": {
+    "env": "e|string|dev",
+    "expand": "|bool|true",
+    "format": "f|string|dotenv",
+    "include-imports": "|bool|true",
+    "output-file": "o|string|",
+    "path": "|string|/",
+    "projectId": "|string|",
+    "secret-overriding": "|bool|true",
+    "tags": "t|string|",
+    "template": "|string|",
+    "token": "|string|"
   },
   "infisical sm secrets folders": {
     "env": "|string|dev",
