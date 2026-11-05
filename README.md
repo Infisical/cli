@@ -101,6 +101,21 @@ go build -o infisical .
 go test ./...
 ```
 
+### Docker Compose
+
+Run Docker Compose through `infisical run` to inject fetched secrets into every
+service:
+
+```bash
+infisical run --env=dev -- docker compose up
+```
+
+The CLI creates a temporary Compose override in the operating system's temporary
+directory and removes it after the command exits. It never modifies the
+original file. Values already defined in a service's `environment` section take
+precedence over Infisical secrets. Use the direct command form shown above; the
+Compose integration does not apply to commands passed through `--command`.
+
 ## Support
 
 - **[Documentation](https://infisical.com/docs/cli/overview)** - Complete guides and reference
