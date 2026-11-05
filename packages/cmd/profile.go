@@ -238,6 +238,7 @@ var profileCurrentCmd = &cobra.Command{
 		}
 		util.PrintlnStdout("Domain:", util.DisplayDomain(profile.Domain))
 		printSecretsManagerDefaults()
+		printAgentVaultProjectForProfile()
 
 		Telemetry.CaptureEvent("cli-command:profile current", posthog.NewProperties().Set("version", util.CLI_VERSION))
 	},

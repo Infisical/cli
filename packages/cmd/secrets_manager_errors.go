@@ -48,6 +48,7 @@ var errorCodes = []string{
 	errCodeEnvironmentExists, errCodeEnvironmentPending, errCodeProjectRequired, errCodeInvalidFlagValue,
 	errCodeProjectDeleteProtected, errCodeInvalidArgument, errCodeServiceTokenUnsupported,
 	errCodeProjectConfigInvalid, errCodeTokenProjectMismatch, errCodeFolderExists,
+	errCodeAccessBundleRequired, errCodeInvalidAccessBundle, errCodeInvalidProjectID, errCodeAccessBundleNotGranted,
 }
 
 const secretsManagerPrefix = "infisical " + secretsManagerCommandName

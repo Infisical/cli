@@ -213,8 +213,8 @@ func classifyGateRefusal(err error) gateRefusal {
 			"agent-vault: refused, Infisical rejected this proxy's token"}
 	}
 	if isSessionGone(err) {
-		return gateRefusal{log.Warn(), decisionBlocked, http.StatusForbidden, "the session is no longer valid",
-			"agent-vault: refused, the session is no longer valid"}
+		return gateRefusal{log.Warn(), decisionBlocked, http.StatusForbidden, "the session is no longer valid, or it belongs to a different Agent Vault project than this proxy",
+			"agent-vault: refused, the session is no longer valid, or it belongs to a different Agent Vault project than this proxy"}
 	}
 	return gateRefusal{log.Error().Err(err), decisionError, http.StatusBadGateway, "failed to resolve the session",
 		"agent-vault: refused, the session could not be resolved"}
@@ -643,7 +643,7 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, t tun
 	case isProxyTokenRejected(err):
 		decision, status, body = decisionError, http.StatusServiceUnavailable, proxyRevokedBody
 	case isSessionGone(err):
-		decision, status, body = decisionBlocked, http.StatusForbidden, "the session is no longer valid"
+		decision, status, body = decisionBlocked, http.StatusForbidden, "the session is no longer valid, or it belongs to a different Agent Vault project than this proxy"
 	case errors.Is(err, errSessionResolve):
 		decision, status, body = decisionError, http.StatusBadGateway, "failed to resolve the session"
 	case err != nil:
