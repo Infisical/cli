@@ -36,11 +36,23 @@ const (
 	operationCallListProjects                      = "CallListProjects"
 	operationCallGetProject                        = "CallGetProject"
 	operationCallCreateProject                     = "CallCreateProject"
+	operationCallGetProjectEnvironments            = "CallGetProjectEnvironments"
+	operationCallGetProjectBySlug                  = "CallGetProjectBySlug"
+	operationCallDeleteProject                     = "CallDeleteProject"
+	operationCallUpdateProject                     = "CallUpdateProject"
+	operationCallGetEnvironmentBySlug              = "CallGetEnvironmentBySlug"
+	operationCallCreateEnvironment                 = "CallCreateEnvironment"
+	operationCallUpdateEnvironment                 = "CallUpdateEnvironment"
+	operationCallDeleteEnvironment                 = "CallDeleteEnvironment"
 	operationCallIsAuthenticated                   = "CallIsAuthenticated"
 	operationCallGetNewAccessTokenWithRefreshToken = "CallGetNewAccessTokenWithRefreshToken"
 	operationCallGetFoldersV1                      = "CallGetFoldersV1"
 	operationCallCreateFolderV1                    = "CallCreateFolderV1"
 	operationCallDeleteFolderV1                    = "CallDeleteFolderV1"
+	operationCallListFolders                       = "CallListFolders"
+	operationCallCreateFolder                      = "CallCreateFolder"
+	operationCallUpdateFolder                      = "CallUpdateFolder"
+	operationCallDeleteFolder                      = "CallDeleteFolder"
 	operationCallDeleteSecretsV3                   = "CallDeleteSecretsV3"
 	operationCallCreateServiceToken                = "CallCreateServiceToken"
 	operationCallUniversalAuthLogin                = "CallUniversalAuthLogin"
@@ -421,23 +433,166 @@ func CallCreateProject(httpClient *resty.Client, request CreateProjectRequest) (
 	return createResponse.Project, nil
 }
 
-func CallGetProjectBySlug(httpClient *resty.Client, slug string) (Project, error) {
-	var projectResponse GetProjectBySlugResponse
+func CallGetProjectEnvironments(httpClient *resty.Client, projectID string) (ProjectEnvironments, error) {
+	var projectResponse GetProjectEnvironmentsResponse
 	response, err := httpClient.
 		R().
 		SetResult(&projectResponse).
 		SetHeader("User-Agent", USER_AGENT).
-		Get(fmt.Sprintf("%v/v1/projects/slug/%s", config.INFISICAL_URL, url.PathEscape(slug)))
+		Get(fmt.Sprintf("%v/v1/projects/%s", config.INFISICAL_URL, url.PathEscape(projectID)))
 
 	if err != nil {
-		return Project{}, NewGenericRequestError("CallGetProjectBySlug", err)
+		return ProjectEnvironments{}, NewGenericRequestError(operationCallGetProjectEnvironments, err)
 	}
 
 	if response.IsError() {
-		return Project{}, NewAPIErrorWithResponse("CallGetProjectBySlug", response, nil)
+		return ProjectEnvironments{}, NewAPIErrorWithResponse(operationCallGetProjectEnvironments, response, nil)
 	}
 
-	return Project(projectResponse), nil
+	return projectResponse.Project, nil
+}
+
+// CallGetEnvironmentBySlug finds an active environment; one pending deletion is a 404.
+func CallGetEnvironmentBySlug(httpClient *resty.Client, projectID, slug string) (Environment, error) {
+	var environmentResponse EnvironmentResponse
+	response, err := httpClient.
+		R().
+		SetResult(&environmentResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/projects/%s/environments/slug/%s", config.INFISICAL_URL, url.PathEscape(projectID), url.PathEscape(slug)))
+
+	if err != nil {
+		return Environment{}, NewGenericRequestError(operationCallGetEnvironmentBySlug, err)
+	}
+
+	if response.IsError() {
+		return Environment{}, NewAPIErrorWithResponse(operationCallGetEnvironmentBySlug, response, nil)
+	}
+
+	return environmentResponse.Environment, nil
+}
+
+func CallCreateEnvironment(httpClient *resty.Client, projectID string, request CreateEnvironmentRequest) (Environment, error) {
+	var environmentResponse EnvironmentResponse
+	response, err := httpClient.
+		R().
+		SetBody(request).
+		SetResult(&environmentResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Post(fmt.Sprintf("%v/v1/projects/%s/environments", config.INFISICAL_URL, url.PathEscape(projectID)))
+
+	if err != nil {
+		return Environment{}, NewGenericRequestError(operationCallCreateEnvironment, err)
+	}
+
+	if response.IsError() {
+		return Environment{}, NewAPIErrorWithResponse(operationCallCreateEnvironment, response, nil)
+	}
+
+	return environmentResponse.Environment, nil
+}
+
+func CallUpdateEnvironment(httpClient *resty.Client, projectID, environmentID string, request UpdateEnvironmentRequest) (Environment, error) {
+	var environmentResponse EnvironmentResponse
+	response, err := httpClient.
+		R().
+		SetBody(request).
+		SetResult(&environmentResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Patch(fmt.Sprintf("%v/v1/projects/%s/environments/%s", config.INFISICAL_URL, url.PathEscape(projectID), url.PathEscape(environmentID)))
+
+	if err != nil {
+		return Environment{}, NewGenericRequestError(operationCallUpdateEnvironment, err)
+	}
+
+	if response.IsError() {
+		return Environment{}, NewAPIErrorWithResponse(operationCallUpdateEnvironment, response, nil)
+	}
+
+	return environmentResponse.Environment, nil
+}
+
+// CallDeleteEnvironment soft-deletes the environment, or permanently deletes it with hardDelete. Backends
+// without soft delete ignore hardDelete and always delete permanently; their response has no deleteAfter.
+func CallDeleteEnvironment(httpClient *resty.Client, projectID, environmentID string, hardDelete bool) (Environment, error) {
+	var environmentResponse EnvironmentResponse
+	request := httpClient.
+		R().
+		SetResult(&environmentResponse).
+		SetHeader("User-Agent", USER_AGENT)
+	if hardDelete {
+		request.SetQueryParam("hardDelete", "true")
+	}
+	response, err := request.Delete(fmt.Sprintf("%v/v1/projects/%s/environments/%s", config.INFISICAL_URL, url.PathEscape(projectID), url.PathEscape(environmentID)))
+
+	if err != nil {
+		return Environment{}, NewGenericRequestError(operationCallDeleteEnvironment, err)
+	}
+
+	if response.IsError() {
+		return Environment{}, NewAPIErrorWithResponse(operationCallDeleteEnvironment, response, nil)
+	}
+
+	return environmentResponse.Environment, nil
+}
+
+func CallDeleteProject(httpClient *resty.Client, projectID string) (ProjectDetails, error) {
+	var deleteResponse DeleteProjectResponse
+	response, err := httpClient.
+		R().
+		SetResult(&deleteResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Delete(fmt.Sprintf("%v/v1/projects/%s", config.INFISICAL_URL, url.PathEscape(projectID)))
+
+	if err != nil {
+		return ProjectDetails{}, NewGenericRequestError(operationCallDeleteProject, err)
+	}
+
+	if response.IsError() {
+		return ProjectDetails{}, NewAPIErrorWithResponse(operationCallDeleteProject, response, nil)
+	}
+
+	return deleteResponse.Project, nil
+}
+
+func CallUpdateProject(httpClient *resty.Client, projectID string, request UpdateProjectRequest) (ProjectDetails, error) {
+	var updateResponse UpdateProjectResponse
+	response, err := httpClient.
+		R().
+		SetBody(request).
+		SetResult(&updateResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Patch(fmt.Sprintf("%v/v1/projects/%s", config.INFISICAL_URL, url.PathEscape(projectID)))
+
+	if err != nil {
+		return ProjectDetails{}, NewGenericRequestError(operationCallUpdateProject, err)
+	}
+
+	if response.IsError() {
+		return ProjectDetails{}, NewAPIErrorWithResponse(operationCallUpdateProject, response, nil)
+	}
+
+	return updateResponse.Project, nil
+}
+
+// CallGetProjectBySlug finds an active project in the token's organization; one pending deletion is a 404.
+func CallGetProjectBySlug(httpClient *resty.Client, slug string) (ProjectSettings, error) {
+	var project ProjectSettings
+	response, err := httpClient.
+		R().
+		SetResult(&project).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/projects/slug/%s", config.INFISICAL_URL, url.PathEscape(slug)))
+
+	if err != nil {
+		return ProjectSettings{}, NewGenericRequestError(operationCallGetProjectBySlug, err)
+	}
+
+	if response.IsError() {
+		return ProjectSettings{}, NewAPIErrorWithResponse(operationCallGetProjectBySlug, response, nil)
+	}
+
+	return project, nil
 }
 
 func CallGetPkiApplicationByName(httpClient *resty.Client, name string) (PkiApplication, error) {
@@ -603,6 +758,88 @@ func CallDeleteFolderV1(httpClient *resty.Client, request DeleteFolderV1Request)
 	}
 
 	return folderResponse, nil
+}
+
+func CallListFolders(httpClient *resty.Client, projectID, environment, path string) ([]Folder, error) {
+	var listResponse ListFoldersResponse
+	response, err := httpClient.
+		R().
+		SetResult(&listResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		SetQueryParam("projectId", projectID).
+		SetQueryParam("environment", environment).
+		SetQueryParam("path", path).
+		Get(fmt.Sprintf("%v/v2/folders", config.INFISICAL_URL))
+
+	if err != nil {
+		return nil, NewGenericRequestError(operationCallListFolders, err)
+	}
+
+	if response.IsError() {
+		return nil, NewAPIErrorWithResponse(operationCallListFolders, response, nil)
+	}
+
+	return listResponse.Folders, nil
+}
+
+func CallCreateFolder(httpClient *resty.Client, request CreateFolderRequest) (Folder, error) {
+	var folderResponse FolderResponse
+	response, err := httpClient.
+		R().
+		SetBody(request).
+		SetResult(&folderResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Post(fmt.Sprintf("%v/v2/folders", config.INFISICAL_URL))
+
+	if err != nil {
+		return Folder{}, NewGenericRequestError(operationCallCreateFolder, err)
+	}
+
+	if response.IsError() {
+		return Folder{}, NewAPIErrorWithResponse(operationCallCreateFolder, response, nil)
+	}
+
+	return folderResponse.Folder, nil
+}
+
+func CallUpdateFolder(httpClient *resty.Client, folderID string, request UpdateFolderRequest) (Folder, error) {
+	var folderResponse FolderResponse
+	response, err := httpClient.
+		R().
+		SetBody(request).
+		SetResult(&folderResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Patch(fmt.Sprintf("%v/v2/folders/%s", config.INFISICAL_URL, url.PathEscape(folderID)))
+
+	if err != nil {
+		return Folder{}, NewGenericRequestError(operationCallUpdateFolder, err)
+	}
+
+	if response.IsError() {
+		return Folder{}, NewAPIErrorWithResponse(operationCallUpdateFolder, response, nil)
+	}
+
+	return folderResponse.Folder, nil
+}
+
+func CallDeleteFolder(httpClient *resty.Client, folderID string, request DeleteFolderRequest) (Folder, error) {
+	var folderResponse FolderResponse
+	response, err := httpClient.
+		R().
+		SetBody(request).
+		SetResult(&folderResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Delete(fmt.Sprintf("%v/v2/folders/%s", config.INFISICAL_URL, url.PathEscape(folderID)))
+
+	if err != nil {
+		return Folder{}, NewGenericRequestError(operationCallDeleteFolder, err)
+	}
+
+	if response.IsError() {
+		return Folder{}, NewAPIErrorWithResponse(operationCallDeleteFolder, response, nil)
+	}
+
+	return folderResponse.Folder, nil
 }
 
 func CallDeleteSecretsRawV3(httpClient *resty.Client, request DeleteSecretV3Request) error {

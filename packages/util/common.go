@@ -66,6 +66,13 @@ func GetRestyClientWithPolicy(policy RetryPolicy) (*resty.Client, error) {
 	return applyRetryPolicy(httpClient, policy), nil
 }
 
+// GetRestyClientWithoutCustomHeaders is for hosts other than the Infisical API, such as cloud
+// metadata servers. INFISICAL_CUSTOM_HEADERS often carries proxy or access credentials meant only
+// for Infisical, so it must not reach them.
+func GetRestyClientWithoutCustomHeaders(policy RetryPolicy) *resty.Client {
+	return applyRetryPolicy(resty.New(), policy)
+}
+
 func GetInfisicalCustomHeadersMap() (map[string]string, error) {
 	customHeaders := os.Getenv("INFISICAL_CUSTOM_HEADERS")
 	if customHeaders == "" {
@@ -166,7 +173,8 @@ func FormatOutput[T any](outputFormat string, input T, options *FormatOutputOpti
 	if !slices.Contains(SUPPORTED_OUTPUT_FORMATS, outputFormat) {
 		closestMatch := findClosestMatch(outputFormat, SUPPORTED_OUTPUT_FORMATS)
 
-		errorMessage := fmt.Sprintf("invalid output format: %s. Supported formats are %s.", outputFormat, strings.Join(SUPPORTED_OUTPUT_FORMATS, ", "))
+		// The value is printed as an error, so a credential pasted into -o by mistake must not be.
+		errorMessage := fmt.Sprintf("invalid output format: %s. Supported formats are %s.", SuggestedValue(outputFormat, "output"), strings.Join(SUPPORTED_OUTPUT_FORMATS, ", "))
 
 		if closestMatch != "" {
 			errorMessage += fmt.Sprintf("\nDid you mean '%s'?", closestMatch)

@@ -1,0 +1,12 @@
+{
+  "files": [
+    {
+      "path": "CLI.md",
+      "description": "CLI command conventions: the infisical <product> <resource> <action> structure, the action vocabulary (get without a name lists; create and update instead of set), positional targets and scope flags, -o json|yaml output, the two-sentence error format with a runnable next command, delete confirmation with -y/--yes and --force, and the backwards-compatibility rules (never remove or rename a command or flag, hide it instead). Reference for all changes under packages/cmd/."
+    },
+    {
+      "path": "AGENTS.md",
+      "description": "Repository guide: build and test commands, package layout, telemetry and comment conventions. Reference for all changes."
+    }
+  ]
+}
