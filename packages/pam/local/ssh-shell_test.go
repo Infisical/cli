@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
@@ -99,6 +100,16 @@ func TestRunSSHCommandThroughGateway(t *testing.T) {
 			command:  []string{"exit-7"},
 			wantCode: 7,
 		},
+		{
+			name:       "quotes arguments the remote shell would otherwise split",
+			command:    []string{"sh", "-c", "echo o1 && echo o2", "it's"},
+			wantStdout: "ran: sh -c 'echo o1 && echo o2' 'it'\\''s'\n",
+		},
+		{
+			name:       "passes a single argument through for the remote shell",
+			command:    []string{"echo one && echo $HOME"},
+			wantStdout: "ran: echo one && echo $HOME\n",
+		},
 	}
 
 	for _, tc := range cases {
@@ -120,6 +131,67 @@ func TestRunSSHCommandThroughGateway(t *testing.T) {
 			}
 			if code != tc.wantCode {
 				t.Errorf("exit code = %d, want %d", code, tc.wantCode)
+			}
+			if stdout.String() != tc.wantStdout {
+				t.Errorf("stdout = %q, want %q", stdout.String(), tc.wantStdout)
+			}
+		})
+	}
+}
+
+// Runs the joined command line through a POSIX shell the way sshd does (`sh -c <line>`), so the
+// quoting is checked by what the shell executes rather than by the text it receives.
+func TestShellJoinThroughPOSIXShell(t *testing.T) {
+	shPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no POSIX shell available")
+	}
+
+	cases := []struct {
+		name       string
+		command    []string
+		wantStdout string
+		wantCode   int
+	}{
+		{
+			name:       "keeps an sh -c script intact",
+			command:    []string{"sh", "-c", "echo a && echo b"},
+			wantStdout: "a\nb\n",
+		},
+		{
+			name:     "keeps the exit code of an sh -c script",
+			command:  []string{"sh", "-c", "exit 7"},
+			wantCode: 7,
+		},
+		{
+			name:       "delivers each argument as typed",
+			command:    []string{"printf", `[%s]\n`, "it's", "a  b", "$HOME", "", "*", "x;y", `"q"`, `back\slash`, "l1\nl2"},
+			wantStdout: "[it's]\n[a  b]\n[$HOME]\n[]\n[*]\n[x;y]\n[\"q\"]\n[back\\slash]\n[l1\nl2]\n",
+		},
+		{
+			name:       "lets the shell parse a single argument",
+			command:    []string{"echo one && echo two"},
+			wantStdout: "one\ntwo\n",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			cmd := exec.Command(shPath, "-c", shellJoin(tc.command))
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+
+			code := 0
+			if err := cmd.Run(); err != nil {
+				var exitErr *exec.ExitError
+				if !errors.As(err, &exitErr) {
+					t.Fatalf("run: %v", err)
+				}
+				code = exitErr.ExitCode()
+			}
+			if code != tc.wantCode {
+				t.Errorf("exit code = %d, want %d (stderr %q)", code, tc.wantCode, stderr.String())
 			}
 			if stdout.String() != tc.wantStdout {
 				t.Errorf("stdout = %q, want %q", stdout.String(), tc.wantStdout)
