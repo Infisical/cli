@@ -200,3 +200,42 @@ func TestAgentVaultProjectSourceKind(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveAgentVaultProjectNeverPrintsATokenPastedAsTheProject(t *testing.T) {
+	isolateAgentVaultProject(t)
+	// The shape the server mints: agv_ then 32 random bytes in base64url.
+	const token = "agv_Xq3vR8kLmN2pQ7sT1uW4yZ6aB9cD0eF5gH-jK_oPqRs"
+	t.Setenv(util.INFISICAL_PROJECT_ID_NAME, token)
+
+	_, err := resolveAgentVaultProject(projectIDCmd(t))
+	if err == nil || strings.Contains(err.Error(), token) || !strings.Contains(err.Error(), "<project ID> from "+util.INFISICAL_PROJECT_ID_NAME) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestEchoAgentVaultProjectStaysQuietUnderSilentAndStructuredOutput(t *testing.T) {
+	project := agentVaultProject{ID: projectFromProjEnv, Source: util.INFISICAL_PROJECT_ID_NAME}
+	newCmd := func(args ...string) *cobra.Command {
+		cmd := &cobra.Command{Use: "create", Run: func(*cobra.Command, []string) {}}
+		cmd.Flags().Bool("silent", false, "")
+		cmd.Flags().StringP("output", "o", "", "")
+		if err := cmd.Flags().Parse(args); err != nil {
+			t.Fatal(err)
+		}
+		return cmd
+	}
+
+	for _, args := range [][]string{{"--silent"}, {"-o", "json"}, {"-o", "yaml"}} {
+		stderr := captureStderr(t)
+		echoAgentVaultProject(newCmd(args...), project)
+		if stderr.Len() != 0 {
+			t.Fatalf("%v: printed %q", args, stderr.String())
+		}
+	}
+
+	stderr := captureStderr(t)
+	echoAgentVaultProject(newCmd(), project)
+	if !strings.Contains(stderr.String(), projectFromProjEnv) {
+		t.Fatalf("without --silent or -o: printed %q", stderr.String())
+	}
+}

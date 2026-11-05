@@ -59,7 +59,7 @@ func runAgentVaultSessionsCreate(cmd *cobra.Command, args []string) {
 	}
 	// Checked before the session exists, so a typo never leaves one behind with its token unprinted.
 	if outputFormat != "" && outputFormat != util.OUTPUT_FORMAT_JSON && outputFormat != util.OUTPUT_FORMAT_YAML {
-		util.HandleError(fmt.Errorf("--output must be json or yaml, got %q; leave it out to print only the token", outputFormat))
+		util.HandleError(fmt.Errorf("--output must be json or yaml, got %s; leave it out to print only the token", quoted(outputFormat, "format")))
 	}
 
 	accessBundles, bundleSource, err := resolveAgentVaultAccessBundles(cmd)
@@ -77,7 +77,7 @@ func runAgentVaultSessionsCreate(cmd *cobra.Command, args []string) {
 	if err != nil {
 		util.HandleError(err)
 	}
-	echoAgentVaultProject(project)
+	echoAgentVaultProject(cmd, project)
 
 	ttl, _ := cmd.Flags().GetString("ttl")
 	label, _ := cmd.Flags().GetString("label")

@@ -44,7 +44,7 @@ INFISICAL_PROJECT_ID, in that order.`,
 		if err != nil {
 			util.HandleError(err)
 		}
-		echoAgentVaultProject(project)
+		echoAgentVaultProject(cmd, project)
 
 		identity := resolveAgentVaultIdentityToken(cmd)
 		httpClient, err := util.GetRestyClientWithCustomHeaders()

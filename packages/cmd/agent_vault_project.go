@@ -71,13 +71,16 @@ func agentVaultProjectFrom(value, source string) (agentVaultProject, error) {
 	value = strings.TrimSpace(value)
 	// uuid.Parse also takes the braced and urn: spellings, which the server would refuse.
 	if _, err := uuid.Parse(value); err != nil || len(value) != 36 {
-		return agentVaultProject{}, fmt.Errorf("%q from %s is not a project ID; copy the ID from the Agent Vault project's settings in Infisical", value, source)
+		return agentVaultProject{}, fmt.Errorf("%s from %s is not a project ID; copy the ID from the Agent Vault project's settings in Infisical", quoted(value, "project ID"), source)
 	}
 	return agentVaultProject{ID: strings.ToLower(value), Source: source}, nil
 }
 
 // A flag was typed for this run; anything else is ambient, so the command says which project it picked up.
-func echoAgentVaultProject(project agentVaultProject) {
+func echoAgentVaultProject(cmd *cobra.Command, project agentVaultProject) {
+	if silent, _ := cmd.Flags().GetBool("silent"); silent || isStructuredOutputRequested(cmd) {
+		return
+	}
 	if !project.FromFlag {
 		util.PrintlnStderr(fmt.Sprintf("Agent Vault project %s from %s", project.ID, project.Source))
 	}
