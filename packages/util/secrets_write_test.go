@@ -16,11 +16,10 @@ import (
 	"github.com/Infisical/infisical-merge/packages/models"
 )
 
-// A repeated key is refused before any request: without a server to answer, reaching the network would
-// return a different error.
-func TestWriteRawSecretsRefusesRepeatedKeysBeforeWriting(t *testing.T) {
+// A repeated key is refused from the input alone, so a command can refuse it before any request.
+func TestCollectSecretArgsRefusesRepeatedKeys(t *testing.T) {
 	for _, mode := range []SecretWriteMode{SecretWriteCreateOnly, SecretWriteUpdateOnly} {
-		_, err := WriteRawSecrets(mode, []string{"DUP=a", "OTHER=b", "DUP=b"}, SECRET_TYPE_SHARED, "dev", "/", "project", &models.TokenDetails{}, "", nil)
+		_, err := CollectSecretArgs(mode, []string{"DUP=a", "OTHER=b", "DUP=b"}, "")
 		var repeated *SecretWriteRepeated
 		if !errors.As(err, &repeated) || repeated.Key != "DUP" {
 			t.Errorf("mode %d: got %v", mode, err)
@@ -30,16 +29,56 @@ func TestWriteRawSecretsRefusesRepeatedKeysBeforeWriting(t *testing.T) {
 
 // A .env file becomes a map that keeps the last of repeated keys, so the repeat has to be found in the
 // file itself.
-func TestWriteRawSecretsRefusesRepeatedKeysInADotenvFile(t *testing.T) {
+func TestCollectSecretArgsRefusesRepeatedKeysInADotenvFile(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "secrets.env")
 	if err := os.WriteFile(file, []byte("# comment\nDUP=a\nOTHER=b\n DUP = b\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for _, mode := range []SecretWriteMode{SecretWriteCreateOnly, SecretWriteUpdateOnly} {
-		_, err := WriteRawSecrets(mode, nil, SECRET_TYPE_SHARED, "dev", "/", "project", &models.TokenDetails{}, file, nil)
+		_, err := CollectSecretArgs(mode, nil, file)
 		var repeated *SecretWriteRepeated
 		if !errors.As(err, &repeated) || repeated.Key != "DUP" {
 			t.Errorf("mode %d: got %v", mode, err)
+		}
+	}
+}
+
+// Each argument is checked before anything is sent, including the --tag that WriteRawSecrets creates
+// first. The value is never part of the error, since it can be a credential.
+func TestCollectSecretArgsRefusesArgumentsThatCantBeWritten(t *testing.T) {
+	cases := []struct {
+		args     []string
+		position int
+		key      string
+		problem  SecretArgProblem
+	}{
+		{[]string{"OK=1", "NEW="}, 2, "NEW", SecretArgNoValue},
+		{[]string{"=value"}, 1, "", SecretArgNoName},
+		{[]string{"OK=1", "1KEY=v"}, 2, "1KEY", SecretArgNameStartsWithNumber},
+	}
+	for _, mode := range []SecretWriteMode{SecretWriteCreateOnly, SecretWriteUpdateOnly, SecretWriteUpsert} {
+		for _, c := range cases {
+			_, err := CollectSecretArgs(mode, c.args, "")
+			var invalid *SecretArgInvalid
+			if !errors.As(err, &invalid) || invalid.Position != c.position || invalid.Key != c.key || invalid.Problem != c.problem {
+				t.Errorf("mode %d, %v: got %#v", mode, c.args, err)
+			}
+		}
+	}
+	if args, err := CollectSecretArgs(SecretWriteCreateOnly, []string{"A=1", "B==2"}, ""); err != nil || len(args) != 2 {
+		t.Errorf("valid input: %v %v", args, err)
+	}
+}
+
+// set has always printed these messages for these arguments.
+func TestSecretArgInvalidKeepsSetMessages(t *testing.T) {
+	for problem, want := range map[SecretArgProblem]string{
+		SecretArgNoName:               "ensure that each secret has a none empty key and value. Modify the input and try again",
+		SecretArgNoValue:              "ensure that each secret has a none empty key and value. Modify the input and try again",
+		SecretArgNameStartsWithNumber: "keys of secrets cannot start with a number. Modify the key name(s) and try again",
+	} {
+		if got := (&SecretArgInvalid{Problem: problem}).Error(); got != want {
+			t.Errorf("problem %d: %q", problem, got)
 		}
 	}
 }
@@ -110,7 +149,7 @@ func TestWriteRawSecretsConflictSendsNoWrites(t *testing.T) {
 	for _, c := range cases {
 		fake := &fakeSecretsAPI{}
 		fake.serve(t)
-		_, err := WriteRawSecrets(c.mode, c.args, SECRET_TYPE_SHARED, "dev", "/", "project", identityToken, "", []string{"team"})
+		_, err := WriteRawSecrets(c.mode, c.args, SECRET_TYPE_SHARED, "dev", "/", "project", identityToken, []string{"team"})
 		var conflict *SecretWriteConflict
 		if !errors.As(err, &conflict) || len(conflict.Keys) != 1 || conflict.Keys[0] != c.want {
 			t.Errorf("mode %d: got %v", c.mode, err)
@@ -134,7 +173,7 @@ func TestWriteRawSecretsWritesWhatItWasAsked(t *testing.T) {
 	for _, c := range cases {
 		fake := &fakeSecretsAPI{}
 		fake.serve(t)
-		if _, err := WriteRawSecrets(c.mode, c.args, SECRET_TYPE_SHARED, "dev", "/", "project", identityToken, "", []string{"team"}); err != nil {
+		if _, err := WriteRawSecrets(c.mode, c.args, SECRET_TYPE_SHARED, "dev", "/", "project", identityToken, []string{"team"}); err != nil {
 			t.Errorf("mode %d: %v", c.mode, err)
 		}
 		if got := strings.Join(fake.writes(), ", "); got != strings.Join(c.want, ", ") {
@@ -149,12 +188,46 @@ func TestWriteRawSecretsKeepsServiceTokenAPIErrors(t *testing.T) {
 	fake := &fakeSecretsAPI{expiredServiceToken: true}
 	fake.serve(t)
 	serviceToken := &models.TokenDetails{Type: SERVICE_TOKEN_IDENTIFIER, Token: "st.id.secret.key"}
-	_, err := WriteRawSecrets(SecretWriteCreateOnly, []string{"NEW=1"}, SECRET_TYPE_SHARED, "dev", "/", "project", serviceToken, "", nil)
+	_, err := WriteRawSecrets(SecretWriteCreateOnly, []string{"NEW=1"}, SECRET_TYPE_SHARED, "dev", "/", "project", serviceToken, nil)
 	var apiErr *api.APIError
 	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusUnauthorized {
 		t.Errorf("got %v", err)
 	}
 	if !strings.Contains(err.Error(), "unable to retrieve secrets") {
 		t.Errorf("the message must read as before: %v", err)
+	}
+}
+
+// A --file that can't be written from is an error the command formats, never an exit from here, and
+// keeps the message set has always printed.
+func TestCollectSecretArgsReturnsFileProblems(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	cases := []struct {
+		file    string
+		problem SecretFileProblem
+		key     string
+		message string
+	}{
+		{filepath.Join(dir, "missing.env"), SecretFileNotFound, "", "File does not exist"},
+		{write("bad.yaml", "A: [unclosed\n"), SecretFileUnparsable, "", "error parsing secrets: "},
+		{write("digit.env", "1KEY=v\n"), SecretFileInvalidKey, "1KEY", "secret key '1KEY' cannot start with a number"},
+		{write("empty-value.env", "KEY=\n"), SecretFileEmptyValue, "KEY", "Secret key 'KEY' has an empty value"},
+		{write("nothing.env", "# only a comment\n"), SecretFileNoSecrets, "", "no valid secrets found in the file"},
+	}
+	for _, mode := range []SecretWriteMode{SecretWriteCreateOnly, SecretWriteUpdateOnly, SecretWriteUpsert} {
+		for _, c := range cases {
+			_, err := CollectSecretArgs(mode, nil, c.file)
+			var badFile *SecretFileInvalid
+			if !errors.As(err, &badFile) || badFile.Problem != c.problem || badFile.Key != c.key || !strings.HasPrefix(err.Error(), c.message) {
+				t.Errorf("mode %d, %s: got %#v (%v)", mode, filepath.Base(c.file), err, err)
+			}
+		}
 	}
 }

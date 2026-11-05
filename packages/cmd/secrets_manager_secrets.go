@@ -20,7 +20,7 @@ func namespaceSecretsCmd(secretsCmd *cobra.Command) {
 	get.Args = cobra.ArbitraryArgs
 	get.Run = func(cmd *cobra.Command, args []string) {
 		if len(args) == 0 {
-			runSecrets(cmd, args)
+			listSecrets(cmd, true)
 			return
 		}
 		getByNames(cmd, args)

@@ -34,6 +34,7 @@ type fakeEnvironmentsAPI struct {
 	missing     bool // GET /v1/projects/:id is a 404
 	projectName string
 	oldBackend  bool // no GET /v1/projects/:id/environments/slug/:slug route, as before backend v0.161.9
+	slugGone    bool // the project lists staging, but the slug lookup no longer finds it
 	mu          sync.Mutex
 	requests    []string
 }
@@ -83,7 +84,14 @@ func (f *fakeEnvironmentsAPI) serve(t *testing.T) {
 					{"id": testPendingID, "name": "QA", "slug": "qa", "deleteAfter": "2026-11-12T10:00:00.000Z"},
 				},
 			}})
-		case r.Method == http.MethodGet && path == "/environments/slug/staging" && !f.oldBackend:
+		case r.Method == http.MethodGet && path == "/environments/slug/staging" && f.oldBackend:
+			// The backend's not-found handler for a route it doesn't have.
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = fmt.Fprintf(w, `{"reqId":"req-route","statusCode":404,"message":"Route GET:%s not found","error":"Not Found","documentationUrl":"https://infisical.com/docs/api-reference"}`, r.URL.Path)
+		case r.Method == http.MethodGet && path == "/environments/slug/staging" && f.slugGone:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"reqId":"req-gone","statusCode":404,"message":"Environment with slug 'staging' not found","error":"NotFound"}`))
+		case r.Method == http.MethodGet && path == "/environments/slug/staging":
 			_, _ = fmt.Fprintf(w, `{"environment":{"id":%q,"name":"Staging","slug":"staging","position":2,"projectId":%q}}`, testEnvironmentID, testProjectID)
 		case r.Method == http.MethodGet:
 			notFound()
@@ -550,5 +558,21 @@ func TestEnvironmentsAreRegisteredOnlyUnderSecretsManager(t *testing.T) {
 	}
 	if cmd, _, _ := RootCmd.Find([]string{"environments"}); cmd != RootCmd {
 		t.Error("environments must not be added at the top level")
+	}
+}
+
+// A 404 from the slug route itself means the environment is gone, even though the project listed it a
+// moment before: that's environment_not_found, not the older-backend fallback.
+func TestEnvironmentsGetReportsAnEnvironmentThatDisappeared(t *testing.T) {
+	stderr, stdout, exited := runEnvironments(t, &fakeEnvironmentsAPI{slugGone: true}, "get", "staging", "--projectId", testProjectID, "-o", "json")
+	var failure struct {
+		Error struct {
+			Code      string `json:"code"`
+			RequestID string `json:"requestId"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal([]byte(stderr), &failure)
+	if !exited || stdout != "" || failure.Error.Code != errCodeEnvironmentNotFound || failure.Error.RequestID != "req-gone" {
+		t.Errorf("exited=%v stdout=%q stderr=%s", exited, stdout, stderr)
 	}
 }

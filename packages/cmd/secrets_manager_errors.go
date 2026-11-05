@@ -239,6 +239,40 @@ func errSecretAssignmentInvalid(position int) *util.CLIError {
 		Message: fmt.Sprintf("Argument %d isn't in NAME=value form: pass each secret as NAME=value or NAME=@filepath. Nothing was written.", position)}
 }
 
+// errSecretArgumentInvalid names the secret by its key, never by its value, which may be a credential.
+func errSecretArgumentInvalid(invalid *util.SecretArgInvalid) *util.CLIError {
+	var problem string
+	switch invalid.Problem {
+	case util.SecretArgNoName:
+		problem = fmt.Sprintf("Argument %d has no secret name: pass it as NAME=value.", invalid.Position)
+	case util.SecretArgNoValue:
+		problem = fmt.Sprintf("Secret %s has no value: pass it as NAME=value or NAME=@filepath.", quoted(invalid.Key, "name"))
+	default:
+		problem = fmt.Sprintf("Secret name %s starts with a number: secret names must start with a letter or an underscore.", quoted(invalid.Key, "name"))
+	}
+	return &util.CLIError{Code: errCodeInvalidArgument, Message: problem + " Nothing was written."}
+}
+
+func errSecretFileInvalid(badFile *util.SecretFileInvalid) *util.CLIError {
+	file := quoted(badFile.File, "file")
+	var problem string
+	switch badFile.Problem {
+	case util.SecretFileNotFound:
+		problem = fmt.Sprintf("--file %s doesn't exist.", file)
+	case util.SecretFileUnreadable:
+		problem = fmt.Sprintf("--file %s can't be read.", file)
+	case util.SecretFileUnparsable:
+		problem = fmt.Sprintf("--file %s isn't a valid .env or YAML file.", file)
+	case util.SecretFileInvalidKey:
+		problem = fmt.Sprintf("Secret name %s in --file %s isn't valid: names can't be empty, start with a number, or contain spaces.", quoted(badFile.Key, "name"), file)
+	case util.SecretFileEmptyValue:
+		problem = fmt.Sprintf("Secret %s in --file %s has no value.", quoted(badFile.Key, "name"), file)
+	default:
+		problem = fmt.Sprintf("--file %s has no secrets.", file)
+	}
+	return &util.CLIError{Code: errCodeInvalidFlagValue, Message: problem + " Nothing was written."}
+}
+
 func errServiceTokenProjectMismatch(selected, tokenProject string) *util.CLIError {
 	return &util.CLIError{Code: errCodeTokenProjectMismatch,
 		Message: fmt.Sprintf("The service token is for project %s, not the selected project %s. Nothing was written: use a token for %s, or pass --projectId %s.",
@@ -311,6 +345,18 @@ func errConfirmationRequired(action destructiveAction, rerun string) *util.CLIEr
 	return &util.CLIError{Code: errCodeConfirmationRequired,
 		Message: fmt.Sprintf("Deleting %s needs confirmation, and there's no terminal to ask. Nothing was deleted.", action.Target),
 		Next:    []util.NextStep{{Purpose: "To delete it without asking", Command: rerun}}}
+}
+
+// errConfirmedTargetChanged is for a delete whose environment, path or project resolved differently
+// after the question was answered than when it was asked. before is empty when the target can no longer
+// be resolved at all.
+func errConfirmedTargetChanged(action destructiveAction, before, after scopeFlag) *util.CLIError {
+	message := fmt.Sprintf("Nothing was deleted: the target of the delete of %s changed while you were confirming. Run the command again.", action.Target)
+	if before.Name != "" {
+		message = fmt.Sprintf("Nothing was deleted: --%s changed from %s to %s while you were confirming the delete of %s. Run the command again.",
+			before.Name, quoted(before.Value, before.Name), quoted(after.Value, after.Name), action.Target)
+	}
+	return &util.CLIError{Code: errCodeConfirmationDeclined, Message: message}
 }
 
 func errConfirmationDeclined(action destructiveAction) *util.CLIError {

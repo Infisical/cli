@@ -683,20 +683,73 @@ func (e *SecretWriteRepeated) Error() string {
 	return fmt.Sprintf("secret %s is given more than once", e.Key)
 }
 
-func SetRawSecrets(secretArgs []string, secretType string, environmentName string, secretsPath string, projectId string, tokenDetails *models.TokenDetails, file string, tagSlugs []string) ([]models.SecretSetOperation, error) {
-	return WriteRawSecrets(SecretWriteUpsert, secretArgs, secretType, environmentName, secretsPath, projectId, tokenDetails, file, tagSlugs)
+// SecretArgProblem is what's wrong with one NAME=value argument.
+type SecretArgProblem int
+
+const (
+	SecretArgNoName SecretArgProblem = iota
+	SecretArgNoValue
+	SecretArgNameStartsWithNumber
+)
+
+type SecretArgInvalid struct {
+	Position int // 1-based, among the arguments, before the secrets read from a file
+	Key      string
+	Problem  SecretArgProblem
 }
 
-// CollectSecretArgs adds the secrets in file to secretArgs. For create and update it also refuses a
-// repeated name. It reads only local input, so a command can run it before any request.
+func (e *SecretArgInvalid) Error() string {
+	if e.Problem == SecretArgNameStartsWithNumber {
+		return "keys of secrets cannot start with a number. Modify the key name(s) and try again"
+	}
+	return "ensure that each secret has a none empty key and value. Modify the input and try again"
+}
+
+type SecretFileProblem int
+
+const (
+	SecretFileNotFound SecretFileProblem = iota
+	SecretFileUnreadable
+	SecretFileUnparsable
+	SecretFileInvalidKey
+	SecretFileEmptyValue
+	SecretFileNoSecrets
+)
+
+// SecretFileInvalid is a --file whose secrets can't be written. Error returns the message set has
+// always printed for it.
+type SecretFileInvalid struct {
+	File    string
+	Key     string
+	Problem SecretFileProblem
+	message string
+}
+
+func (e *SecretFileInvalid) Error() string { return e.message }
+
+// CollectSecretArgs checks the NAME=value arguments and adds the secrets in file to them, so
+// WriteRawSecrets gets only secrets it can write. For create and update it also refuses a repeated
+// name. It reads only local input, so a command runs it before any request
 func CollectSecretArgs(mode SecretWriteMode, secretArgs []string, file string) ([]string, error) {
+	for i, arg := range secretArgs {
+		key, value, _ := strings.Cut(arg, "=")
+		switch {
+		case key == "":
+			return nil, &SecretArgInvalid{Position: i + 1, Problem: SecretArgNoName}
+		case value == "":
+			return nil, &SecretArgInvalid{Position: i + 1, Key: key, Problem: SecretArgNoValue}
+		case unicode.IsNumber(rune(key[0])):
+			return nil, &SecretArgInvalid{Position: i + 1, Key: key, Problem: SecretArgNameStartsWithNumber}
+		}
+	}
+
 	if file != "" {
 		content, err := os.ReadFile(file)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				PrintErrorMessageAndExit("File does not exist")
+				return nil, &SecretFileInvalid{File: file, Problem: SecretFileNotFound, message: "File does not exist"}
 			}
-			return nil, fmt.Errorf("unable to process file [err=%v]", err)
+			return nil, &SecretFileInvalid{File: file, Problem: SecretFileUnreadable, message: fmt.Sprintf("unable to process file [err=%v]", err)}
 		}
 
 		// parseSecrets keeps the last of repeated .env keys, as set always has. YAML rejects them itself.
@@ -708,22 +761,22 @@ func CollectSecretArgs(mode SecretWriteMode, secretArgs []string, file string) (
 
 		parsedSecrets, err := parseSecrets(file, string(content))
 		if err != nil {
-			PrintErrorMessageAndExit(fmt.Sprintf("error parsing secrets: %v", err))
+			return nil, &SecretFileInvalid{File: file, Problem: SecretFileUnparsable, message: fmt.Sprintf("error parsing secrets: %v", err)}
 		}
 
 		// Step 2: Validate secrets
 		for key, value := range parsedSecrets {
 			if err := validateSecretKey(key); err != nil {
-				PrintErrorMessageAndExit(err.Error())
+				return nil, &SecretFileInvalid{File: file, Key: key, Problem: SecretFileInvalidKey, message: err.Error()}
 			}
 			if strings.TrimSpace(value) == "" {
-				PrintErrorMessageAndExit(fmt.Sprintf("Secret key '%s' has an empty value", key))
+				return nil, &SecretFileInvalid{File: file, Key: key, Problem: SecretFileEmptyValue, message: fmt.Sprintf("Secret key '%s' has an empty value", key)}
 			}
 			secretArgs = append(secretArgs, fmt.Sprintf("%s=%s", key, value))
 		}
 
 		if len(secretArgs) == 0 {
-			PrintErrorMessageAndExit("no valid secrets found in the file")
+			return nil, &SecretFileInvalid{File: file, Problem: SecretFileNoSecrets, message: "no valid secrets found in the file"}
 		}
 	}
 
@@ -741,12 +794,7 @@ func CollectSecretArgs(mode SecretWriteMode, secretArgs []string, file string) (
 	return secretArgs, nil
 }
 
-func WriteRawSecrets(mode SecretWriteMode, secretArgs []string, secretType string, environmentName string, secretsPath string, projectId string, tokenDetails *models.TokenDetails, file string, tagSlugs []string) ([]models.SecretSetOperation, error) {
-	secretArgs, err := CollectSecretArgs(mode, secretArgs, file)
-	if err != nil {
-		return nil, err
-	}
-
+func WriteRawSecrets(mode SecretWriteMode, secretArgs []string, secretType string, environmentName string, secretsPath string, projectId string, tokenDetails *models.TokenDetails, tagSlugs []string) ([]models.SecretSetOperation, error) {
 	if tokenDetails == nil {
 		return nil, fmt.Errorf("unable to process set secret operations, token details are missing")
 	}
@@ -832,18 +880,7 @@ func WriteRawSecrets(mode SecretWriteMode, secretArgs []string, secretType strin
 	secretOperations := []models.SecretSetOperation{}
 
 	for _, arg := range secretArgs {
-		splitKeyValueFromArg := strings.SplitN(arg, "=", 2)
-		if splitKeyValueFromArg[0] == "" || splitKeyValueFromArg[1] == "" {
-			PrintErrorMessageAndExit("ensure that each secret has a none empty key and value. Modify the input and try again")
-		}
-
-		if unicode.IsNumber(rune(splitKeyValueFromArg[0][0])) {
-			PrintErrorMessageAndExit("keys of secrets cannot start with a number. Modify the key name(s) and try again")
-		}
-
-		// Key and value from argument
-		key := splitKeyValueFromArg[0]
-		value := splitKeyValueFromArg[1]
+		key, value, _ := strings.Cut(arg, "=")
 
 		var existingSecret models.SingleEnvironmentVariable
 		var doesSecretExist bool
