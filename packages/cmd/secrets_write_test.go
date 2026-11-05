@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -150,5 +152,100 @@ func TestSecretWriteRefusesRepeatedNamesBeforeAnyRequest(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// Arguments that can't be written are refused from the input alone, so a --tag is never created for a
+// write that then fails. The value is never repeated: it can be a pasted credential.
+func TestSecretWriteRefusesArgumentsThatCantBeWrittenBeforeAnyRequest(t *testing.T) {
+	cases := map[string]struct {
+		arg  string
+		want string
+	}{
+		"no value": {"NEW=", `Secret "NEW" has no value: pass it as NAME=value or NAME=@filepath. Nothing was written.`},
+		"no name":  {"=hunter2-value", "Argument 1 has no secret name: pass it as NAME=value. Nothing was written."},
+		// quoted shows a name that isn't a valid one as <name>, so a pasted token can't reach the message.
+		"name starts with digit": {"1KEY=hunter2-value", "Secret name <name> starts with a number: secret names must start with a letter or an underscore. Nothing was written."},
+	}
+	for name, c := range cases {
+		for _, action := range []string{"create", "update"} {
+			fake := &fakeServiceTokenAPI{}
+			fake.serve(t)
+			setup := func() { t.Setenv(util.INFISICAL_TOKEN_NAME, "identity-access-token") }
+			stderr, _, exited := runUnderSecretsManagerAfter(t, setup, buildNamespacedSecretsCmd,
+				"secrets", action, c.arg, "--tag", "newtag", "--projectId", tokenProjectID, "-o", "json")
+			var failure struct {
+				Error struct {
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			_ = json.Unmarshal([]byte(stderr), &failure)
+			if !exited || errorCode(t, stderr) != errCodeInvalidArgument || failure.Error.Message != c.want || strings.Contains(stderr, "hunter2") {
+				t.Errorf("%s, %s: exited=%v stderr=%s", name, action, exited, stderr)
+			}
+			if len(fake.requests) != 0 {
+				t.Errorf("%s, %s: sent %v", name, action, fake.requests)
+			}
+		}
+	}
+}
+
+// For create and update, a --file that can't be written from is an invalid_flag_value document on
+// stderr with -o json, sent before any request, and never repeats a value from the file.
+func TestSecretWriteFileProblemsAreStructured(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	files := map[string]string{
+		"missing":     filepath.Join(dir, "missing.env"),
+		"unparsable":  write("bad.yaml", "A: [hunter2-value\n"),
+		"invalid key": write("digit.env", "1KEY=hunter2-value\n"),
+		"empty value": write("empty.env", "NEW=\n"),
+		"no secrets":  write("nothing.env", "# comment\n"),
+	}
+	for name, file := range files {
+		for _, action := range []string{"create", "update"} {
+			fake := &fakeServiceTokenAPI{}
+			fake.serve(t)
+			setup := func() { t.Setenv(util.INFISICAL_TOKEN_NAME, "identity-access-token") }
+			stderr, _, exited := runUnderSecretsManagerAfter(t, setup, buildNamespacedSecretsCmd,
+				"secrets", action, "--file", file, "--projectId", tokenProjectID, "-o", "json")
+			var failure struct {
+				Error struct {
+					Code    string `json:"code"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal([]byte(stderr), &failure); err != nil || !exited || failure.Error.Code != errCodeInvalidFlagValue ||
+				!strings.HasSuffix(failure.Error.Message, "Nothing was written.") || strings.Contains(stderr, "hunter2") {
+				t.Errorf("%s, %s: exited=%v stderr=%s", name, action, exited, stderr)
+			}
+			if len(fake.requests) != 0 {
+				t.Errorf("%s, %s: sent %v", name, action, fake.requests)
+			}
+		}
+	}
+}
+
+// --plain prints only values, one per line, for the secrets-manager listing as it does for names. The
+// top-level `infisical secrets --plain` keeps its NAME=value lines.
+func TestPlainListingPrintsValues(t *testing.T) {
+	setup := func() { t.Setenv(util.INFISICAL_TOKEN_NAME, "identity-access-token") }
+	fake := &fakeServiceTokenAPI{}
+	fake.serve(t)
+	_, stdout, exited := runUnderSecretsManagerAfter(t, setup, buildNamespacedSecretsCmd, "secrets", "get", "--plain", "--projectId", tokenProjectID)
+	if exited || stdout != "same\n" {
+		t.Errorf("secrets-manager secrets get --plain: exited=%v stdout=%q", exited, stdout)
+	}
+	fake = &fakeServiceTokenAPI{}
+	fake.serve(t)
+	_, stdout, exited = runUnderSecretsManagerAfter(t, setup, buildSecretsCmd, "secrets", "--plain", "--projectId", tokenProjectID)
+	if exited || stdout != "EXISTING=same\n" {
+		t.Errorf("top-level secrets --plain: exited=%v stdout=%q", exited, stdout)
 	}
 }

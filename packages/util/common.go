@@ -173,7 +173,8 @@ func FormatOutput[T any](outputFormat string, input T, options *FormatOutputOpti
 	if !slices.Contains(SUPPORTED_OUTPUT_FORMATS, outputFormat) {
 		closestMatch := findClosestMatch(outputFormat, SUPPORTED_OUTPUT_FORMATS)
 
-		errorMessage := fmt.Sprintf("invalid output format: %s. Supported formats are %s.", outputFormat, strings.Join(SUPPORTED_OUTPUT_FORMATS, ", "))
+		// The value is printed as an error, so a credential pasted into -o by mistake must not be.
+		errorMessage := fmt.Sprintf("invalid output format: %s. Supported formats are %s.", SuggestedValue(outputFormat, "output"), strings.Join(SUPPORTED_OUTPUT_FORMATS, ", "))
 
 		if closestMatch != "" {
 			errorMessage += fmt.Sprintf("\nDid you mean '%s'?", closestMatch)

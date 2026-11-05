@@ -188,7 +188,7 @@ func TestExceptionOverridesBundleHostsPolicy(t *testing.T) {
 				t.Fatalf("bestMatch(%q) = %v, want %v", tc.host, matched, tc.wantMatch)
 			}
 
-			if blocked := ps.blocksOffBundle(matched, tc.host, "443"); blocked != tc.wantBlock {
+			if blocked := ps.currentConfig().blocksOffBundle(matched, tc.host, "443"); blocked != tc.wantBlock {
 				t.Errorf("blocked = %v, want %v", blocked, tc.wantBlock)
 			}
 		})
@@ -214,7 +214,7 @@ func TestExceptionPortScope(t *testing.T) {
 		{"pkg.example.com", "443", false, "naming a port still scopes the entry to it"},
 		{"other.example.com", "80", false, "a host that is not on the list"},
 	} {
-		if got := ps.isAllowedHost(tc.host, tc.port); got != tc.want {
+		if got := ps.currentConfig().isAllowedHost(tc.host, tc.port); got != tc.want {
 			t.Errorf("isAllowedHost(%q, %q) = %v, want %v: %s", tc.host, tc.port, got, tc.want, tc.why)
 		}
 	}

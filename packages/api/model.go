@@ -137,8 +137,6 @@ type GetProjectByIdResponse struct {
 	Project Project `json:"workspace"`
 }
 
-type GetProjectBySlugResponse Project
-
 type PkiApplication struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`

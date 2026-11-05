@@ -28,10 +28,16 @@
     "ca-key": "|string|",
     "data-dir": "|string|",
     "enrollment-token": "|string|",
+    "listen-host": "|string|",
     "log-file": "|string|",
     "log-format": "|string|console",
     "port": "|int|17323",
-    "proxy-token": "|string|"
+    "proxy-token": "|string|",
+    "socks5-allow-private-destinations": "|bool|false",
+    "socks5-port": "|int|0",
+    "socks5-tls-cert": "|string|",
+    "socks5-tls-key": "|string|",
+    "socks5-tls-name": "|string|"
   },
   "infisical agent-vault run": {
     "access-bundle": "|stringArray|[]",
@@ -60,10 +66,16 @@
     "ca-key": "|string|",
     "data-dir": "|string|",
     "enrollment-token": "|string|",
+    "listen-host": "|string|",
     "log-file": "|string|",
     "log-format": "|string|console",
     "port": "|int|17323",
-    "proxy-token": "|string|"
+    "proxy-token": "|string|",
+    "socks5-allow-private-destinations": "|bool|false",
+    "socks5-port": "|int|0",
+    "socks5-tls-cert": "|string|",
+    "socks5-tls-key": "|string|",
+    "socks5-tls-name": "|string|"
   },
   "infisical av run": {
     "access-bundle": "|stringArray|[]",
