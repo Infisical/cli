@@ -115,3 +115,22 @@ jobs:
           output=$($HOME/.npm-global/lib/node_modules/@infisical/cli/bin/update-hint)
           echo "Output: $output"
           echo "$output" | grep -q "npm update -g @infisical/cli" || (echo "Expected npm instruction, got: $output" && exit 1)
+
+      # The runner has apt-get, so without install-source detection this falls
+      # through to the apt instruction. Asserting empty output is what makes
+      # this a real regression test for the nix case.
+      - name: Test nix path detection
+        run: |
+          mkdir -p $HOME/nix/store/abc123-infisical-0.0.1/bin
+          cp update-hint $HOME/nix/store/abc123-infisical-0.0.1/bin/update-hint
+          output=$($HOME/nix/store/abc123-infisical-0.0.1/bin/update-hint)
+          echo "Output: $output"
+          [ -z "$output" ] || (echo "Expected no instruction for nix, got: $output" && exit 1)
+
+      - name: Test linuxbrew path detection
+        run: |
+          mkdir -p $HOME/linuxbrew/.linuxbrew/bin
+          cp update-hint $HOME/linuxbrew/.linuxbrew/bin/update-hint
+          output=$($HOME/linuxbrew/.linuxbrew/bin/update-hint)
+          echo "Output: $output"
+          echo "$output" | grep -q "brew update" || (echo "Expected brew instruction, got: $output" && exit 1)
