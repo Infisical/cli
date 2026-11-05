@@ -107,7 +107,8 @@ func resolveDomain(cmd *cobra.Command, flagValue string) string {
 	}
 
 	// Agent Vault commands send session tokens and mint sessions, and a .infisical.yaml can arrive with a cloned
-	// repo, so they use only a domain the user chose: the flag, the variables, or the logged-in profile.
+	// repo, so they skip it. The domain comes from the flag, the variables, or the logged-in profile (applied when the
+	// login loads).
 	if isAgentVaultCommand(cmd) {
 		return flagValue
 	}
