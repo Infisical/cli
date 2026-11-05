@@ -88,6 +88,16 @@ Download binaries from [GitHub Releases](https://github.com/Infisical/cli/releas
 - **[Commands Reference](https://infisical.com/docs/cli/commands)** - All available commands
 - **[FAQ](https://infisical.com/docs/cli/faq)** - Common questions and troubleshooting
 
+## Shell Integration
+
+To automatically run selected Zsh commands through `infisical run`, add this to your `.zshrc`:
+
+```zsh
+eval "$(infisical shell-init zsh)"
+```
+
+The integration wraps commands beginning with `npm`, `pnpm`, `bun`, or `node`.
+
 ## Contributing
 
 We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
