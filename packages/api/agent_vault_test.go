@@ -74,3 +74,68 @@ func TestCreateAgentVaultSessionRequestSendsALabelOnlyWhenGiven(t *testing.T) {
 		t.Errorf("want the label in the body, got %s", labeled)
 	}
 }
+
+func TestCreateAgentVaultSessionRejectsAnEmptySession(t *testing.T) {
+	// An auth proxy redirects the POST to its login page, which answers 200 with HTML.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/login" {
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte("<html>sign in</html>"))
+			return
+		}
+		http.Redirect(w, r, "/login", http.StatusFound)
+	}))
+	defer srv.Close()
+	old := config.INFISICAL_URL
+	config.INFISICAL_URL = srv.URL
+	defer func() { config.INFISICAL_URL = old }()
+
+	res, err := CallCreateAgentVaultSession(resty.New(), CreateAgentVaultSessionRequest{AccessBundles: []string{"coding-agent"}, TTL: "5m"})
+	if err == nil {
+		t.Fatalf("a login page was accepted as a session: %+v", res)
+	}
+	if !strings.Contains(err.Error(), "no session") {
+		t.Errorf("err = %v, want it to say no session was returned", err)
+	}
+}
+
+func TestCreateAgentVaultSessionReturnsTheMintedSession(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"session":{"id":"sess-1","token":"tok-1","expiresAt":null}}`))
+	}))
+	defer srv.Close()
+	old := config.INFISICAL_URL
+	config.INFISICAL_URL = srv.URL
+	defer func() { config.INFISICAL_URL = old }()
+
+	res, err := CallCreateAgentVaultSession(resty.New(), CreateAgentVaultSessionRequest{AccessBundles: []string{"coding-agent"}, TTL: "never"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Session.ID != "sess-1" || res.Session.Token != "tok-1" {
+		t.Errorf("session = %+v, want id sess-1 and token tok-1", res.Session)
+	}
+}
+
+func TestCreateAgentVaultSessionRejectsAPartlyEmptySession(t *testing.T) {
+	for name, body := range map[string]string{
+		"id only":    `{"session":{"id":"sess-1","token":""}}`,
+		"token only": `{"session":{"id":"","token":"tok-1"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(body))
+			}))
+			defer srv.Close()
+			old := config.INFISICAL_URL
+			config.INFISICAL_URL = srv.URL
+			defer func() { config.INFISICAL_URL = old }()
+
+			if _, err := CallCreateAgentVaultSession(resty.New(), CreateAgentVaultSessionRequest{AccessBundles: []string{"coding-agent"}, TTL: "5m"}); err == nil {
+				t.Fatal("a session missing its id or token was accepted")
+			}
+		})
+	}
+}

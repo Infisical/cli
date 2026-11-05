@@ -270,6 +270,12 @@ func CallCreateAgentVaultSession(httpClient *resty.Client, request CreateAgentVa
 	if response.IsError() {
 		return CreateAgentVaultSessionResponse{}, NewAPIErrorWithResponse("CallCreateAgentVaultSession", response, nil)
 	}
+	// A reverse proxy in front of Infisical can answer with a login page (200, text/html),
+	// which decodes to an empty session. Running an agent with it only fails later with a 407.
+	if res.Session.ID == "" || res.Session.Token == "" {
+		return CreateAgentVaultSessionResponse{}, NewGenericRequestError("CallCreateAgentVaultSession",
+			fmt.Errorf("the server returned no session (status %d, content type %q)", response.StatusCode(), response.Header().Get("Content-Type")))
+	}
 	return res, nil
 }
 
