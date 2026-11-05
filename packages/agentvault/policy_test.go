@@ -342,8 +342,8 @@ func TestPersonalValuesMissing(t *testing.T) {
 	if !errors.Is(err, errPolicyBlocked) {
 		t.Fatalf("a service missing the owner's personal values should be blocked, got %v", err)
 	}
-	if !strings.Contains(err.Error(), `service "github" needs your personal values`) ||
-		!strings.Contains(err.Error(), `access bundle "on-call"`) ||
+	if !strings.Contains(err.Error(), `service "github" needs your own credential or sign-in`) ||
+		!strings.Contains(err.Error(), `access bundle "on-call" in Infisical Agent Vault`) ||
 		!strings.Contains(err.Error(), "It can take a few minutes to apply") {
 		t.Fatalf("the refusal should say what to set up, where, and that saving takes a poll to apply: %q", err.Error())
 	}
@@ -359,7 +359,7 @@ func TestPersonalValuesMissing(t *testing.T) {
 	restricted.personalValuesMissing = true
 	for _, req := range []*http.Request{requestTo(t, "POST", "/repos"), requestTo(t, "GET", "/admin")} {
 		err := checkServicePolicy(restricted, req)
-		if err == nil || !strings.Contains(err.Error(), "needs your personal values") {
+		if err == nil || !strings.Contains(err.Error(), "needs your own credential or sign-in") {
 			t.Fatalf("%s %s on a service missing personal values should get the setup message, got %v", req.Method, req.URL.Path, err)
 		}
 	}

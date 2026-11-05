@@ -75,6 +75,7 @@ func (r *infisicalResolver) resolve(sessionToken string, held *sessionLogGrant) 
 			customHeaders:         toCustomHeaders(wire.CustomHeaders),
 			substitutions:         toSubstitutions(wire.Substitutions),
 			personalValuesMissing: wire.PersonalValuesMissing,
+			memberProvided:        wire.MemberProvided,
 		})
 	}
 
