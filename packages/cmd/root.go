@@ -122,8 +122,8 @@ func resolveDomain(cmd *cobra.Command, flagValue string) (string, error) {
 	domain, valid := util.GetDomainFromFile()
 
 	// Agent Vault commands send session tokens and mint sessions, and a .infisical.yaml can arrive with a cloned
-	// repo, so they skip it. The domain comes from the flag, the variables, or the logged-in profile (applied when the
-	// login loads). A file that names another instance stops the command instead, so a user who relied on it is not
+	// repo, so they skip it. The domain comes from the flag, the variables, or the logged-in profile, which is returned
+	// here so paths that never load the login (proxy tokens, client secrets) use it too. A file that names another instance stops the command instead, so a user who relied on it is not
 	// sent to the profile's instance without knowing.
 	if isAgentVaultCommand(cmd) {
 		effectiveDomain := util.ActiveProfileDomain()
@@ -133,7 +133,7 @@ func resolveDomain(cmd *cobra.Command, flagValue string) (string, error) {
 		if domain != "" && valid && util.AppendAPIEndpoint(effectiveDomain) != util.AppendAPIEndpoint(domain) {
 			return "", fmt.Errorf(".infisical.yaml sets the domain %s, but Agent Vault commands don't read it. Pass --domain %s or set INFISICAL_DOMAIN.", domain, domain)
 		}
-		return flagValue, nil
+		return effectiveDomain, nil
 	}
 
 	if domain == "" {

@@ -107,11 +107,11 @@ func TestResolveDomainLetsTheVariableWinOverTheRepoFileForAgentVaultCommands(t *
 func TestResolveDomainAllowsAgentVaultCommandsWhenTheRepoFileMatchesTheProfile(t *testing.T) {
 	useProfileDomain(t, "https://eu.infisical.com/api")
 	useRepoFileDomain(t, "https://eu.infisical.com/")
-	const fallback = "https://eu.infisical.com/api"
+	const fallback = "https://app.infisical.com/api"
 
 	for _, cmd := range agentVaultDomainTestCommands {
 		got, err := resolveAgentVaultDomain(t, cmd, fallback)
-		if err != nil || got != fallback {
+		if err != nil || got != "https://eu.infisical.com/api" {
 			t.Fatalf("%s: resolved %s, %v", cmd.CommandPath(), got, err)
 		}
 	}
@@ -144,7 +144,7 @@ func TestResolveDomainIgnoresAnInvalidRepoFileDomainForAgentVaultCommands(t *tes
 }
 
 func TestResolveDomainUsesTheProfileForAgentVaultCommandsWithoutARepoFile(t *testing.T) {
-	useProfileDomain(t, "https://app.infisical.com/api")
+	useProfileDomain(t, "https://eu.infisical.com/api")
 	for _, env := range util.DomainEnvNames {
 		t.Setenv(env, "")
 	}
@@ -153,7 +153,7 @@ func TestResolveDomainUsesTheProfileForAgentVaultCommandsWithoutARepoFile(t *tes
 
 	for _, cmd := range agentVaultDomainTestCommands {
 		got, err := resolveAgentVaultDomain(t, cmd, fallback)
-		if err != nil || got != fallback {
+		if err != nil || got != "https://eu.infisical.com/api" {
 			t.Fatalf("%s: resolved %s, %v", cmd.CommandPath(), got, err)
 		}
 	}
