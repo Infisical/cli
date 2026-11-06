@@ -71,12 +71,14 @@ type sessionRoute struct {
 	forwardQuery  bool
 }
 
-// The only requests the proxy answers for the session: these session endpoints of its own Infisical, on the host and
-// API path from --domain. Every other request to that host goes through like any other, so an agent prompted to send
-// data elsewhere can't use the session's token as a way out.
+// The only requests the proxy answers for the session: these session endpoints of its own Infisical, on the host, port
+// and API path from --domain. Every other request to that host goes through like any other, so an agent prompted to send
+// data elsewhere can't use the session's token as a way out. The scheme on the agent's side doesn't matter, because the
+// proxy calls Infisical itself: agent-vault run asks over TLS even when --domain is http, so it can check the answer
+// against the proxy's certificate authority.
 func sessionRouteFor(t tunnel, path string) (sessionRoute, bool) {
 	target, ok := proxyInfisicalTarget()
-	if !ok || t.scheme != target.scheme || !target.covers(t.hostname, t.port) {
+	if !ok || !target.covers(t.hostname, t.port) {
 		return sessionRoute{}, false
 	}
 	switch path {
@@ -152,6 +154,10 @@ func (ps *proxyServer) forwardSessionRequest(w http.ResponseWriter, r *http.Requ
 	defer resp.RawBody().Close()
 
 	w.Header().Set(HeaderDecision, route.decision)
+	// Inside TLS this vouches for the URL the CONNECT answer named in the clear.
+	if apiURL := proxyAPIURL(); apiURL != "" {
+		w.Header().Set(HeaderAPIURL, apiURL)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")

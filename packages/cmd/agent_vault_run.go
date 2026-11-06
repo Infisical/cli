@@ -450,14 +450,12 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		Set("pinned", pinnedFingerprint != "").
 		Set("caTrust", !noCaTrust))
 
-	proxyAPIURL := askAgentVaultProxyAPIURL(proxyAddr, sessionToken)
-	env := buildAgentVaultRunEnv(os.Environ(), proxyAddr, sessionToken, caPath, extraNoProxy, proxyAPIURL)
-
 	printAgentVaultRunSummary(proxyAddr, caResp, servedFingerprint, minted, project, tokenSource, bundleSource)
 
 	noBuiltinSkill, _ := cmd.Flags().GetBool("no-agent-vault-skill")
-	if exitCode, interrupted := runAgentVaultRunSkillsStep(noSkills,
-		func(ctx context.Context) {
+	var installSkills func(context.Context, *agentVaultSkillsTunnel, bool)
+	if !noSkills {
+		installSkills = func(ctx context.Context, tunnel *agentVaultSkillsTunnel, proxyTooOld bool) {
 			skillsHTTPClient, clientErr := newAgentVaultSkillsHTTPClient()
 			if clientErr != nil {
 				util.PrintWarning(fmt.Sprintf("Starting without skills: %v.", clientErr))
@@ -468,20 +466,21 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 				sessionToken:      sessionToken,
 				retryUnauthorized: minted != nil,
 				includeBuiltin:    !noBuiltinSkill,
-				proxyTooOld:       proxyAPIURL == "",
+				tunnel:            tunnel,
+				proxyTooOld:       proxyTooOld,
 				beforeDirect: func() {
 					if minted == nil {
 						useAgentVaultSessionTokenDomain()
 					}
 				},
 			}
-			// Trusts only the certificate authority checked above, so nothing between here and the proxy can change the skills.
-			if proxyAPIURL != "" {
-				if tunnel, tunnelErr := newAgentVaultSkillsTunnel(proxyAddr, sessionToken, proxyAPIURL, caPEM); tunnelErr == nil {
-					skillsClient.tunnel = tunnel
-				}
-			}
 			installAgentVaultRunSkills(ctx, skillsClient, agentvault.InstallOptions{Dir: skillsDir, ForceClaude: agentVaultRunStartsClaude(args)}, !noBuiltinSkill)
+		}
+	}
+	var agentAPIURL string
+	if exitCode, interrupted := runAgentVaultRunStartupStep(
+		func(ctx context.Context) {
+			agentAPIURL = prepareAgentVaultRunProxy(ctx, proxyAddr, sessionToken, caPEM, installSkills)
 		},
 		func(ctx context.Context) {
 			revokeAgentVaultRunSession(ctx, cmd, minted, keepSession, "The run was interrupted", true)
@@ -489,6 +488,7 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		os.Exit(exitCode)
 	}
 
+	env := buildAgentVaultRunEnv(os.Environ(), proxyAddr, sessionToken, caPath, extraNoProxy, agentAPIURL)
 	exitCode := runAgentVaultChild(args, env)
 
 	revokeAgentVaultRunSession(context.Background(), cmd, minted, keepSession, "The agent exited", false)
@@ -532,15 +532,12 @@ func agentVaultRunStartsClaude(args []string) bool {
 	return false
 }
 
-// runAgentVaultRunSkillsStep runs install unless skip is set. The signals are the ones the agent step forwards
-// to the agent; when one interrupts the step, onInterrupt runs with a context that a second signal cancels, and
-// the step returns the exit code a shell reports for the last signal received.
-func runAgentVaultRunSkillsStep(skip bool, install func(context.Context), onInterrupt func(context.Context)) (exitCode int, interrupted bool) {
-	if skip {
-		return 0, false
-	}
+// runAgentVaultRunStartupStep runs prepare, which talks to the proxy and installs skills before the agent starts. The
+// signals are the ones the agent step forwards to the agent; when one interrupts the step, onInterrupt runs with a
+// context that a second signal cancels, and the step returns the exit code a shell reports for the last signal received.
+func runAgentVaultRunStartupStep(prepare func(context.Context), onInterrupt func(context.Context)) (exitCode int, interrupted bool) {
 	interruptCtx, abortCtx, stopSignals := notifyAgentVaultTerminationSignals()
-	interrupted = prepareAgentVaultRunSkills(interruptCtx, install, func() { onInterrupt(abortCtx) })
+	interrupted = prepareAgentVaultRunStartup(interruptCtx, prepare, func() { onInterrupt(abortCtx) })
 	stopSignals()
 	if !interrupted {
 		return 0, false

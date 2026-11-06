@@ -182,6 +182,10 @@ func TestTheServicesListComesFromTheProxysInfisicalWithTheSessionsOwnToken(t *te
 		resp.Header.Get("Cache-Control") != "no-store" {
 		t.Fatalf("got %d (%s): %s", resp.StatusCode, resp.Header.Get(HeaderDecision), body)
 	}
+	// Inside TLS the proxy names its Infisical again, which is what lets agent-vault run trust the CONNECT answer's claim.
+	if got := resp.Header.Get(HeaderAPIURL); got != infisical.apiURL {
+		t.Fatalf("the answer named %q, want %q", got, infisical.apiURL)
+	}
 	// Infisical's length is passed on, so an answer that stops short can't pass for a whole one.
 	if resp.ContentLength != int64(len(list)) {
 		t.Fatalf("Content-Length %d, want %d", resp.ContentLength, len(list))
@@ -578,5 +582,49 @@ func TestTheProxyFollowsNoRedirectFromInfisical(t *testing.T) {
 	resp, body := getThrough(t, client, servicesURL, nil)
 	if reached.Load() || resp.StatusCode != http.StatusBadGateway || strings.Contains(body, "not Infisical") {
 		t.Fatalf("got %d %q; followed the redirect: %v", resp.StatusCode, body, reached.Load())
+	}
+}
+
+// agent-vault run asks over TLS whatever --domain's scheme, so it can check the answer against the proxy's certificate
+// authority.
+func TestTheSessionEndpointsAnswerOverTLSWhenTheDomainIsHTTP(t *testing.T) {
+	infisical := newFakeInfisicalAt(t, "http", http.StatusOK, `{"skills":[]}`)
+	_, client := newTLSProxy(t, noUpstream(t), fixedResolver{})
+
+	resp, body := getThrough(t, client, "https://"+testInfisicalHost+":80/api"+sessionSkillsPath+"?includeBuiltin=false", nil)
+	if resp.StatusCode != http.StatusOK || resp.Header.Get(HeaderDecision) != decisionSkills ||
+		resp.Header.Get(HeaderAPIURL) != infisical.apiURL {
+		t.Fatalf("got %d (%s, %q): %s", resp.StatusCode, resp.Header.Get(HeaderDecision), resp.Header.Get(HeaderAPIURL), body)
+	}
+	if seen := infisical.seen(); len(seen) != 1 || seen[0].authorization != "Bearer agv_tok" || seen[0].rawQuery != "includeBuiltin=false" {
+		t.Fatalf("Infisical saw %+v", seen)
+	}
+}
+
+// --domain may carry credentials for whatever sits in front of Infisical; agents see the URL in headers and hints.
+func TestTheAPIURLAgentsSeeCarriesNoCredentials(t *testing.T) {
+	old := config.INFISICAL_URL
+	config.INFISICAL_URL = "https://admin:s3cret@" + testInfisicalHost + "/api?token=s3cret#s3cret"
+	t.Cleanup(func() { config.INFISICAL_URL = old })
+
+	if got := proxyAPIURL(); got != "https://"+testInfisicalHost+"/api" {
+		t.Fatalf("proxyAPIURL() = %q", got)
+	}
+	if hint := proxyErrorHint(errorCodeHostNotAllowed); strings.Contains(hint, "s3cret") || strings.Contains(hint, "admin") {
+		t.Fatalf("the hint carries the credentials: %q", hint)
+	}
+}
+
+func TestAnAPIURLWithCredentialsQueryOrFragmentIsNotTaken(t *testing.T) {
+	for _, value := range []string{
+		"https://admin:s3cret@infisical.test/api", "https://infisical.test/api?x=1", "https://infisical.test/api#x",
+		"ftp://infisical.test/api", "https:///api", "https://infisical.test/a\x7fpi",
+	} {
+		if got := APIURLFromHeader(value); got != "" {
+			t.Errorf("APIURLFromHeader(%q) = %q, want none", value, got)
+		}
+	}
+	if got := APIURLFromHeader("https://infisical.test/api/"); got != "https://infisical.test/api" {
+		t.Fatalf("APIURLFromHeader trimmed to %q", got)
 	}
 }

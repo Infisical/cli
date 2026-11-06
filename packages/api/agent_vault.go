@@ -352,18 +352,19 @@ const agentVaultSessionSkillsResponseLimit = 64 << 20
 // infisical-agent-vault skill; an Infisical that predates it ignores the parameter and never sends that skill.
 func CallListAgentVaultSessionSkills(ctx context.Context, httpClient *resty.Client, sessionToken string, includeBuiltin bool) (ListAgentVaultSessionSkillsResponse, error) {
 	return listAgentVaultSessionSkills(ctx, httpClient, fmt.Sprintf("%v/v1/agent-vault/session/skills", config.INFISICAL_URL),
-		sessionToken, includeBuiltin, "CallListAgentVaultSessionSkills")
+		sessionToken, includeBuiltin, "CallListAgentVaultSessionSkills", nil)
 }
 
 // CallListAgentVaultSessionSkillsThroughProxy asks for the session's skills at proxyAPIURL, the API of the proxy's own
 // Infisical, through the proxy, which answers for the session itself. A host that can reach only the proxy still gets
-// them. httpClient has to send its requests through the proxy and trust the proxy's certificate authority.
-func CallListAgentVaultSessionSkillsThroughProxy(ctx context.Context, httpClient *resty.Client, proxyAPIURL, sessionToken string, includeBuiltin bool) (ListAgentVaultSessionSkillsResponse, error) {
+// them. httpClient has to send its requests through the proxy and trust the proxy's certificate authority. check sees
+// the answer before anything is read from it, and an error from it is returned as is.
+func CallListAgentVaultSessionSkillsThroughProxy(ctx context.Context, httpClient *resty.Client, proxyAPIURL, sessionToken string, includeBuiltin bool, check func(*resty.Response) error) (ListAgentVaultSessionSkillsResponse, error) {
 	return listAgentVaultSessionSkills(ctx, httpClient, proxyAPIURL+"/v1/agent-vault/session/skills",
-		sessionToken, includeBuiltin, "CallListAgentVaultSessionSkillsThroughProxy")
+		sessionToken, includeBuiltin, "CallListAgentVaultSessionSkillsThroughProxy", check)
 }
 
-func listAgentVaultSessionSkills(ctx context.Context, httpClient *resty.Client, url, sessionToken string, includeBuiltin bool, operation string) (ListAgentVaultSessionSkillsResponse, error) {
+func listAgentVaultSessionSkills(ctx context.Context, httpClient *resty.Client, url, sessionToken string, includeBuiltin bool, operation string, check func(*resty.Response) error) (ListAgentVaultSessionSkillsResponse, error) {
 	var res ListAgentVaultSessionSkillsResponse
 	response, err := httpClient.
 		R().
@@ -377,6 +378,11 @@ func listAgentVaultSessionSkills(ctx context.Context, httpClient *resty.Client, 
 
 	if err != nil {
 		return ListAgentVaultSessionSkillsResponse{}, NewGenericRequestError(operation, err)
+	}
+	if check != nil {
+		if err := check(response); err != nil {
+			return ListAgentVaultSessionSkillsResponse{}, err
+		}
 	}
 	if response.IsError() {
 		return ListAgentVaultSessionSkillsResponse{}, NewAPIErrorWithResponse(operation, response, nil)

@@ -27,6 +27,9 @@ var (
 	// A host that cannot reach Infisical gives up on each connection attempt here, while a slow but reachable
 	// Infisical still gets the whole step to send the files.
 	agentVaultSkillsConnectTimeout = 5 * time.Second
+	// Long enough for the proxy's own session lookup, which a CONNECT for a host other than the proxy's Infisical waits on
+	// before it is answered.
+	agentVaultProxyAPIURLTimeout = 20 * time.Second
 )
 
 const agentVaultSkillsUnreachableHint = " Pass --no-skills if this host can't reach Infisical."
@@ -111,9 +114,14 @@ type agentVaultSkillsClient struct {
 
 func (c *agentVaultSkillsClient) list(ctx context.Context) (api.ListAgentVaultSessionSkillsResponse, error) {
 	if c.tunnel != nil {
-		return c.retrying(ctx, func() (api.ListAgentVaultSessionSkillsResponse, error) {
-			return api.CallListAgentVaultSessionSkillsThroughProxy(ctx, c.tunnel.httpClient, c.tunnel.apiURL, c.sessionToken, c.includeBuiltin)
+		listed, err := c.retrying(ctx, func() (api.ListAgentVaultSessionSkillsResponse, error) {
+			return api.CallListAgentVaultSessionSkillsThroughProxy(ctx, c.tunnel.httpClient, c.tunnel.tlsAPIURL, c.sessionToken,
+				c.includeBuiltin, func(res *resty.Response) error { return c.tunnel.check(res, agentvault.DecisionSkills) })
 		})
+		// An answer that didn't come from the proxy's own Infisical is dropped, and Infisical is asked directly instead.
+		if !errors.Is(err, errAgentVaultProxyAnswerUnconfirmed) {
+			return listed, err
+		}
 	}
 	if c.beforeDirect != nil {
 		c.beforeDirect()
@@ -128,15 +136,14 @@ func (c *agentVaultSkillsClient) list(ctx context.Context) (api.ListAgentVaultSe
 }
 
 // askAgentVaultProxyAPIURL asks the proxy which Infisical it works with, so the agent reaches its session's endpoints
-// there through the proxy, whatever domain this command uses. An older proxy doesn't say, and "" comes back.
-func askAgentVaultProxyAPIURL(proxyAddr, sessionToken string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), agentVaultSkillsConnectTimeout)
+// there through the proxy, whatever domain this command uses. The answer is only a claim until a tunnel confirms it.
+// answered is false when the proxy didn't answer in time, which says nothing about its age; a proxy that answered
+// without naming one is too old.
+func askAgentVaultProxyAPIURL(ctx context.Context, proxyAddr, sessionToken string) (claimed string, answered bool) {
+	ctx, cancel := context.WithTimeout(ctx, agentVaultProxyAPIURLTimeout)
 	defer cancel()
-	apiURL, err := agentvault.AskProxyAPIURL(ctx, proxyAddr, sessionToken, agentVaultProxyAPIURLTarget())
-	if err != nil {
-		return ""
-	}
-	return apiURL
+	claimed, err := agentvault.AskProxyAPIURL(ctx, proxyAddr, sessionToken, agentVaultProxyAPIURLTarget())
+	return claimed, err == nil
 }
 
 // The CONNECT the question goes out on names this command's own Infisical, usually the proxy's too. The proxy names its
@@ -153,20 +160,35 @@ func agentVaultProxyAPIURLTarget() string {
 	return net.JoinHostPort(parsed.Hostname(), port)
 }
 
-// agentVaultSkillsTunnel sends requests to the proxy's own Infisical through the proxy, trusting only the certificate
-// authority this run verified.
+// agentVaultSkillsTunnel sends requests to the proxy's own Infisical through the proxy, always over TLS and trusting
+// only the certificate authority this run verified, so nothing between this host and the proxy can change an answer.
 type agentVaultSkillsTunnel struct {
 	httpClient *resty.Client
-	// The Infisical API URL the proxy named.
-	apiURL string
+	// The API URL the proxy named on its CONNECT answer, which crossed the network in the clear.
+	claimedAPIURL string
+	// The same host, port and path over https: the proxy answers its session endpoints whatever the scheme.
+	tlsAPIURL string
+	// An answer from inside TLS named claimedAPIURL (confirmed), or named something else (contradicted).
+	confirmed, contradicted bool
 }
 
-func newAgentVaultSkillsTunnel(proxyAddr, sessionToken, apiURL string, caPEM []byte) (*agentVaultSkillsTunnel, error) {
+var errAgentVaultProxyAnswerUnconfirmed = errors.New("the answer through the proxy's tunnel did not come from the proxy's own Infisical")
+
+func newAgentVaultSkillsTunnel(proxyAddr, sessionToken, claimedAPIURL string, caPEM []byte) (*agentVaultSkillsTunnel, error) {
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(caPEM) {
 		return nil, errors.New("the proxy's certificate authority could not be read")
 	}
-	tunnel := &agentVaultSkillsTunnel{apiURL: apiURL}
+	parsed, err := url.Parse(claimedAPIURL)
+	if err != nil || parsed.Hostname() == "" {
+		return nil, fmt.Errorf("the proxy named an API URL that can't be used: %q", claimedAPIURL)
+	}
+	port := parsed.Port()
+	if port == "" {
+		port = map[bool]string{true: "80", false: "443"}[parsed.Scheme == "http"]
+	}
+	tlsAPIURL := url.URL{Scheme: "https", Host: net.JoinHostPort(parsed.Hostname(), port), Path: parsed.Path}
+	tunnel := &agentVaultSkillsTunnel{claimedAPIURL: claimedAPIURL, tlsAPIURL: strings.TrimSuffix(tlsAPIURL.String(), "/")}
 	proxyURL := &url.URL{Scheme: "http", Host: proxyAddr, User: url.UserPassword(agentvault.ProxyAuthUsername, sessionToken)}
 	// The retries a direct request gets, for a busy Infisical or proxy. INFISICAL_CUSTOM_HEADERS stay behind: they are
 	// for Infisical, and the proxy sends its own request there.
@@ -193,6 +215,59 @@ func newAgentVaultSkillsTunnel(proxyAddr, sessionToken, apiURL string, caPEM []b
 		DialContext:     (&net.Dialer{Timeout: agentVaultSkillsConnectTimeout, KeepAlive: 30 * time.Second}).DialContext,
 	})
 	return tunnel, nil
+}
+
+// check passes an answer from the proxy's own session endpoint for decision. Inside TLS, which only the proxy can speak
+// for this host, the proxy names its API URL again: the same URL confirms the CONNECT answer's claim, and a successful
+// answer must also carry the decision only that endpoint sets.
+func (t *agentVaultSkillsTunnel) check(res *resty.Response, decision string) error {
+	if agentvault.APIURLFromHeader(res.Header().Get(agentvault.HeaderAPIURL)) != t.claimedAPIURL ||
+		(res.IsSuccess() && res.Header().Get(agentvault.HeaderDecision) != decision) {
+		t.contradicted = true
+		return errAgentVaultProxyAnswerUnconfirmed
+	}
+	t.confirmed = true
+	return nil
+}
+
+// confirm checks the claimed API URL when no skills request will: it asks the session's services list for its headers
+// only.
+func (t *agentVaultSkillsTunnel) confirm(ctx context.Context) {
+	res, err := t.httpClient.R().SetContext(ctx).Head(t.tlsAPIURL + "/v1/agent-vault/session/services")
+	if err == nil {
+		_ = t.check(res, agentvault.DecisionDiscovery)
+	}
+}
+
+// prepareAgentVaultRunProxy asks the proxy which Infisical it works with, then installs the session's skills through
+// installSkills, or with --no-skills (nil) only confirms the answer. It returns the API URL for the agent's
+// INFISICAL_AGENT_VAULT_API_URL, which stays empty unless an answer from inside TLS confirmed it.
+func prepareAgentVaultRunProxy(ctx context.Context, proxyAddr, sessionToken string, caPEM []byte,
+	installSkills func(ctx context.Context, tunnel *agentVaultSkillsTunnel, proxyTooOld bool)) string {
+	claimed, answered := askAgentVaultProxyAPIURL(ctx, proxyAddr, sessionToken)
+	var tunnel *agentVaultSkillsTunnel
+	if claimed != "" {
+		tunnel, _ = newAgentVaultSkillsTunnel(proxyAddr, sessionToken, claimed, caPEM)
+	}
+	stepCtx, cancel := context.WithTimeout(ctx, agentVaultSkillsTimeout)
+	defer cancel()
+	switch {
+	case installSkills != nil:
+		installSkills(stepCtx, tunnel, answered && claimed == "")
+	case tunnel != nil:
+		tunnel.confirm(stepCtx)
+	}
+	if tunnel == nil {
+		return ""
+	}
+	if tunnel.contradicted {
+		util.PrintWarning("The proxy's answer from inside TLS didn't name the Infisical it named on its CONNECT answer, so the agent gets no " +
+			agentvault.APIURLEnv + " and no skills came through the proxy. Something between this host and the proxy may be changing its answers.")
+	}
+	if !tunnel.confirmed {
+		return ""
+	}
+	return claimed
 }
 
 // The proxy was too old to forward the request, and asking Infisical directly failed too.
@@ -341,14 +416,12 @@ func agentVaultSkillsInstalledLine(result agentvault.InstallResult) string {
 	return line + "."
 }
 
-// prepareAgentVaultRunSkills runs the skills step under its deadline, with ctx cancelled by Ctrl-C or another
-// termination signal.
+// prepareAgentVaultRunStartup runs what happens between minting the session and starting the agent, with ctx cancelled
+// by Ctrl-C or another termination signal.
 // When the operator interrupts it, onInterrupt revokes the session, the same as when the agent exits;
 // interrupted then tells the caller to exit without starting the agent.
-func prepareAgentVaultRunSkills(ctx context.Context, install func(context.Context), onInterrupt func()) (interrupted bool) {
-	stepCtx, cancel := context.WithTimeout(ctx, agentVaultSkillsTimeout)
-	defer cancel()
-	install(stepCtx)
+func prepareAgentVaultRunStartup(ctx context.Context, prepare func(context.Context), onInterrupt func()) (interrupted bool) {
+	prepare(ctx)
 	if ctx.Err() != nil {
 		onInterrupt()
 		return true

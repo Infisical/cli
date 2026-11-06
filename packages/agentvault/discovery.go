@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/Infisical/infisical-merge/packages/config"
 )
@@ -39,13 +40,32 @@ const (
 	HeaderService  = "X-Agent-Vault-Service"
 )
 
+// The decisions only the proxy's own session endpoints set.
+const (
+	DecisionDiscovery = decisionDiscovery
+	DecisionSkills    = decisionSkills
+)
+
 // proxyAPIURL is the Infisical API this proxy works with, from --domain, or "" if that isn't a URL the proxy can name in
-// a header.
+// a header. Agents see it in headers and hints, so credentials, a query or a fragment in --domain are left out.
 func proxyAPIURL() string {
-	apiURL := strings.TrimSuffix(config.INFISICAL_URL, "/")
-	parsed, err := url.Parse(apiURL)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" ||
-		strings.ContainsFunc(apiURL, func(r rune) bool { return r <= ' ' || r == 0x7f }) {
+	parsed, err := url.Parse(strings.TrimSuffix(config.INFISICAL_URL, "/"))
+	if err != nil {
+		return ""
+	}
+	parsed.User, parsed.RawQuery, parsed.ForceQuery, parsed.Fragment, parsed.RawFragment = nil, "", false, "", ""
+	return publishableAPIURL(parsed)
+}
+
+// publishableAPIURL is the URL as an agent may be given it, or "" if it isn't an http(s) URL without credentials,
+// query, fragment or control characters.
+func publishableAPIURL(parsed *url.URL) string {
+	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" || parsed.User != nil ||
+		parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+		return ""
+	}
+	apiURL := strings.TrimSuffix(parsed.String(), "/")
+	if strings.ContainsFunc(apiURL, func(r rune) bool { return r <= ' ' || r == 0x7f }) {
 		return ""
 	}
 	return apiURL
@@ -54,6 +74,9 @@ func proxyAPIURL() string {
 // AskProxyAPIURL asks the proxy at proxyAddr which Infisical it works with. It opens a CONNECT for target with the
 // session's token, reads the proxy's answer, and closes the connection without sending anything through it. A proxy too
 // old to say answers without the header, and "" comes back.
+//
+// The answer crosses the network in the clear, so it is only a claim: use it once an answer from inside TLS, checked
+// against the proxy's certificate authority, names the same URL (the session endpoints' answers carry it too).
 func AskProxyAPIURL(ctx context.Context, proxyAddr, sessionToken, target string) (string, error) {
 	var dialer net.Dialer
 	conn, err := dialer.DialContext(ctx, "tcp", proxyAddr)
@@ -64,6 +87,8 @@ func AskProxyAPIURL(ctx context.Context, proxyAddr, sessionToken, target string)
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
 	}
+	// A deadline alone wouldn't end a read when ctx is cancelled, such as by Ctrl-C while the proxy looks the session up.
+	defer context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })()
 
 	auth := base64.StdEncoding.EncodeToString([]byte(ProxyAuthUsername + ":" + sessionToken))
 	if _, err := fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: Basic %s\r\n\r\n", target, target, auth); err != nil {
@@ -75,17 +100,20 @@ func AskProxyAPIURL(ctx context.Context, proxyAddr, sessionToken, target string)
 		return "", err
 	}
 
-	apiURL := strings.TrimSuffix(resp.Header.Get(HeaderAPIURL), "/")
-	parsed, err := url.Parse(apiURL)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" {
-		return "", nil
+	return APIURLFromHeader(resp.Header.Get(HeaderAPIURL)), nil
+}
+
+// APIURLFromHeader is the API URL a proxy named in HeaderAPIURL, or "" if it isn't one an agent may be given.
+func APIURLFromHeader(value string) string {
+	parsed, err := url.Parse(strings.TrimSuffix(value, "/"))
+	if err != nil {
+		return ""
 	}
-	return apiURL, nil
+	return publishableAPIURL(parsed)
 }
 
 // infisicalTarget is where the agent reaches the proxy's own Infisical through the proxy.
 type infisicalTarget struct {
-	scheme   string
 	hostname string
 	port     string
 	apiPath  string
@@ -101,7 +129,6 @@ func proxyInfisicalTarget() (infisicalTarget, bool) {
 		port = map[string]string{"https": "443", "http": "80"}[parsed.Scheme]
 	}
 	return infisicalTarget{
-		scheme:   parsed.Scheme,
 		hostname: strings.TrimSuffix(strings.ToLower(parsed.Hostname()), "."),
 		port:     port,
 		apiPath:  strings.TrimSuffix(parsed.Path, "/"),
