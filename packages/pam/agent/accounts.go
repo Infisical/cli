@@ -16,15 +16,16 @@ import (
 // CLI can reach: aws-iam, gcp-service-account and azure-cli hand out credentials rather than front a
 // port, so nothing here can contain what an agent does with them.
 var supportedAccountTypes = map[string]bool{
-	"postgres":   true,
-	"mysql":      true,
-	"mssql":      true,
-	"oracledb":   true,
-	"mongodb":    true,
-	"redis":      true,
-	"ssh":        true,
-	"kubernetes": true,
-	"windows":    true,
+	"postgres":    true,
+	"cockroachdb": true,
+	"mysql":       true,
+	"mssql":       true,
+	"oracledb":    true,
+	"mongodb":     true,
+	"redis":       true,
+	"ssh":         true,
+	"kubernetes":  true,
+	"windows":     true,
 }
 
 // typeLabelFor names an account type for display, from the same table the `infisical pam access`

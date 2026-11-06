@@ -48,8 +48,8 @@ func NewAgentProxy(httpClient *resty.Client, path, accountType string, provider 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	proxy := &AgentProxy{
-		// The gateway advertises every type proxied here under its own name, so accountType is what
-		// its capabilities are checked against.
+		// The gateway's capabilities are checked against accountType, translated to the name the gateway
+		// advertises it under (CockroachDB as Postgres).
 		transport: pam.NewAgentTransport(ctx, httpClient, accountType, provider),
 		path:      path,
 		provider:  provider,
