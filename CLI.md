@@ -85,6 +85,14 @@ With `-o json`, the same error is JSON on stderr:
 | `access_bundle_required` | `agent-vault sessions create` without `--access-bundle` or `INFISICAL_AGENT_VAULT_ACCESS_BUNDLE` |
 | `access_bundle_not_granted` | `agent-vault sessions create` with an access bundle the caller (or the user a session is on behalf of) can't use, or that doesn't exist (400 `AccessBundleNotGranted`) |
 | `invalid_access_bundle` | An access bundle name from `--access-bundle` or `INFISICAL_AGENT_VAULT_ACCESS_BUNDLE` isn't a valid name. Nothing is sent |
+| `session_token_required` | `agent-vault connect` without `--session-token` or `INFISICAL_AGENT_VAULT_SESSION_TOKEN` |
+| `proxy_required` | `agent-vault connect` without `--proxy` or `INFISICAL_AGENT_VAULT_PROXY_ADDRESS` |
+| `proxy_unreachable` | `agent-vault connect` can't reach the Agent Vault proxy at the address, or a connection to it failed |
+| `proxy_untrusted` | `agent-vault connect` can't verify the proxy's certificate authority from `agent-vault run`'s CA file, Infisical or `--ca-fingerprint`, or it doesn't match `--ca-fingerprint`. The session token isn't sent |
+| `proxy_not_supported` | The Agent Vault proxy at the address predates database and SSH services |
+| `no_services` | `agent-vault connect` for a session that has no database or SSH services |
+| `service_not_found` | `agent-vault connect` names a service the session doesn't have. The message lists the ones it has |
+| `service_refused` | The proxy refused a database or SSH service, for example because personal values aren't set or the stored SSH key can't be used. The message is the proxy's |
 | `secret_exists` | `secrets create` on a key that exists. Nothing is written |
 | `secret_not_found` | `secrets update` on a key that doesn't exist. Nothing is written |
 | `folder_not_found` | `folders get`, `update` or `delete` on a folder that doesn't exist at `--path` |

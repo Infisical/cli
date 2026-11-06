@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
+	"github.com/Infisical/infisical-merge/packages/agentvault"
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/util"
 )
@@ -14,6 +16,15 @@ const (
 	errCodeAccessBundleNotGranted = "access_bundle_not_granted"
 	errCodeInvalidAccessBundle    = "invalid_access_bundle"
 	errCodeInvalidProjectID       = "invalid_project_id"
+
+	errCodeSessionTokenRequired = "session_token_required"
+	errCodeProxyRequired        = "proxy_required"
+	errCodeProxyUnreachable     = "proxy_unreachable"
+	errCodeProxyUntrusted       = "proxy_untrusted"
+	errCodeProxyNotSupported    = "proxy_not_supported"
+	errCodeServiceNotFound      = "service_not_found"
+	errCodeNoServices           = "no_services"
+	errCodeServiceRefused       = "service_refused"
 )
 
 func errAgentVaultInvalidOutput(format string) *util.CLIError {
@@ -108,4 +119,70 @@ func classifyAgentVaultAPIError(err error, project agentVaultProject, accessBund
 		notFound = func(cause error) *util.CLIError { return errAgentVaultProjectNotFound(project, cause) }
 	}
 	return classifyAPIError(err, errorScope{ProjectID: project.ID}, notFound)
+}
+
+func errAgentVaultConnectEmptyFlag(flag, env string) *util.CLIError {
+	message := fmt.Sprintf("%s was given but is empty: pass a value", flag)
+	if env != "" {
+		message += fmt.Sprintf(", or drop the flag and set %s", env)
+	}
+	return &util.CLIError{Code: errCodeInvalidFlagValue, Message: message + "."}
+}
+
+func errAgentVaultConnectSessionTokenRequired() *util.CLIError {
+	return &util.CLIError{Code: errCodeSessionTokenRequired,
+		Message: fmt.Sprintf("A session token is required: pass --session-token or set %s. 'infisical agent-vault run' sets it for the agent.", agentVaultSessionTokenEnv)}
+}
+
+func errAgentVaultConnectProxyRequired() *util.CLIError {
+	return &util.CLIError{Code: errCodeProxyRequired,
+		Message: fmt.Sprintf("The proxy address is required: pass --proxy <host:port> or set %s. 'infisical agent-vault run' sets it for the agent.", agentVaultProxyAddressEnv)}
+}
+
+func errAgentVaultConnectProxyUnreachable(proxyAddr string, cause error) *util.CLIError {
+	return &util.CLIError{Code: errCodeProxyUnreachable, Cause: cause,
+		Message: fmt.Sprintf("Unable to reach the Agent Vault proxy at %s: check the address and that 'infisical agent-vault proxy' is running there.", proxyAddr)}
+}
+
+func errAgentVaultConnectProxyUntrusted(proxyAddr string, cause error) *util.CLIError {
+	return &util.CLIError{Code: errCodeProxyUntrusted, Cause: cause,
+		Message: fmt.Sprintf("Unable to verify the Agent Vault proxy at %s, so the session token wasn't sent: pass --ca-fingerprint SHA256:... with the fingerprint shown on the proxy's page in Infisical.", proxyAddr)}
+}
+
+func errAgentVaultConnectFingerprintMismatch(proxyAddr, served string) *util.CLIError {
+	return &util.CLIError{Code: errCodeProxyUntrusted,
+		Message: fmt.Sprintf("The proxy at %s serves a certificate authority with fingerprint %s, not the one passed in --ca-fingerprint, so the session token wasn't sent. Check the fingerprint on the proxy's page in Infisical.", proxyAddr, served)}
+}
+
+func errAgentVaultConnectNoServices() *util.CLIError {
+	return &util.CLIError{Code: errCodeNoServices,
+		Message: "This session has no database or SSH services: ask an Agent Vault admin to add one to the session's access bundle."}
+}
+
+func errAgentVaultConnectServiceNotFound(name string, available []agentvault.NativeServiceInfo) *util.CLIError {
+	names := make([]string, len(available))
+	for i, service := range available {
+		names[i] = service.Name
+	}
+	return &util.CLIError{Code: errCodeServiceNotFound,
+		Message: fmt.Sprintf("This session has no database or SSH service named %s: its services are %s.", quoted(name, "service"), strings.Join(names, ", "))}
+}
+
+// The proxy's refusals are written for the person reading them, so they are passed on as they are.
+func classifyAgentVaultConnectError(err error, proxyAddr string) error {
+	var cliErr *util.CLIError
+	if errors.As(err, &cliErr) {
+		return err
+	}
+	if errors.Is(err, agentvault.ErrProxyTooOld) {
+		return &util.CLIError{Code: errCodeProxyNotSupported, Cause: err,
+			Message: fmt.Sprintf("The Agent Vault proxy at %s doesn't serve database and SSH services yet: update it to the latest Infisical CLI and restart it.", proxyAddr)}
+	}
+	var refused *agentvault.ProxyRefusedError
+	if errors.As(err, &refused) {
+		message := strings.TrimSuffix(refused.Message, ".") + "."
+		return &util.CLIError{Code: errCodeServiceRefused, Cause: err, Message: strings.ToUpper(message[:1]) + message[1:]}
+	}
+	return &util.CLIError{Code: errCodeProxyUnreachable, Cause: err,
+		Message: fmt.Sprintf("The connection to the Agent Vault proxy at %s failed: %s.", proxyAddr, strings.TrimSuffix(err.Error(), "."))}
 }

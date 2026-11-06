@@ -234,6 +234,11 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if serviceName, ok := nativeServiceName(hostname); ok {
+		ps.handleNativeConnect(w, r, sessionToken, serviceName)
+		return
+	}
+
 	// Resolve before the leaf minting further down, so an unauthenticated caller cannot make the proxy work
 	// on their behalf.
 	if _, err := ps.cache.get(sessionToken); err != nil {
@@ -1149,6 +1154,9 @@ func (ps *proxyServer) serveSelfEndpoint(w http.ResponseWriter, r *http.Request)
 		})
 		return true
 
+	case NativeServicesPath:
+		ps.serveNativeServices(w, r)
+		return true
 	}
 
 	http.NotFound(w, r)

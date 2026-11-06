@@ -3,6 +3,7 @@ package agentvault
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -434,13 +435,16 @@ func serve(opts Options, s startup) error {
 		ReadHeaderTimeout: frontReadHeaderTimeout,
 		IdleTimeout:       frontIdleTimeout,
 		MaxHeaderBytes:    maxRequestHeaderBytes,
+		// Never HTTP/2 on the TLS door: a database tunnel is a hijacked HTTP/1.1 CONNECT.
+		TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){},
 	}
 
-	limited := newLimitListener(listener, maxConcurrentConns, func() {
+	// A database or SSH connection keeps its slot for as long as it stays open, like an HTTPS tunnel.
+	limited := newDoorListener(newLimitListener(listener, maxConcurrentConns, func() {
 		log.Warn().
 			Int("limit", maxConcurrentConns).
 			Msg("agent-vault: connection limit reached, new connections are waiting for a slot")
-	})
+	}), proxyDoorTLSConfig(ca), frontReadHeaderTimeout)
 
 	stop := make(chan struct{})
 	fatal := make(chan error, 1)
@@ -511,6 +515,7 @@ func serve(opts Options, s startup) error {
 	case err := <-serveErr:
 		close(stop)
 		closeSocks()
+		ps.cache.closeNative(nativeShutdownWait)
 		closeSessionLogs()
 		ps.cache.close()
 		if errors.Is(err, http.ErrServerClosed) {
@@ -527,6 +532,7 @@ func serve(opts Options, s startup) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = front.Shutdown(ctx)
+		ps.cache.closeNative(nativeShutdownWait)
 		closeSessionLogs()
 		ps.cache.close()
 		return fmt.Errorf("the SOCKS5 listener stopped: %w", err)
@@ -537,6 +543,7 @@ func serve(opts Options, s startup) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = front.Shutdown(ctx)
+		ps.cache.closeNative(nativeShutdownWait)
 		closeSessionLogs()
 		ps.cache.close()
 		return nil
@@ -546,11 +553,15 @@ func serve(opts Options, s startup) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = front.Shutdown(ctx)
+		ps.cache.closeNative(nativeShutdownWait)
 		closeSessionLogs()
 		ps.cache.close()
 		return err
 	}
 }
+
+// How long shutdown waits for open database and SSH connections to finish, so their last rows reach the session log.
+const nativeShutdownWait = 2 * time.Second
 
 // A 401 on the heartbeat is never transient. A timeout, a 5xx or a 429 rides out the grace window; a
 // rejected token does not.
