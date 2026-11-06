@@ -49,13 +49,14 @@ var reservedForwardSlots = make(chan struct{}, 8)
 
 // One client for the life of the proxy, so forwarded requests share a connection pool instead of each opening its own
 // and leaving it idle. Nothing about a session stays on it: the session's token goes on each request, and with no
-// cookie jar, a cookie on one session's answer isn't sent with the next session's request.
+// cookie jar, a cookie on one session's answer isn't sent with the next session's request. It follows no redirect, so
+// the reserved name only ever passes on Infisical's own answer to the paths it allows.
 var reservedNameClient = sync.OnceValues(func() (*resty.Client, error) {
 	client, err := util.GetRestyClientWithPolicy(util.RetryPolicy{})
 	if err != nil {
 		return nil, err
 	}
-	return client.SetCookieJar(nil), nil
+	return client.SetCookieJar(nil).SetRedirectPolicy(resty.NoRedirectPolicy()), nil
 })
 
 var errReservedAnswerTooLarge = errors.New("Infisical's answer is larger than the proxy passes on")

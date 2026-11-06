@@ -487,3 +487,25 @@ func TestACookieOnOneSessionsAnswerIsNotSentForAnother(t *testing.T) {
 		t.Fatalf("Infisical got cookies %q", sent)
 	}
 }
+
+func TestTheProxyFollowsNoRedirectFromInfisical(t *testing.T) {
+	var reached atomic.Bool
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached.Store(true)
+		_, _ = io.WriteString(w, "not Infisical")
+	}))
+	t.Cleanup(elsewhere.Close)
+	redirecting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+"/private", http.StatusFound)
+	}))
+	t.Cleanup(redirecting.Close)
+	old := config.INFISICAL_URL
+	config.INFISICAL_URL = redirecting.URL + "/api"
+	t.Cleanup(func() { config.INFISICAL_URL = old })
+	_, client := newTLSProxy(t, noUpstream(t), fixedResolver{})
+
+	resp, body := getThrough(t, client, DiscoveryURL, nil)
+	if reached.Load() || resp.StatusCode != http.StatusBadGateway || strings.Contains(body, "not Infisical") {
+		t.Fatalf("got %d %q; followed the redirect: %v", resp.StatusCode, body, reached.Load())
+	}
+}
