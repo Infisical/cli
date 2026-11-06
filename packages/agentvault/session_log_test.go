@@ -218,7 +218,7 @@ func captureDropWarnings(t *testing.T) func() []map[string]any {
 			if json.Unmarshal([]byte(line), &entry) != nil {
 				continue
 			}
-			if entry["level"] == "warn" && strings.Contains(fmt.Sprint(entry["message"]), "weren't recorded") {
+			if entry["level"] == "warn" && strings.Contains(fmt.Sprint(entry["message"]), "wasn't recorded") {
 				warnings = append(warnings, entry)
 			}
 		}
@@ -317,8 +317,8 @@ func TestTheDropCountIsLoggedOnceAtTheNextSeal(t *testing.T) {
 		t.Fatal("nothing was shipped")
 	}
 	got := warnings()
-	if len(got) != 1 || got[0]["sessionId"] != "s1" || got[0]["requests"] != float64(50) {
-		t.Fatalf("expected one warning for 50 requests in s1, got %v", got)
+	if len(got) != 1 || got[0]["sessionId"] != "s1" || got[0]["records"] != float64(50) {
+		t.Fatalf("expected one warning for 50 records in s1, got %v", got)
 	}
 
 	log.record(grant, aRecord("api.github.com"))
@@ -345,8 +345,8 @@ func TestDropsLeftOnAnIdleSpoolAreLoggedWhenItIsForgotten(t *testing.T) {
 		t.Fatal("the idle spool was not forgotten, so this test proves nothing")
 	}
 	got := warnings()
-	if len(got) != 1 || got[0]["sessionId"] != "s1" || got[0]["requests"] != float64(3) {
-		t.Fatalf("expected one warning for 3 requests in s1, got %v", got)
+	if len(got) != 1 || got[0]["sessionId"] != "s1" || got[0]["records"] != float64(3) {
+		t.Fatalf("expected one warning for 3 records in s1, got %v", got)
 	}
 }
 

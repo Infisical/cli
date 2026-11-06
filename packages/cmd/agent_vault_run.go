@@ -26,6 +26,7 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/agentvault"
 	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/sandbox"
 	"github.com/Infisical/infisical-merge/packages/telemetry"
 	"github.com/Infisical/infisical-merge/packages/util"
@@ -444,7 +445,12 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		Set("pinned", pinnedFingerprint != "").
 		Set("caTrust", !noCaTrust))
 
-	env := buildAgentVaultRunEnv(os.Environ(), proxyAddr, sessionToken, caPath, extraNoProxy)
+	if minted == nil {
+		useAgentVaultSessionTokenDomain()
+	}
+	env := withAgentVaultConnectEnv(
+		buildAgentVaultRunEnv(os.Environ(), proxyAddr, sessionToken, caPath, extraNoProxy),
+		proxyAddr, sessionToken, caPath, config.INFISICAL_URL)
 
 	printAgentVaultRunSummary(proxyAddr, caResp, servedFingerprint, minted, project, tokenSource, bundleSource)
 
@@ -803,6 +809,53 @@ func agentVaultCaFingerprint(certificatePEM string) ([]byte, string, error) {
 	}
 	single := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: block.Bytes})
 	return single, agentvault.FingerprintOf(block.Bytes), nil
+}
+
+// What `infisical agent-vault connect` needs when the agent runs it: the session, the proxy, the CA file to trust
+// it by, and the Infisical the session belongs to. The token already reaches the agent in HTTPS_PROXY, so naming it
+// again exposes nothing new. A domain the operator set is left as it is.
+func withAgentVaultConnectEnv(env []string, proxyAddr, sessionToken, caPath, apiURL string) []string {
+	set := map[string]string{
+		agentVaultSessionTokenEnv: sessionToken,
+		agentVaultProxyAddressEnv: proxyAddr,
+	}
+	// Without a CA file of this run, a stale one from the parent would name another proxy's CA.
+	if caPath != "" {
+		set[agentVaultCaFileEnv] = caPath
+	}
+	sameKey := func(a, b string) bool {
+		if runtime.GOOS == "windows" {
+			return strings.EqualFold(a, b)
+		}
+		return a == b
+	}
+
+	hasDomain := false
+	out := make([]string, 0, len(env)+len(set)+1)
+	for _, kv := range env {
+		key, _, _ := strings.Cut(kv, "=")
+		replaced := sameKey(key, agentVaultCaFileEnv)
+		for name := range set {
+			if sameKey(key, name) {
+				replaced = true
+			}
+		}
+		for _, name := range util.DomainEnvNames {
+			if sameKey(key, name) {
+				hasDomain = true
+			}
+		}
+		if !replaced {
+			out = append(out, kv)
+		}
+	}
+	for name, value := range set {
+		out = append(out, name+"="+value)
+	}
+	if !hasDomain && apiURL != "" {
+		out = append(out, util.INFISICAL_DOMAIN_ENV_NAME+"="+strings.TrimSuffix(apiURL, "/api"))
+	}
+	return out
 }
 
 func agentVaultFingerprintsEqual(a, b string) bool {

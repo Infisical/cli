@@ -80,6 +80,9 @@ type AgentVaultCredential struct {
 	Value        string `json:"value,omitempty"`
 	Username     string `json:"username,omitempty"`
 	Password     string `json:"password,omitempty"`
+	// An ssh-key credential's key and optional certificate.
+	PrivateKey  string `json:"privateKey,omitempty"`
+	Certificate string `json:"certificate,omitempty"`
 	// "oauth" marks a token Infisical can refresh; every other credential leaves it empty.
 	Source string `json:"source,omitempty"`
 }
@@ -97,11 +100,15 @@ type AgentVaultSubstitution struct {
 }
 
 type AgentVaultService struct {
-	ID               string `json:"id"`
-	Name             string `json:"name"`
-	Type             string `json:"type"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Type string `json:"type"`
+	// Empty for a service sent inline with the session, which belongs to no bundle.
 	AccessBundleName string `json:"accessBundleName"`
-	HostPattern      string `json:"hostPattern"`
+	// Null for a database or SSH service, which decodes to empty and so matches no HTTP traffic.
+	HostPattern string `json:"hostPattern"`
+	// Where a database or SSH service's server is. Nil for HTTP and MCP services, and from older servers.
+	Native *AgentVaultNativeTarget `json:"native"`
 	// A nil slice means unrestricted, which is what JSON null decodes to.
 	AllowedMethods      []string                 `json:"allowedMethods"`
 	AllowedPathPrefixes []string                 `json:"allowedPathPrefixes"`
@@ -112,6 +119,20 @@ type AgentVaultService struct {
 	// The service takes part of its credential from each member and the session's owner has not set their personal values.
 	// Older servers never send it, which decodes to false.
 	PersonalValuesMissing bool `json:"personalValuesMissing"`
+}
+
+type AgentVaultNativeTLS struct {
+	Enabled bool   `json:"enabled"`
+	Verify  bool   `json:"verify"`
+	CA      string `json:"ca"`
+}
+
+type AgentVaultNativeTarget struct {
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	Database string `json:"database"`
+	// Nil for SSH.
+	TLS *AgentVaultNativeTLS `json:"tls"`
 }
 
 type AgentVaultSessionLogGrant struct {
@@ -363,6 +384,30 @@ func CallListAgentVaultSessionSkills(ctx context.Context, httpClient *resty.Clie
 	}
 	if response.IsError() {
 		return ListAgentVaultSessionSkillsResponse{}, NewAPIErrorWithResponse("CallListAgentVaultSessionSkills", response, nil)
+	}
+	return res, nil
+}
+
+type GetAgentVaultSessionProxyCaFingerprintsResponse struct {
+	Fingerprints []string `json:"fingerprints"`
+}
+
+// The session token is the only credential. The caller decides which domain and transport it goes over.
+func CallGetAgentVaultSessionProxyCaFingerprints(ctx context.Context, httpClient *resty.Client, sessionToken string) (GetAgentVaultSessionProxyCaFingerprintsResponse, error) {
+	var res GetAgentVaultSessionProxyCaFingerprintsResponse
+	response, err := httpClient.
+		R().
+		SetContext(ctx).
+		SetResult(&res).
+		SetHeader("User-Agent", USER_AGENT).
+		SetAuthToken(sessionToken).
+		Get(fmt.Sprintf("%v/v1/agent-vault/session/proxy-ca-fingerprints", config.INFISICAL_URL))
+
+	if err != nil {
+		return GetAgentVaultSessionProxyCaFingerprintsResponse{}, NewGenericRequestError("CallGetAgentVaultSessionProxyCaFingerprints", err)
+	}
+	if response.IsError() {
+		return GetAgentVaultSessionProxyCaFingerprintsResponse{}, NewAPIErrorWithResponse("CallGetAgentVaultSessionProxyCaFingerprints", response, nil)
 	}
 	return res, nil
 }

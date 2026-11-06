@@ -22,6 +22,9 @@ const (
 
 	sessionLogSpoolCapacity    = 5000     // one session's ring; full: overwrite the oldest line, count it
 	sessionLogTotalCapacity    = 200_000  // all rings together; full: drop new lines, count them
+	sessionLogSpoolBytes       = 8 << 20  // one session's ring; over: drop its oldest lines, count them
+	sessionLogTotalBytes       = 64 << 20 // all rings together, at most what sealing can hold; over: drop new lines
+	sessionLogFlushBytes       = 4 << 20  // a ring this full is sealed without waiting for the tick
 	sessionLogPendingChunks    = 10       // one session's sealed chunks; full: drop the oldest, log it
 	sessionLogTotalSealedBytes = 64 << 20 // all sealed chunks; full: drop the oldest chunk of any session
 
@@ -103,6 +106,7 @@ type sessionLogRecorder struct {
 	spools map[string]*sessionLogSpool
 
 	unsealedRecords int
+	unsealedBytes   int
 	sealedBytes     int
 	nextSealOrder   uint64
 
@@ -150,20 +154,27 @@ func (r *sessionLogRecorder) record(g *sessionLogGrant, rec sessionLogRecord) {
 	// rec.at, not now: idle close must count time asleep, while lastFlushAt stays monotonic so a
 	// backward clock step cannot stall the flush interval.
 	spool.lastRecordAt = rec.at
+	rec.size = rec.estimateSize()
 
-	if !r.admitLocked(g) {
-		// Switching off says so when it happens; the proxy-wide cap is only reported here.
-		if r.unsealedRecords >= sessionLogTotalCapacity {
+	if !r.admitLocked(g, rec.size) {
+		// Switching off says so when it happens; the proxy-wide caps are only reported here.
+		if r.unsealedRecords >= sessionLogTotalCapacity || r.unsealedBytes+rec.size > sessionLogTotalBytes {
 			spool.ring.unreportedDrops++
 		}
 		return
 	}
 
+	before := spool.ring.bytes
 	if evicted := spool.ring.push(rec); !evicted {
 		r.unsealedRecords++
 	}
+	for spool.ring.bytes > sessionLogSpoolBytes && spool.ring.len() > 1 {
+		spool.ring.dropOldest()
+		r.unsealedRecords--
+	}
+	r.unsealedBytes += spool.ring.bytes - before
 
-	if spool.ring.len() >= sessionLogFlushRecords {
+	if spool.ring.len() >= sessionLogFlushRecords || spool.ring.bytes >= sessionLogFlushBytes {
 		select {
 		case r.wake <- struct{}{}:
 		default:
@@ -172,7 +183,7 @@ func (r *sessionLogRecorder) record(g *sessionLogGrant, rec sessionLogRecord) {
 }
 
 // Also switches recording back on when a grant issued after logs went off arrives.
-func (r *sessionLogRecorder) admitLocked(g *sessionLogGrant) bool {
+func (r *sessionLogRecorder) admitLocked(g *sessionLogGrant, size int) bool {
 	if r.hold.off {
 		if g.issued <= r.hold.offThrough {
 			return false
@@ -180,7 +191,7 @@ func (r *sessionLogRecorder) admitLocked(g *sessionLogGrant) bool {
 		r.hold.off = false
 		log.Info().Msg("agent-vault: session logs are back on, recording again")
 	}
-	if r.unsealedRecords >= sessionLogTotalCapacity {
+	if r.unsealedRecords >= sessionLogTotalCapacity || r.unsealedBytes+size > sessionLogTotalBytes {
 		return false
 	}
 	return true
@@ -308,8 +319,8 @@ func logUnrecordedRequests(sessionID string, dropped uint64) {
 	if dropped == 0 {
 		return
 	}
-	log.Warn().Str("sessionId", sessionID).Uint64("requests", dropped).
-		Msg("agent-vault: some requests weren't recorded in the session log, too many came in at once")
+	log.Warn().Str("sessionId", sessionID).Uint64("records", dropped).
+		Msg("agent-vault: some activity wasn't recorded in the session log, too much came in at once")
 }
 
 func (r *sessionLogRecorder) dueSpools(pass flushPass, now time.Time) []*sessionLogSpool {
@@ -327,7 +338,7 @@ func (r *sessionLogRecorder) dueSpools(pass flushPass, now time.Time) []*session
 
 func (r *sessionLogRecorder) isDueLocked(spool *sessionLogSpool, pass flushPass, now time.Time) bool {
 	if pass == flushWake {
-		return spool.ring.len() >= sessionLogFlushRecords
+		return spool.ring.len() >= sessionLogFlushRecords || spool.ring.bytes >= sessionLogFlushBytes
 	}
 	if spool.ring.len() == 0 && len(spool.pending) == 0 {
 		return false
@@ -335,7 +346,7 @@ func (r *sessionLogRecorder) isDueLocked(spool *sessionLogSpool, pass flushPass,
 	if pass == flushFinal {
 		return true
 	}
-	if spool.ring.len() >= sessionLogFlushRecords {
+	if spool.ring.len() >= sessionLogFlushRecords || spool.ring.bytes >= sessionLogFlushBytes {
 		return true
 	}
 	if len(spool.pending) > 0 {
@@ -388,7 +399,9 @@ func (r *sessionLogRecorder) sealNextRound(due []*sessionLogSpool, stopped map[*
 // happens early only if session logs were switched off mid-pass and the ring was discarded.
 func (r *sessionLogRecorder) sealNext(spool *sessionLogSpool, unsealed map[*sessionLogSpool]int) bool {
 	r.mu.Lock()
+	bytesBefore := spool.ring.bytes
 	records := spool.ring.drain(min(unsealed[spool], sessionLogFlushRecords))
+	r.unsealedBytes -= bytesBefore - spool.ring.bytes
 	if len(records) == 0 {
 		unsealed[spool] = 0
 		r.mu.Unlock()
@@ -681,6 +694,7 @@ func (r *sessionLogRecorder) discardAllLocked(spool *sessionLogSpool) (lost int)
 	lost = spool.heldRecords()
 
 	held := spool.ring.len()
+	r.unsealedBytes -= spool.ring.bytes
 	spool.ring.drain(held)
 	r.unsealedRecords -= held
 

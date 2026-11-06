@@ -40,6 +40,9 @@ type credential struct {
 	value        []byte
 	username     string
 	password     []byte
+	// An ssh-key credential's key and optional certificate, for a database or SSH service's login.
+	privateKey  []byte
+	certificate string
 	// Only an OAuth token Infisical issued can be refreshed when the upstream rejects it.
 	refreshable bool
 }
@@ -75,6 +78,8 @@ type resolvedService struct {
 	// Set when the session's owner still has to set their personal values. The server sends the
 	// service with no credential, so forwarding it would reach the host unauthenticated.
 	personalValuesMissing bool
+	// Set for a database or SSH service, which is reached by name over its own protocol rather than by host.
+	native *nativeTarget
 }
 
 // lastSeen and fetchedAt are wall-clock (Round(0)) so time asleep counts toward the grace and idle windows.
@@ -143,6 +148,11 @@ type sessionCache struct {
 	reportedScopes map[string]refusedEntry
 	// Bumped under mu by every credential swap, so a poll can tell which swaps happened after it began.
 	swapGen uint64
+
+	// Open database and SSH connections per session, guarded by mu. A session with one is pinned: housekeeping
+	// never drops it and the poll loop keeps asking about it, so a revoke is noticed however idle it sits.
+	native     map[string]map[*nativeConn]struct{}
+	nativeOpen sync.WaitGroup
 }
 
 type refusedEntry struct {
@@ -251,15 +261,13 @@ func (c *sessionCache) lookup(sessionToken string, admit func() bool) ([]*resolv
 	entry, ok := c.entries[key]
 	if ok {
 		if entry.expiresAt != nil && time.Now().After(*entry.expiresAt) {
-			delete(c.entries, key)
-			delete(c.tokens, key)
+			c.forgetLocked(key, true)
 			c.mu.Unlock()
 			return nil, nil, errSessionGone
 		}
 		// Past the grace window the entry is a miss, so a stalled refresh loop cannot keep an old credential alive.
 		if time.Since(entry.fetchedAt) > c.grace() {
-			delete(c.entries, key)
-			delete(c.tokens, key)
+			c.forgetLocked(key, false)
 		} else {
 			entry.lastSeen = time.Now().Round(0)
 			svcs, grant := entry.services, entry.sessionLog
@@ -288,6 +296,7 @@ func (c *sessionCache) lookup(sessionToken string, admit func() bool) ([]*resolv
 			if isSessionGone(err) || isProxyTokenRejected(err) {
 				c.mu.Lock()
 				c.rememberRefusalLocked(key, err)
+				c.forgetLocked(key, true)
 				c.mu.Unlock()
 			}
 			return nil, err
@@ -305,6 +314,7 @@ func (c *sessionCache) lookup(sessionToken string, admit func() bool) ([]*resolv
 			fetchedAt:  time.Now().Round(0),
 		}
 		c.tokens[key] = sessionToken
+		c.applyNativeLocked(key, result.Services)
 		return cacheLookup{services: result.Services, sessionLog: result.SessionLog}, nil
 	})
 	if err != nil {
@@ -323,6 +333,9 @@ func (c *sessionCache) evictIfFullLocked() {
 	var victim string
 	var oldest time.Time
 	for key, entry := range c.entries {
+		if c.pinnedLocked(key) {
+			continue
+		}
 		if now.Sub(entry.lastSeen) > sessionInactiveTTL {
 			victim = key
 			break
@@ -334,8 +347,7 @@ func (c *sessionCache) evictIfFullLocked() {
 	if victim == "" {
 		return
 	}
-	delete(c.entries, victim)
-	delete(c.tokens, victim)
+	c.forgetLocked(victim, false)
 }
 
 // refreshInBackground runs one refresh at a time off the caller's goroutine, so a slow control plane
@@ -356,17 +368,21 @@ func (c *sessionCache) refresh() {
 	targets := make(map[string]string, len(c.tokens))
 	now := time.Now()
 	for key, entry := range c.entries {
-		if now.Sub(entry.lastSeen) > sessionInactiveTTL {
-			delete(c.entries, key)
-			delete(c.tokens, key)
+		if entry.expiresAt != nil && now.After(*entry.expiresAt) {
+			c.forgetLocked(key, true)
 			continue
 		}
-		if entry.expiresAt != nil && now.After(*entry.expiresAt) {
-			delete(c.entries, key)
-			delete(c.tokens, key)
+		if now.Sub(entry.lastSeen) > sessionInactiveTTL && !c.pinnedLocked(key) {
+			c.forgetLocked(key, false)
 			continue
 		}
 		targets[key] = c.tokens[key]
+	}
+	// A pinned session whose entry went past the grace window during an outage is still asked about.
+	for key := range c.native {
+		if _, ok := targets[key]; !ok && c.tokens[key] != "" {
+			targets[key] = c.tokens[key]
+		}
 	}
 	c.mu.Unlock()
 
@@ -409,6 +425,19 @@ func (c *sessionCache) refreshOne(key, token string) {
 		entry.services = keepNewerSwaps(entry, result.Services, startGen)
 		entry.sessionLog = result.SessionLog
 		entry.fetchedAt = time.Now().Round(0)
+		c.applyNativeLocked(key, entry.services)
+		return
+	}
+	if c.pinnedLocked(key) {
+		c.entries[key] = &sessionEntry{
+			sessionID:  result.SessionID,
+			expiresAt:  result.ExpiresAt,
+			services:   result.Services,
+			sessionLog: result.SessionLog,
+			lastSeen:   time.Now().Round(0),
+			fetchedAt:  time.Now().Round(0),
+		}
+		c.applyNativeLocked(key, result.Services)
 	}
 }
 
@@ -445,6 +474,10 @@ func (c *sessionCache) handleRefreshFailure(key string, err error) {
 
 	entry, ok := c.entries[key]
 	if !ok {
+		// A pinned session whose entry is gone is still polled, and a verdict on it still ends its connections.
+		if c.pinnedLocked(key) && (isProxyTokenRejected(err) || isSessionGone(err)) {
+			c.forgetLocked(key, true)
+		}
 		return
 	}
 
@@ -452,26 +485,35 @@ func (c *sessionCache) handleRefreshFailure(key string, err error) {
 	// may outlive it. Only the reason logged differs.
 	if isProxyTokenRejected(err) {
 		log.Warn().Err(err).Str("sessionId", entry.sessionID).Msg("agent-vault: Infisical rejected this proxy's token, dropping the session")
-		delete(c.entries, key)
-		delete(c.tokens, key)
+		c.forgetLocked(key, true)
 		return
 	}
 	if isSessionGone(err) {
 		log.Debug().Err(err).Str("sessionId", entry.sessionID).Msg("agent-vault: session no longer valid, dropping")
-		delete(c.entries, key)
-		delete(c.tokens, key)
+		c.forgetLocked(key, true)
 		return
 	}
 
+	// Infisical being unreachable says nothing about the session, so open connections stay and keep being polled.
 	grace := c.grace()
 	if time.Since(entry.fetchedAt) > grace {
 		log.Warn().
 			Str("sessionId", entry.sessionID).
 			Dur("grace", grace).
 			Msg("agent-vault: could not reach Infisical within the grace window, dropping session")
-		delete(c.entries, key)
-		delete(c.tokens, key)
+		c.forgetLocked(key, false)
 	}
+}
+
+// The session's current log grant, nil when logs are off, and false once its entry is gone.
+func (c *sessionCache) currentGrant(key string) (*sessionLogGrant, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[key]
+	if !ok {
+		return nil, false
+	}
+	return entry.sessionLog, true
 }
 
 func (c *sessionCache) grace() time.Duration {
@@ -482,8 +524,10 @@ func (c *sessionCache) close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for key := range c.entries {
-		delete(c.entries, key)
-		delete(c.tokens, key)
+		c.forgetLocked(key, true)
+	}
+	for key := range c.native {
+		c.endNativeLocked(key)
 	}
 }
 
@@ -605,8 +649,7 @@ func (c *sessionCache) rememberRejectedRefresh(sessionToken, serviceID, hostPatt
 func (c *sessionCache) dropSession(key string, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.entries, key)
-	delete(c.tokens, key)
+	c.forgetLocked(key, true)
 	c.rememberRefusalLocked(key, err)
 }
 
