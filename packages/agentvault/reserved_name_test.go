@@ -154,7 +154,7 @@ func TestSkillsAreForwardedWithTheirQuery(t *testing.T) {
 	infisical := newFakeInfisical(t, http.StatusOK, `{"skills":[]}`)
 	_, client := newTLSProxy(t, noUpstream(t), fixedResolver{})
 	resp, _ := getThrough(t, client, "https://"+DiscoveryHost+"/api/v1/agent-vault/session/skills?includeBuiltin=false", nil)
-	if resp.StatusCode != http.StatusOK || resp.Header.Get(HeaderDecision) != decisionInfisical {
+	if resp.StatusCode != http.StatusOK || resp.Header.Get(HeaderDecision) != decisionSkills {
 		t.Fatalf("got %d (%s)", resp.StatusCode, resp.Header.Get(HeaderDecision))
 	}
 	seen := infisical.seen()
@@ -280,7 +280,7 @@ func TestReservedNameRequestsAreRecordedInTheSessionLog(t *testing.T) {
 
 	for _, tc := range []struct{ path, decision string }{
 		{"/services", decisionDiscovery},
-		{"/api/v1/agent-vault/session/skills", decisionInfisical},
+		{"/api/v1/agent-vault/session/skills", decisionSkills},
 	} {
 		if res := proxiedGet(t, front, "http://"+DiscoveryHost+tc.path); res.StatusCode != http.StatusOK {
 			t.Fatalf("%s answered %d", tc.path, res.StatusCode)

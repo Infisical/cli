@@ -723,7 +723,7 @@ func newFakeTunnelProxy(t *testing.T, mode string, status int, body any) *fakeTu
 			rec.WriteHeader(http.StatusServiceUnavailable)
 			_, _ = io.WriteString(rec, `{"error":"busy","message":"too many agents are starting through the proxy at once"}`)
 		} else if mode == "forwards" || mode == "busy-once" {
-			rec.Header().Set(agentvault.HeaderDecision, "infisical")
+			rec.Header().Set(agentvault.HeaderDecision, "skills")
 			rec.Header().Set("Content-Type", "application/json")
 			rec.WriteHeader(status)
 			_ = json.NewEncoder(rec).Encode(body)

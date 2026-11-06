@@ -75,7 +75,7 @@ func reservedRouteFor(path string) (reservedRoute, bool) {
 	case "", "/", "/services", "/services/", "/api/v1/agent-vault/session/services":
 		return reservedRoute{infisicalPath: "/v1/agent-vault/session/services", decision: decisionDiscovery}, true
 	case "/api/v1/agent-vault/session/skills":
-		return reservedRoute{infisicalPath: "/v1/agent-vault/session/skills", decision: decisionInfisical, forwardQuery: true}, true
+		return reservedRoute{infisicalPath: "/v1/agent-vault/session/skills", decision: decisionSkills, forwardQuery: true}, true
 	}
 	return reservedRoute{}, false
 }

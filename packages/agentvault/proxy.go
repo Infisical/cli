@@ -67,8 +67,8 @@ const (
 	decisionError       = "error"
 	// The session's services list, which the proxy gets from Infisical for the session.
 	decisionDiscovery = "discovery"
-	// Another request the proxy sent to Infisical for the session at the reserved name, such as its skills.
-	decisionInfisical = "infisical"
+	// The session's skills, which the proxy gets from Infisical for the session.
+	decisionSkills = "skills"
 )
 
 type Options struct {
