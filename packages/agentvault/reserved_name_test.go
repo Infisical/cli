@@ -461,3 +461,29 @@ func TestAnAgentThatStopsReadingGivesUpItsSlot(t *testing.T) {
 		}
 	}
 }
+
+func TestACookieOnOneSessionsAnswerIsNotSentForAnother(t *testing.T) {
+	var mu sync.Mutex
+	var sent []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		sent = append(sent, r.Header.Get("Cookie"))
+		mu.Unlock()
+		http.SetCookie(w, &http.Cookie{Name: "affinity", Value: "first-session", Path: "/"})
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"services":[]}`)
+	}))
+	t.Cleanup(server.Close)
+	old := config.INFISICAL_URL
+	config.INFISICAL_URL = server.URL + "/api"
+	t.Cleanup(func() { config.INFISICAL_URL = old })
+	_, client := newTLSProxy(t, noUpstream(t), fixedResolver{})
+
+	getThrough(t, client, DiscoveryURL, nil)
+	getThrough(t, withSessionToken(t, client, "agv_other"), DiscoveryURL, nil)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(sent) != 2 || sent[1] != "" {
+		t.Fatalf("Infisical got cookies %q", sent)
+	}
+}

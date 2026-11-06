@@ -48,9 +48,14 @@ func IsSessionRefusal(code string) bool {
 var reservedForwardSlots = make(chan struct{}, 8)
 
 // One client for the life of the proxy, so forwarded requests share a connection pool instead of each opening its own
-// and leaving it idle. The session's token goes on each request, never on the client.
+// and leaving it idle. Nothing about a session stays on it: the session's token goes on each request, and with no
+// cookie jar, a cookie on one session's answer isn't sent with the next session's request.
 var reservedNameClient = sync.OnceValues(func() (*resty.Client, error) {
-	return util.GetRestyClientWithPolicy(util.RetryPolicy{})
+	client, err := util.GetRestyClientWithPolicy(util.RetryPolicy{})
+	if err != nil {
+		return nil, err
+	}
+	return client.SetCookieJar(nil), nil
 })
 
 var errReservedAnswerTooLarge = errors.New("Infisical's answer is larger than the proxy passes on")
