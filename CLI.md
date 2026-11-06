@@ -16,7 +16,7 @@ infisical secrets-manager secrets get API_KEY --env prod
 - **Action**: `get`, `create`, `update`, or `delete`.
   - `get` without a name lists; `get <name>` shows one. Don't add a separate `list`.
   - `create` fails if the item exists, and `update` fails if it doesn't. Don't add upserts like `set`.
-- **Workflow commands** act on a whole environment rather than one resource, and sit directly under the product: `run`, `export`.
+- **Workflow commands** act on a whole environment rather than one resource: `run` sits directly under the product, and `export` under the resource it writes out (`secrets-manager secrets export`).
 - **Lifecycle actions** are for long-running things such as agents and services: `start`, `stop`, `install`, `uninstall`.
 
 Adding a word to any of these lists is a design decision. Raise it in the PR, and update this file and `conventions_test.go` together.
@@ -111,6 +111,7 @@ For a new command, add the flags with `addConfirmFlags(cmd)`, then call `confirm
 - **Never change a flag's short form, type, or default.**
 - Don't hide a command before its replacement ships. A release can be cut at any commit.
 - Don't add subcommands to the legacy top-level `secrets`, `run`, `export`, and `dynamic-secrets` commands. New Secrets Management commands go under `secrets-manager`.
+- The legacy top-level `secrets`, `run`, `export`, and `dynamic-secrets` are hidden from `infisical --help` but keep working.
 
 `testdata/command_surface.json` records every command path and flag the CLI has shipped. The test fails if one disappears or changes, and also when a new one isn't recorded yet. After adding a command or flag, record it:
 

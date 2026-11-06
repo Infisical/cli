@@ -9,8 +9,10 @@ import (
 )
 
 // namespaceSecretsCmd gives the `secrets` instance under `secrets-manager` the CLI.md shape: `get`
-// without names lists, and `create` and `update` replace the upsert `set`, which keeps working but
-// leaves the help. The top-level `infisical secrets` is a separate instance and keeps its old shape.
+// without names lists, `create` and `update` replace the upsert `set`, which keeps working but
+// leaves the help, and `export` moves here. agent-proxy is only kept on the hidden top-level
+// `infisical secrets`, so this instance drops it. The top-level `infisical secrets` is a separate
+// instance and keeps its old shape.
 func namespaceSecretsCmd(secretsCmd *cobra.Command) {
 	get, _, err := secretsCmd.Find([]string{"get"})
 	if err != nil || get == secretsCmd {
@@ -37,6 +39,13 @@ infisical secrets-manager secrets create --file .env --env dev`))
 		"Change the values of existing secrets, failing without writing anything if one doesn't exist",
 		`infisical secrets-manager secrets update API_KEY=new-value --env dev
 infisical secrets-manager secrets update DB_URL=postgres://db/app --tag backend --env prod`))
+	secretsCmd.AddCommand(buildExportCmd())
+
+	agentProxy, _, err := secretsCmd.Find([]string{"agent-proxy"})
+	if err != nil || agentProxy == secretsCmd {
+		panic("secrets-manager secrets agent-proxy is not registered")
+	}
+	secretsCmd.RemoveCommand(agentProxy)
 }
 
 func buildSecretsWriteCmd(action string, mode util.SecretWriteMode, short, example string) *cobra.Command {

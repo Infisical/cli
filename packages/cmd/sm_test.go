@@ -14,9 +14,9 @@ import (
 )
 
 // smTree lists every command that must exist both at the top level and under `secrets-manager`.
+// export and agent-proxy are left out: they're only at the top level now, hidden.
 var smTree = [][]string{
 	{"run"},
-	{"export"},
 	{"secrets"},
 	{"secrets", "get"},
 	{"secrets", "set"},
@@ -26,10 +26,6 @@ var smTree = [][]string{
 	{"secrets", "folders", "get"},
 	{"secrets", "folders", "create"},
 	{"secrets", "folders", "delete"},
-	{"secrets", "agent-proxy"},
-	{"secrets", "agent-proxy", "connect"},
-	{"secrets", "agent-proxy", "start"},
-	{"secrets", "agent-proxy", "run"},
 	{"dynamic-secrets"},
 	{"dynamic-secrets", "lease"},
 	{"dynamic-secrets", "lease", "create"},
@@ -105,11 +101,6 @@ func TestSmFlagsMatchTopLevel(t *testing.T) {
 				if smFlags[flag] == signature {
 					continue
 				}
-				// Only the description of --projectId may differ, and only where sm.go sets it.
-				if usage, rewritten := projectIDUsageUnderSecretsManager[name]; rewritten && kind == "local" && flag == "projectId" &&
-					strings.TrimSuffix(smFlags[flag], usage) == strings.TrimSuffix(signature, top.LocalFlags().Lookup("projectId").Usage) {
-					continue
-				}
 				t.Errorf("%s: %s flag --%s differs under sm: top=%q sm=%q", name, kind, flag, signature, smFlags[flag])
 			}
 			for flag := range smFlags {
@@ -166,44 +157,31 @@ func TestSmRejectsUnknownSubcommand(t *testing.T) {
 	}
 }
 
-// `sm agent-proxy` is a shorter path to `secrets agent-proxy`: same subcommands and flags, its own
-// instances. It has no `secrets` parent, so the --env/--tags that `secrets` passes down (which
-// agent-proxy ignores) are not inherited there.
-func TestSmAgentProxyShortcut(t *testing.T) {
-	for _, sub := range [][]string{{}, {"connect"}, {"start"}, {"run"}} {
-		viaSecrets := findCommand(t, append([]string{"secrets", "agent-proxy"}, sub...))
-		shortcut := findCommand(t, append([]string{secretsManagerCommandName, "agent-proxy"}, sub...))
-		name := strings.TrimSpace("agent-proxy " + strings.Join(sub, " "))
-
-		if viaSecrets == shortcut {
-			t.Errorf("%s: shortcut shares its instance with `secrets agent-proxy`", name)
-		}
-		if got, want := shortcut.CommandPath(), "infisical secrets-manager "+name; got != want {
-			t.Errorf("%s: shortcut path is %q, want %q", name, got, want)
-		}
-
-		want, got := flagSignature(viaSecrets.LocalFlags()), flagSignature(shortcut.LocalFlags())
-		for flag, signature := range want {
-			if got[flag] != signature {
-				t.Errorf("%s: --%s differs on the shortcut: secrets=%q sm=%q", name, flag, signature, got[flag])
+// agent-proxy and export are gone from secrets-manager (export lives at `secrets export`). The
+// hidden top-level copies keep working for existing scripts.
+func TestAgentProxyAndExportAreNotUnderSecretsManager(t *testing.T) {
+	hasChild := func(parent *cobra.Command, name string) bool {
+		for _, child := range parent.Commands() {
+			if child.Name() == name {
+				return true
 			}
 		}
-		for flag := range got {
-			if _, ok := want[flag]; !ok {
-				t.Errorf("%s: --%s exists only on the shortcut", name, flag)
-			}
-		}
-		for _, inherited := range []string{"env", "tags"} {
-			if len(sub) == 0 && shortcut.InheritedFlags().Lookup(inherited) != nil {
-				t.Errorf("%s: shortcut should not inherit --%s from `secrets`", name, inherited)
-			}
-		}
+		return false
 	}
-
-	for _, child := range RootCmd.Commands() {
-		if child.Name() == "agent-proxy" {
-			t.Errorf("agent-proxy must not be added at the top level; only `sm agent-proxy` is new")
+	for _, prefix := range []string{secretsManagerCommandName, secretsManagerAlias} {
+		root := findCommand(t, []string{prefix})
+		for _, name := range []string{"agent-proxy", "export"} {
+			if hasChild(root, name) {
+				t.Errorf("%s %s is still registered", prefix, name)
+			}
 		}
+		if hasChild(findCommand(t, []string{prefix, "secrets"}), "agent-proxy") {
+			t.Errorf("%s secrets agent-proxy is still registered", prefix)
+		}
+		findCommand(t, []string{prefix, "secrets", "export"})
+	}
+	for _, path := range [][]string{{"export"}, {"secrets", "agent-proxy", "connect"}, {"secrets", "agent-proxy", "run"}, {"secrets", "agent-proxy", "start"}} {
+		findCommand(t, path)
 	}
 }
 
@@ -216,9 +194,7 @@ func TestTopLevelCommandNameSeesThroughSm(t *testing.T) {
 		"sm":                              "secrets-manager",
 		"secrets-manager run":             "run",
 		"secrets agent-proxy run":         "secrets",
-		"sm secrets agent-proxy run":      "secrets",
 		"sm dynamic-secrets lease create": "dynamic-secrets",
-		"sm agent-proxy run":              "agent-proxy",
 		"sm projects list":                "projects",
 	}
 	for path, want := range cases {
@@ -271,7 +247,7 @@ func TestSecretsManagerHidesLegacyCommands(t *testing.T) {
 			t.Errorf("top-level `%s` should stay visible", strings.Join(path, " "))
 		}
 	}
-	for _, path := range [][]string{{"secrets"}, {"secrets", "get"}, {"projects"}, {"run"}, {"export"}, {"dynamic-secrets"}} {
+	for _, path := range [][]string{{"secrets"}, {"secrets", "get"}, {"secrets", "export"}, {"projects"}, {"run"}, {"dynamic-secrets"}} {
 		if findCommand(t, smPath(path)).Hidden {
 			t.Errorf("secrets-manager %s should be visible", strings.Join(path, " "))
 		}
