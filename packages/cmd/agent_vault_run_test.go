@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Infisical/infisical-merge/packages/agentvault"
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/spf13/cobra"
@@ -90,6 +91,12 @@ func TestBuildAgentVaultRunEnvPointsAtTheProxy(t *testing.T) {
 		if env[k] != "/tmp/ca.pem" {
 			t.Fatalf("%s = %q, want the CA path", k, env[k])
 		}
+	}
+	if env[agentvault.ServicesURLEnv] != agentvault.DiscoveryURL {
+		t.Fatalf("%s = %q, want the discovery URL the built-in skill reads", agentvault.ServicesURLEnv, env[agentvault.ServicesURLEnv])
+	}
+	if strings.Contains(env["NO_PROXY"], agentvault.DiscoveryHost) {
+		t.Fatal("discovery is answered by the proxy, so it must not be in NO_PROXY")
 	}
 }
 

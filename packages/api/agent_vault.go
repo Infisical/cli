@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strconv"
 
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/go-resty/resty/v2"
@@ -347,7 +348,22 @@ type ListAgentVaultSessionSkillsResponse struct {
 // Infisical caps one skill at 1 MB, but not how many a session can reach.
 const agentVaultSessionSkillsResponseLimit = 64 << 20
 
-func CallListAgentVaultSessionSkills(ctx context.Context, httpClient *resty.Client, sessionToken string) (ListAgentVaultSessionSkillsResponse, error) {
+// CallListAgentVaultSessionSkills asks Infisical for the session's skills. includeBuiltin=false leaves out the built-in
+// infisical-agent-vault skill; an Infisical that predates it ignores the parameter and never sends that skill.
+func CallListAgentVaultSessionSkills(ctx context.Context, httpClient *resty.Client, sessionToken string, includeBuiltin bool) (ListAgentVaultSessionSkillsResponse, error) {
+	return listAgentVaultSessionSkills(ctx, httpClient, fmt.Sprintf("%v/v1/agent-vault/session/skills", config.INFISICAL_URL),
+		sessionToken, includeBuiltin, "CallListAgentVaultSessionSkills")
+}
+
+// CallListAgentVaultSessionSkillsThroughProxy asks an Agent Vault proxy's reserved name, which forwards the request to the
+// proxy's own Infisical, so a host that can reach only the proxy still gets the session's skills. httpClient has to send
+// its requests through the proxy and trust the proxy's certificate authority.
+func CallListAgentVaultSessionSkillsThroughProxy(ctx context.Context, httpClient *resty.Client, reservedAPIURL, sessionToken string, includeBuiltin bool) (ListAgentVaultSessionSkillsResponse, error) {
+	return listAgentVaultSessionSkills(ctx, httpClient, reservedAPIURL+"/v1/agent-vault/session/skills",
+		sessionToken, includeBuiltin, "CallListAgentVaultSessionSkillsThroughProxy")
+}
+
+func listAgentVaultSessionSkills(ctx context.Context, httpClient *resty.Client, url, sessionToken string, includeBuiltin bool, operation string) (ListAgentVaultSessionSkillsResponse, error) {
 	var res ListAgentVaultSessionSkillsResponse
 	response, err := httpClient.
 		R().
@@ -356,13 +372,14 @@ func CallListAgentVaultSessionSkills(ctx context.Context, httpClient *resty.Clie
 		SetResult(&res).
 		SetHeader("User-Agent", USER_AGENT).
 		SetAuthToken(sessionToken).
-		Get(fmt.Sprintf("%v/v1/agent-vault/session/skills", config.INFISICAL_URL))
+		SetQueryParam("includeBuiltin", strconv.FormatBool(includeBuiltin)).
+		Get(url)
 
 	if err != nil {
-		return ListAgentVaultSessionSkillsResponse{}, NewGenericRequestError("CallListAgentVaultSessionSkills", err)
+		return ListAgentVaultSessionSkillsResponse{}, NewGenericRequestError(operation, err)
 	}
 	if response.IsError() {
-		return ListAgentVaultSessionSkillsResponse{}, NewAPIErrorWithResponse("CallListAgentVaultSessionSkills", response, nil)
+		return ListAgentVaultSessionSkillsResponse{}, NewAPIErrorWithResponse(operation, response, nil)
 	}
 	return res, nil
 }
