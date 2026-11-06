@@ -30,6 +30,8 @@ var (
 	// Long enough for the proxy's own session lookup, which a CONNECT for a host other than the proxy's Infisical waits on
 	// before it is answered.
 	agentVaultProxyAPIURLTimeout = 20 * time.Second
+	// For confirming the API URL on its own after the skills request didn't, which delays the agent's start.
+	agentVaultProxyConfirmTimeout = 10 * time.Second
 )
 
 const agentVaultSkillsUnreachableHint = " Pass --no-skills if this host can't reach Infisical."
@@ -259,6 +261,13 @@ func prepareAgentVaultRunProxy(ctx context.Context, proxyAddr, sessionToken stri
 	}
 	if tunnel == nil {
 		return ""
+	}
+	// A skills answer that failed before its headers were checked, such as one cut short, says nothing either way, so the
+	// services list's headers decide.
+	if !tunnel.confirmed && !tunnel.contradicted && ctx.Err() == nil {
+		confirmCtx, cancelConfirm := context.WithTimeout(ctx, agentVaultProxyConfirmTimeout)
+		tunnel.confirm(confirmCtx)
+		cancelConfirm()
 	}
 	if tunnel.contradicted {
 		util.PrintWarning("The proxy's answer from inside TLS didn't name the Infisical it named on its CONNECT answer, so the agent gets no " +

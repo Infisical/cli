@@ -672,8 +672,9 @@ const testHTTPProxyAPIURL = "http://infisical.test:8080/api"
 // A stand-in for an Agent Vault proxy. "forwards" names its Infisical on every CONNECT and again inside TLS, and answers
 // for the session the way a proxy that forwards to Infisical does, marked; "busy-once" answers its first request the way
 // a proxy with no free slot does, then forwards; "http" forwards for an Infisical whose --domain is http; "rewritten"
-// forwards, but its CONNECT answer reaches the client changed on the way to an http URL; "refuses" turns the CONNECT
-// down, and "old" opens it, the way an older proxy does, neither naming an Infisical.
+// forwards, but its CONNECT answer reaches the client changed on the way to an http URL; "cut" forwards, but cuts the
+// skills answer short after its headers; "refuses" turns the CONNECT down, and "old" opens it, the way an older proxy
+// does, neither naming an Infisical.
 type fakeTunnelProxy struct {
 	addr           string
 	caPEM          []byte
@@ -688,7 +689,7 @@ type fakeTunnelProxy struct {
 // The URL the fake proxy's CONNECT answer claims and the one it names inside TLS, by mode.
 func fakeTunnelProxyAPIURLs(mode string) (claimed, named string) {
 	switch mode {
-	case "forwards", "busy-once":
+	case "forwards", "busy-once", "cut":
 		return testProxyAPIURL, testProxyAPIURL
 	case "http":
 		return testHTTPProxyAPIURL, testHTTPProxyAPIURL
@@ -764,6 +765,11 @@ func newFakeTunnelProxy(t *testing.T, mode string, status int, body any) *fakeTu
 		decision := agentvault.DecisionSkills
 		if strings.HasSuffix(req.URL.Path, "/session/services") {
 			decision = agentvault.DecisionDiscovery
+		}
+		if mode == "cut" && decision == agentvault.DecisionSkills {
+			_, _ = io.WriteString(inner, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n"+
+				agentvault.HeaderDecision+": skills\r\n"+agentvault.HeaderAPIURL+": "+named+"\r\n\r\n{\"skills\":[")
+			return
 		}
 		if mode == "busy-once" && seen == 1 {
 			rec.Header().Set(agentvault.HeaderDecision, "error")
@@ -1098,5 +1104,25 @@ func TestAnInterruptWhileAskingTheProxyRevokes(t *testing.T) {
 	}
 	if time.Since(start) > 5*time.Second {
 		t.Fatal("the interrupt did not cut the question short")
+	}
+}
+
+// The skills answer can fail after its headers, such as when it is cut short, and then says nothing about the proxy, so
+// the services list confirms the API URL instead of the agent losing it.
+func TestASkillsAnswerCutShortStillLeavesTheAgentItsAPIURL(t *testing.T) {
+	isolateSkillsHome(t)
+	warnings := captureWarnings(t)
+	proxy := newFakeTunnelProxy(t, "cut", http.StatusOK, skillsBody())
+
+	apiURL := prepareAgentVaultRunProxy(context.Background(), proxy.addr, "agv_tok", proxy.caPEM,
+		installThrough(&agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok"}))
+	if apiURL != testProxyAPIURL {
+		t.Fatalf("the agent gets %q, want %q", apiURL, testProxyAPIURL)
+	}
+	if got := proxy.lastRequest.Load(); got != "HEAD /api/v1/agent-vault/session/services" {
+		t.Fatalf("the proxy last saw %v", got)
+	}
+	if !strings.Contains(warnings.String(), "Starting without skills:") {
+		t.Fatalf("warned %q", warnings.String())
 	}
 }
