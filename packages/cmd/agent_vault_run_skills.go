@@ -66,8 +66,9 @@ func agentVaultSessionTokenAPIURL() string {
 	return util.AppendAPIEndpoint(domain)
 }
 
-// The waits before each retry of a list that answered 401 on a minted run.
-var agentVaultSkillsUnauthorizedRetryDelays = []time.Duration{500 * time.Millisecond, time.Second}
+// The waits before each retry of a list that answered 401 on a minted run. Through a proxy, the last retry comes after
+// the proxy stops answering the refusal from memory, so it reaches Infisical again.
+var agentVaultSkillsUnauthorizedRetryDelays = []time.Duration{time.Second, 2 * time.Second, 3 * time.Second}
 
 // Fastify's own answer for a route it does not have, with documentationUrl or with its default message "Route
 // GET:<path> not found". A NotFoundError thrown by a handler is named "NotFound" and carries neither.
@@ -126,11 +127,7 @@ func (c *agentVaultSkillsClient) list(ctx context.Context) (api.ListAgentVaultSe
 		return api.CallListAgentVaultSessionSkills(ctx, c.httpClient, c.sessionToken, c.includeBuiltin)
 	})
 	if err != nil && proxyTooOld {
-		var tunnelProxy string
-		if c.tunnel != nil {
-			tunnelProxy = c.tunnel.proxyAddr
-		}
-		return listed, &agentVaultProxyTooOldError{proxyAddr: tunnelProxy, err: err}
+		return listed, &agentVaultProxyTooOldError{err: err}
 	}
 	return listed, err
 }
@@ -142,7 +139,6 @@ const agentVaultReservedAPIURL = "https://" + agentvault.DiscoveryHost + "/api"
 // it passes on from Infisical. An older proxy doesn't know the reserved name: it refuses the tunnel, or tries to reach
 // the name upstream and fails, and marks neither.
 type agentVaultSkillsTunnel struct {
-	proxyAddr  string
 	httpClient *resty.Client
 
 	mu       sync.Mutex
@@ -155,9 +151,28 @@ func newAgentVaultSkillsTunnel(proxyAddr, sessionToken string, caPEM []byte) (*a
 	if !pool.AppendCertsFromPEM(caPEM) {
 		return nil, errors.New("the proxy's certificate authority could not be read")
 	}
-	tunnel := &agentVaultSkillsTunnel{proxyAddr: proxyAddr}
+	tunnel := &agentVaultSkillsTunnel{}
 	proxyURL := &url.URL{Scheme: "http", Host: proxyAddr, User: url.UserPassword(agentvault.ProxyAuthUsername, sessionToken)}
-	tunnel.httpClient = resty.NewWithClient(&http.Client{Transport: &http.Transport{
+	// The retries a direct request gets, for a busy Infisical or proxy. INFISICAL_CUSTOM_HEADERS stay behind: they are
+	// for Infisical, and the proxy sends its own request there.
+	policy := util.DefaultRetryPolicy()
+	policy.StatusOnly = true
+	tunnel.httpClient = util.GetRestyClientWithoutCustomHeaders(policy)
+	// An answer the proxy didn't mark comes from a proxy too old to forward the request, which asking again won't
+	// change, so only a marked one is asked again.
+	retryConditions := tunnel.httpClient.RetryConditions
+	tunnel.httpClient.RetryConditions = []resty.RetryConditionFunc{func(res *resty.Response, err error) bool {
+		if res == nil || res.Header().Get(agentvault.HeaderDecision) == "" {
+			return false
+		}
+		for _, condition := range retryConditions {
+			if condition(res, err) {
+				return true
+			}
+		}
+		return false
+	}}
+	tunnel.httpClient.SetTransport(&http.Transport{
 		Proxy:           http.ProxyURL(proxyURL),
 		TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
 		DialContext:     (&net.Dialer{Timeout: agentVaultSkillsConnectTimeout, KeepAlive: 30 * time.Second}).DialContext,
@@ -166,7 +181,7 @@ func newAgentVaultSkillsTunnel(proxyAddr, sessionToken string, caPEM []byte) (*a
 			tunnel.note(res.Header)
 			return nil
 		},
-	}})
+	})
 	tunnel.httpClient.OnAfterResponse(func(_ *resty.Client, res *resty.Response) error {
 		tunnel.note(res.Header())
 		return nil
@@ -191,8 +206,7 @@ func (t *agentVaultSkillsTunnel) outcome() (answered, marked bool) {
 
 // The proxy was too old to forward the request, and asking Infisical directly failed too.
 type agentVaultProxyTooOldError struct {
-	proxyAddr string
-	err       error
+	err error
 }
 
 func (e *agentVaultProxyTooOldError) Error() string { return e.err.Error() }
@@ -202,7 +216,7 @@ func (e *agentVaultProxyTooOldError) Unwrap() error { return e.err }
 func agentVaultSkillsUnreachableHintFor(err error) string {
 	var tooOld *agentVaultProxyTooOldError
 	if errors.As(err, &tooOld) {
-		return fmt.Sprintf(" The proxy at %s is too old to pass skills on, so this host asked Infisical directly. Update the Infisical CLI that runs the proxy, or pass --no-skills.", tooOld.proxyAddr)
+		return " The proxy is too old to pass skills on, so this host asked Infisical directly. Update the Infisical CLI that runs the proxy, or pass --no-skills."
 	}
 	return agentVaultSkillsUnreachableHint
 }

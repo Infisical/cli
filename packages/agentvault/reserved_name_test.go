@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -120,6 +122,10 @@ func TestTheServicesListComesFromTheProxysInfisicalWithTheSessionsOwnToken(t *te
 	if resp.StatusCode != http.StatusOK || body != list || resp.Header.Get(HeaderDecision) != decisionDiscovery ||
 		resp.Header.Get("Cache-Control") != "no-store" {
 		t.Fatalf("got %d (%s): %s", resp.StatusCode, resp.Header.Get(HeaderDecision), body)
+	}
+	// Infisical's length is passed on, so an answer that stops short can't pass for a whole one.
+	if resp.ContentLength != int64(len(list)) {
+		t.Fatalf("Content-Length %d, want %d", resp.ContentLength, len(list))
 	}
 	seen := infisical.seen()
 	want := forwardedRequest{method: http.MethodGet, path: "/api/v1/agent-vault/session/services",
@@ -386,5 +392,72 @@ func TestResponsesCarryTheProxysDecisionNotTheUpstreams(t *testing.T) {
 	resp.Body.Close()
 	if resp.Header.Get(HeaderDecision) != decisionPassthrough || resp.Header.Get(HeaderService) != "" {
 		t.Fatalf("the upstream's own headers must not survive: decision=%q service=%q", resp.Header.Get(HeaderDecision), resp.Header.Get(HeaderService))
+	}
+}
+
+// An Infisical that declares a length and sends less, the way a connection that drops part way looks.
+func newShortInfisical(t *testing.T, declared int, sent string) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", strconv.Itoa(declared))
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, sent)
+	}))
+	t.Cleanup(server.Close)
+	old := config.INFISICAL_URL
+	config.INFISICAL_URL = server.URL + "/api"
+	t.Cleanup(func() { config.INFISICAL_URL = old })
+}
+
+// readsWhole reports whether the agent got a status and then read the body to its end without an error.
+func readsWhole(client *http.Client, target string) bool {
+	resp, err := client.Get(target)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	_, err = io.ReadAll(resp.Body)
+	return err == nil
+}
+
+func TestAnAnswerThatStopsPartWayDoesNotReachTheAgentAsWhole(t *testing.T) {
+	newShortInfisical(t, 1000, `{"services":`)
+	_, client := newTLSProxy(t, noUpstream(t), fixedResolver{})
+	if readsWhole(client, DiscoveryURL) {
+		t.Fatal("the agent read a cut answer as a whole one")
+	}
+}
+
+func TestAnAnswerPastTheLimitIsCutOffVisibly(t *testing.T) {
+	old := reservedForwardMaxBytes
+	reservedForwardMaxBytes = 16
+	t.Cleanup(func() { reservedForwardMaxBytes = old })
+	newFakeInfisical(t, http.StatusOK, strings.Repeat("x", 100))
+	_, client := newTLSProxy(t, noUpstream(t), fixedResolver{})
+	if readsWhole(client, DiscoveryURL) {
+		t.Fatal("the agent read an answer over the limit as a whole one")
+	}
+}
+
+func TestAnAgentThatStopsReadingGivesUpItsSlot(t *testing.T) {
+	old := reservedForwardTimeout
+	reservedForwardTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { reservedForwardTimeout = old })
+	// Far more than the buffers between the proxy and the agent hold, so the proxy's writes stall.
+	newFakeInfisical(t, http.StatusOK, strings.Repeat("x", 32<<20))
+	_, client := newTLSProxy(t, noUpstream(t), fixedResolver{})
+
+	resp, err := client.Get(DiscoveryURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	// The write that times out closes the connection, and Go's TLS gives the closing alert 5 seconds of its own when the
+	// agent's buffers are full. Far short of the tunnel's half-hour write timeout either way.
+	for deadline := time.Now().Add(10 * time.Second); len(reservedForwardSlots) > 0; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the proxy still holds %d slots for an agent that stopped reading", len(reservedForwardSlots))
+		}
 	}
 }

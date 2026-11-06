@@ -651,13 +651,16 @@ func TestTheSkillsClientAsksABusyInfisicalAgain(t *testing.T) {
 }
 
 // A stand-in for an Agent Vault proxy at the reserved name. "forwards" opens the tunnel and answers the way a proxy that
-// forwards to Infisical does, marked; "refuses" turns the CONNECT down the way an older proxy under service hosts only
-// does; "unmarked" opens the tunnel and fails upstream the way an older proxy under any host does.
+// forwards to Infisical does, marked; "busy-once" answers its first request the way a proxy with no free slot does, then
+// forwards; "refuses" turns the CONNECT down the way an older proxy under service hosts only does; "unmarked" opens the
+// tunnel and fails upstream the way an older proxy under any host does.
 type fakeTunnelProxy struct {
 	addr           string
 	caPEM          []byte
 	sessionToken   atomic.Value
 	includeBuiltin atomic.Value
+	// Requests that reached the proxy through a tunnel.
+	requests atomic.Int32
 }
 
 func newFakeTunnelProxy(t *testing.T, mode string, status int, body any) *fakeTunnelProxy {
@@ -711,9 +714,15 @@ func newFakeTunnelProxy(t *testing.T, mode string, status int, body any) *fakeTu
 			return
 		}
 		proxy.includeBuiltin.Store(req.URL.Query().Get("includeBuiltin"))
+		seen := proxy.requests.Add(1)
 		rec := httptest.NewRecorder()
 		rec.Header().Set("Connection", "close")
-		if mode == "forwards" {
+		if mode == "busy-once" && seen == 1 {
+			rec.Header().Set(agentvault.HeaderDecision, "error")
+			rec.Header().Set("Content-Type", "application/json")
+			rec.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(rec, `{"error":"busy","message":"too many agents are starting through the proxy at once"}`)
+		} else if mode == "forwards" || mode == "busy-once" {
 			rec.Header().Set(agentvault.HeaderDecision, "infisical")
 			rec.Header().Set("Content-Type", "application/json")
 			rec.WriteHeader(status)
@@ -782,6 +791,10 @@ func TestRunAsksInfisicalWhenAnOlderProxyRefusesTheTunnel(t *testing.T) {
 			if !askedDirectly {
 				t.Fatal("an older proxy should send the run to Infisical directly")
 			}
+			// An older proxy's answer is never asked for again: it would only slow the move to Infisical.
+			if got := proxy.requests.Load(); got > 1 {
+				t.Fatalf("asked an older proxy %d times", got)
+			}
 			if _, err := os.Stat(filepath.Join(home, ".agents", "skills", "code-review", "SKILL.md")); err != nil {
 				t.Fatalf("the skill from Infisical wasn't installed: %v", err)
 			}
@@ -798,7 +811,7 @@ func TestAnOldProxyAndAnUnreachableInfisicalNameTheProxy(t *testing.T) {
 	client := throughTunnel(t, &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok"}, proxy, &askedDirectly)
 
 	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{}, true)
-	want := "The proxy at " + proxy.addr + " is too old to pass skills on, so this host asked Infisical directly. Update the Infisical CLI that runs the proxy, or pass --no-skills."
+	want := "The proxy is too old to pass skills on, so this host asked Infisical directly. Update the Infisical CLI that runs the proxy, or pass --no-skills."
 	if got := strings.TrimSpace(warnings.String()); !askedDirectly || !strings.Contains(got, "Starting without skills: CallListAgentVaultSessionSkills: ") || !strings.HasSuffix(got, want) {
 		t.Fatalf("warned %q", got)
 	}
@@ -807,6 +820,7 @@ func TestAnOldProxyAndAnUnreachableInfisicalNameTheProxy(t *testing.T) {
 func TestTheProxysOwnRefusalIsNotPutOnInfisical(t *testing.T) {
 	isolateSkillsHome(t)
 	warnings := captureWarnings(t)
+	t.Setenv(util.INFISICAL_RETRY_BASE_DELAY_NAME, "10ms")
 	proxy := newFakeTunnelProxy(t, "forwards", http.StatusBadGateway,
 		map[string]any{"error": "infisical_unreachable", "message": "the proxy could not reach Infisical"})
 	var askedDirectly bool
@@ -866,5 +880,33 @@ func TestNoAgentVaultSkillAsksForTheSkillsWithoutIt(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".agents", "skills", "code-review", "SKILL.md")); err != nil {
 		t.Fatalf("the other skills should still be installed: %v", err)
+	}
+}
+
+func TestTheTunnelAsksABusyProxyAgain(t *testing.T) {
+	home := isolateSkillsHome(t)
+	t.Setenv(util.INFISICAL_RETRY_BASE_DELAY_NAME, "10ms")
+	proxy := newFakeTunnelProxy(t, "busy-once", http.StatusOK, skillsBody(testSessionSkill("code-review", "x")))
+	var askedDirectly bool
+	client := throughTunnel(t, &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok"}, proxy, &askedDirectly)
+
+	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{}, true)
+	if askedDirectly || proxy.requests.Load() != 2 {
+		t.Fatalf("asked the proxy %d times, asked Infisical directly %v", proxy.requests.Load(), askedDirectly)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".agents", "skills", "code-review", "SKILL.md")); err != nil {
+		t.Fatalf("the skill wasn't installed once the proxy had a free slot: %v", err)
+	}
+}
+
+// A minted run asks again after a refusal, for a session the database hasn't caught up on. Through a proxy, the last try
+// has to come after the proxy stops answering the refusal from memory, or every try gets the remembered refusal.
+func TestAMintedRunsRetriesOutlastTheProxysMemoryOfARefusal(t *testing.T) {
+	var waited time.Duration
+	for _, delay := range agentVaultSkillsUnauthorizedRetryDelays {
+		waited += delay
+	}
+	if waited <= agentvault.SessionRefusalTTL {
+		t.Fatalf("the retries wait %s in all, not past the %s a proxy remembers a refusal", waited, agentvault.SessionRefusalTTL)
 	}
 }
