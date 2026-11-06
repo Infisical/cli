@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/agentvault"
@@ -100,25 +99,21 @@ type agentVaultSkillsClient struct {
 	// a database replica that has not seen the session yet, which answers 401.
 	retryUnauthorized bool
 	includeBuiltin    bool
-	// Asks the proxy's reserved name, which forwards the request to the proxy's own Infisical, so the agent's host
+	// Asks the proxy's own Infisical through the proxy, which answers with the session's own token, so the agent's host
 	// needs to reach only the proxy. Nil asks Infisical directly.
 	tunnel *agentVaultSkillsTunnel
+	// The proxy didn't say which Infisical it works with, so it is too old to answer for the session.
+	proxyTooOld bool
 	// Runs before the first request that goes to Infisical directly, which only happens behind a proxy too old to
-	// forward the request.
+	// answer for the session.
 	beforeDirect func()
 }
 
 func (c *agentVaultSkillsClient) list(ctx context.Context) (api.ListAgentVaultSessionSkillsResponse, error) {
-	proxyTooOld := false
 	if c.tunnel != nil {
-		listed, err := c.retrying(ctx, func() (api.ListAgentVaultSessionSkillsResponse, error) {
-			return api.CallListAgentVaultSessionSkillsThroughProxy(ctx, c.tunnel.httpClient, agentVaultReservedAPIURL, c.sessionToken, c.includeBuiltin)
+		return c.retrying(ctx, func() (api.ListAgentVaultSessionSkillsResponse, error) {
+			return api.CallListAgentVaultSessionSkillsThroughProxy(ctx, c.tunnel.httpClient, c.tunnel.apiURL, c.sessionToken, c.includeBuiltin)
 		})
-		answered, marked := c.tunnel.outcome()
-		if marked || ctx.Err() != nil {
-			return listed, err
-		}
-		proxyTooOld = answered
 	}
 	if c.beforeDirect != nil {
 		c.beforeDirect()
@@ -126,40 +121,60 @@ func (c *agentVaultSkillsClient) list(ctx context.Context) (api.ListAgentVaultSe
 	listed, err := c.retrying(ctx, func() (api.ListAgentVaultSessionSkillsResponse, error) {
 		return api.CallListAgentVaultSessionSkills(ctx, c.httpClient, c.sessionToken, c.includeBuiltin)
 	})
-	if err != nil && proxyTooOld {
+	if err != nil && c.proxyTooOld {
 		return listed, &agentVaultProxyTooOldError{err: err}
 	}
 	return listed, err
 }
 
-const agentVaultReservedAPIURL = "https://" + agentvault.DiscoveryHost + "/api"
-
-// agentVaultSkillsTunnel sends requests through the proxy, trusting only the certificate authority this run verified,
-// and remembers how the proxy answered. A proxy that forwards these requests marks every answer, its own and the ones
-// it passes on from Infisical. An older proxy doesn't know the reserved name: it refuses the tunnel, or tries to reach
-// the name upstream and fails, and marks neither.
-type agentVaultSkillsTunnel struct {
-	httpClient *resty.Client
-
-	mu       sync.Mutex
-	answered bool
-	marked   bool
+// askAgentVaultProxyAPIURL asks the proxy which Infisical it works with, so the agent reaches its session's endpoints
+// there through the proxy, whatever domain this command uses. An older proxy doesn't say, and "" comes back.
+func askAgentVaultProxyAPIURL(proxyAddr, sessionToken string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), agentVaultSkillsConnectTimeout)
+	defer cancel()
+	apiURL, err := agentvault.AskProxyAPIURL(ctx, proxyAddr, sessionToken, agentVaultProxyAPIURLTarget())
+	if err != nil {
+		return ""
+	}
+	return apiURL
 }
 
-func newAgentVaultSkillsTunnel(proxyAddr, sessionToken string, caPEM []byte) (*agentVaultSkillsTunnel, error) {
+// The CONNECT the question goes out on names this command's own Infisical, usually the proxy's too. The proxy names its
+// own whatever the target.
+func agentVaultProxyAPIURLTarget() string {
+	parsed, err := url.Parse(config.INFISICAL_URL)
+	if err != nil || parsed.Hostname() == "" {
+		return "app.infisical.com:443"
+	}
+	port := parsed.Port()
+	if port == "" {
+		port = map[bool]string{true: "80", false: "443"}[parsed.Scheme == "http"]
+	}
+	return net.JoinHostPort(parsed.Hostname(), port)
+}
+
+// agentVaultSkillsTunnel sends requests to the proxy's own Infisical through the proxy, trusting only the certificate
+// authority this run verified.
+type agentVaultSkillsTunnel struct {
+	httpClient *resty.Client
+	// The Infisical API URL the proxy named.
+	apiURL string
+}
+
+func newAgentVaultSkillsTunnel(proxyAddr, sessionToken, apiURL string, caPEM []byte) (*agentVaultSkillsTunnel, error) {
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(caPEM) {
 		return nil, errors.New("the proxy's certificate authority could not be read")
 	}
-	tunnel := &agentVaultSkillsTunnel{}
+	tunnel := &agentVaultSkillsTunnel{apiURL: apiURL}
 	proxyURL := &url.URL{Scheme: "http", Host: proxyAddr, User: url.UserPassword(agentvault.ProxyAuthUsername, sessionToken)}
 	// The retries a direct request gets, for a busy Infisical or proxy. INFISICAL_CUSTOM_HEADERS stay behind: they are
 	// for Infisical, and the proxy sends its own request there.
 	policy := util.DefaultRetryPolicy()
 	policy.StatusOnly = true
 	tunnel.httpClient = util.GetRestyClientWithoutCustomHeaders(policy)
-	// An answer the proxy didn't mark comes from a proxy too old to forward the request, which asking again won't
-	// change, so only a marked one is asked again.
+	// An answer the proxy didn't mark didn't come from the proxy's own Infisical, which asking again won't change, so
+	// only a marked one is asked again.
 	retryConditions := tunnel.httpClient.RetryConditions
 	tunnel.httpClient.RetryConditions = []resty.RetryConditionFunc{func(res *resty.Response, err error) bool {
 		if res == nil || res.Header().Get(agentvault.HeaderDecision) == "" {
@@ -176,32 +191,8 @@ func newAgentVaultSkillsTunnel(proxyAddr, sessionToken string, caPEM []byte) (*a
 		Proxy:           http.ProxyURL(proxyURL),
 		TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
 		DialContext:     (&net.Dialer{Timeout: agentVaultSkillsConnectTimeout, KeepAlive: 30 * time.Second}).DialContext,
-		// Called before Go checks for a 200, so a refused tunnel is seen too.
-		OnProxyConnectResponse: func(_ context.Context, _ *url.URL, _ *http.Request, res *http.Response) error {
-			tunnel.note(res.Header)
-			return nil
-		},
-	})
-	tunnel.httpClient.OnAfterResponse(func(_ *resty.Client, res *resty.Response) error {
-		tunnel.note(res.Header())
-		return nil
 	})
 	return tunnel, nil
-}
-
-func (t *agentVaultSkillsTunnel) note(header http.Header) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.answered = true
-	if header.Get(agentvault.HeaderDecision) != "" {
-		t.marked = true
-	}
-}
-
-func (t *agentVaultSkillsTunnel) outcome() (answered, marked bool) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.answered, t.marked
 }
 
 // The proxy was too old to forward the request, and asking Infisical directly failed too.

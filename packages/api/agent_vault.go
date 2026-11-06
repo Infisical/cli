@@ -355,11 +355,11 @@ func CallListAgentVaultSessionSkills(ctx context.Context, httpClient *resty.Clie
 		sessionToken, includeBuiltin, "CallListAgentVaultSessionSkills")
 }
 
-// CallListAgentVaultSessionSkillsThroughProxy asks an Agent Vault proxy's reserved name, which forwards the request to the
-// proxy's own Infisical, so a host that can reach only the proxy still gets the session's skills. httpClient has to send
-// its requests through the proxy and trust the proxy's certificate authority.
-func CallListAgentVaultSessionSkillsThroughProxy(ctx context.Context, httpClient *resty.Client, reservedAPIURL, sessionToken string, includeBuiltin bool) (ListAgentVaultSessionSkillsResponse, error) {
-	return listAgentVaultSessionSkills(ctx, httpClient, reservedAPIURL+"/v1/agent-vault/session/skills",
+// CallListAgentVaultSessionSkillsThroughProxy asks for the session's skills at proxyAPIURL, the API of the proxy's own
+// Infisical, through the proxy, which answers for the session itself. A host that can reach only the proxy still gets
+// them. httpClient has to send its requests through the proxy and trust the proxy's certificate authority.
+func CallListAgentVaultSessionSkillsThroughProxy(ctx context.Context, httpClient *resty.Client, proxyAPIURL, sessionToken string, includeBuiltin bool) (ListAgentVaultSessionSkillsResponse, error) {
+	return listAgentVaultSessionSkills(ctx, httpClient, proxyAPIURL+"/v1/agent-vault/session/skills",
 		sessionToken, includeBuiltin, "CallListAgentVaultSessionSkillsThroughProxy")
 }
 

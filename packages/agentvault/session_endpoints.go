@@ -21,9 +21,9 @@ import (
 var (
 	// Under the 30 seconds agent-vault run waits for skills, so its own message about the wait wins. The wait for a
 	// free slot, and passing the answer on, count against it too.
-	reservedForwardTimeout = 25 * time.Second
+	sessionForwardTimeout = 25 * time.Second
 	// Infisical caps one skill at 1 MB, and a bundle holds at most 25.
-	reservedForwardMaxBytes int64 = 64 << 20
+	sessionForwardMaxBytes int64 = 64 << 20
 )
 
 const (
@@ -32,7 +32,7 @@ const (
 	headerProxyVersion = "X-Agent-Vault-Proxy-Version"
 )
 
-// IsInfisicalForwardRefusal reports whether an error code from the reserved name is the proxy's own answer rather than
+// IsInfisicalForwardRefusal reports whether an error code from a session endpoint is the proxy's own answer rather than
 // Infisical's answer passed on, so the CLI doesn't put it on Infisical.
 func IsInfisicalForwardRefusal(code string) bool {
 	return code == errorCodeBusy || code == errorCodeInfisicalUnreachable
@@ -45,61 +45,69 @@ func IsSessionRefusal(code string) bool {
 
 // A process runs one proxy, and starting agents is bursty, so a fixed number of requests to Infisical at once keeps a
 // burst from holding open a connection per agent. The rest wait their turn rather than fail.
-var reservedForwardSlots = make(chan struct{}, 8)
+var sessionForwardSlots = make(chan struct{}, 8)
 
-// One client for the life of the proxy, so forwarded requests share a connection pool instead of each opening its own
-// and leaving it idle. Nothing about a session stays on it: the session's token goes on each request, and with no
-// cookie jar, a cookie on one session's answer isn't sent with the next session's request. It follows no redirect, so
-// the reserved name only ever passes on Infisical's own answer to the paths it allows.
-var reservedNameClient = sync.OnceValues(func() (*resty.Client, error) {
+// Nothing about a session stays on the client: the session's token goes on each request, and with no cookie jar, a
+// cookie on one session's answer isn't sent with the next session's request. It follows no redirect, so the proxy only
+// ever passes on Infisical's own answer to the paths it allows.
+func newSessionEndpointClient() (*resty.Client, error) {
 	client, err := util.GetRestyClientWithPolicy(util.RetryPolicy{})
 	if err != nil {
 		return nil, err
 	}
 	return client.SetCookieJar(nil).SetRedirectPolicy(resty.NoRedirectPolicy()), nil
-})
+}
 
-var errReservedAnswerTooLarge = errors.New("Infisical's answer is larger than the proxy passes on")
+// One client for the life of the proxy, so forwarded requests share a connection pool instead of each opening its own
+// and leaving it idle. A variable so tests can point it at a stand-in for Infisical.
+var sessionEndpointClient = sync.OnceValues(newSessionEndpointClient)
 
-type reservedRoute struct {
+var errSessionAnswerTooLarge = errors.New("Infisical's answer is larger than the proxy passes on")
+
+type sessionRoute struct {
 	// Under config.INFISICAL_URL, which ends in /api.
 	infisicalPath string
 	decision      string
 	forwardQuery  bool
 }
 
-// The only requests the reserved name answers. Through it, an agent reaches these session endpoints of the proxy's own
-// Infisical and nothing else: an agent prompted to send data elsewhere can't use it as a way out.
-func reservedRouteFor(path string) (reservedRoute, bool) {
-	switch path {
-	case "", "/", "/services", "/services/", "/api/v1/agent-vault/session/services":
-		return reservedRoute{infisicalPath: "/v1/agent-vault/session/services", decision: decisionDiscovery}, true
-	case "/api/v1/agent-vault/session/skills":
-		return reservedRoute{infisicalPath: "/v1/agent-vault/session/skills", decision: decisionSkills, forwardQuery: true}, true
+// The only requests the proxy answers for the session: these session endpoints of its own Infisical, on the host and
+// API path from --domain. Every other request to that host goes through like any other, so an agent prompted to send
+// data elsewhere can't use the session's token as a way out.
+func sessionRouteFor(t tunnel, path string) (sessionRoute, bool) {
+	target, ok := proxyInfisicalTarget()
+	if !ok || t.scheme != target.scheme || !target.covers(t.hostname, t.port) {
+		return sessionRoute{}, false
 	}
-	return reservedRoute{}, false
+	switch path {
+	case target.apiPath + sessionServicesPath:
+		return sessionRoute{infisicalPath: sessionServicesPath, decision: decisionDiscovery}, true
+	case target.apiPath + sessionSkillsPath:
+		return sessionRoute{infisicalPath: sessionSkillsPath, decision: decisionSkills, forwardQuery: true}, true
+	}
+	return sessionRoute{}, false
 }
 
-// serveReservedName answers a request for the reserved name on the session the tunnel carries. The session is checked
-// here rather than at the door, so a refused session's reason arrives as JSON, inside TLS for https.
-func (ps *proxyServer) serveReservedName(w http.ResponseWriter, r *http.Request, t tunnel) {
+// serveSessionEndpoint answers a request for one of the session's endpoints on the session the tunnel carries. The session
+// is checked here rather than at the door, so a refused session's reason arrives as JSON, inside TLS for https.
+func (ps *proxyServer) serveSessionEndpoint(w http.ResponseWriter, r *http.Request, t tunnel, route sessionRoute) {
 	_, grant, err := ps.cache.lookup(t.sessionToken, nil)
 	if err != nil {
 		refusal := classifyGateRefusal(err)
-		refusal.event.Str("host", DiscoveryHost).Str("sessionKey", sessionKey(t.sessionToken)).Str("decision", refusal.decision).
+		refusal.event.Str("host", t.hostname).Str("sessionKey", sessionKey(t.sessionToken)).Str("decision", refusal.decision).
 			Int("status", refusal.status).Msg(refusal.msg)
 		writeProxyError(w, refusal.status, refusal.decision, refusal.code, refusal.body)
 		return
 	}
 
-	status, decision, brokeOff := ps.forwardReservedRequest(w, r, t.sessionToken)
+	status, decision, brokeOff := ps.forwardSessionRequest(w, r, t.sessionToken, route)
 
 	method, path := truncateLogged(r.Method, maxLoggedMethodLen), truncatePath(requestPath(r))
-	log.Info().Str("method", method).Str("host", DiscoveryHost).Str("path", path).Str("decision", decision).
+	log.Info().Str("method", method).Str("host", t.hostname).Str("path", path).Str("decision", decision).
 		Int("status", status).Msg("agent-vault: request")
 	ps.sessionLogs.record(grant, sessionLogRecord{
 		Method:   method,
-		Host:     DiscoveryHost,
+		Host:     t.hostname,
 		Port:     t.port,
 		Path:     path,
 		Status:   status,
@@ -113,23 +121,18 @@ func (ps *proxyServer) serveReservedName(w http.ResponseWriter, r *http.Request,
 }
 
 // brokeOff reports an answer that stopped part way after its status went out.
-func (ps *proxyServer) forwardReservedRequest(w http.ResponseWriter, r *http.Request, sessionToken string) (status int, decision string, brokeOff bool) {
-	route, ok := reservedRouteFor(r.URL.Path)
-	if !ok {
-		writeProxyError(w, http.StatusNotFound, decisionBlocked, errorCodeNotFound, "Agent Vault lists your services at "+DiscoveryURL)
-		return http.StatusNotFound, decisionBlocked, false
-	}
+func (ps *proxyServer) forwardSessionRequest(w http.ResponseWriter, r *http.Request, sessionToken string, route sessionRoute) (status int, decision string, brokeOff bool) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET, HEAD")
 		writeProxyError(w, http.StatusMethodNotAllowed, decisionBlocked, errorCodeMethodNotAllowed, "this address only answers GET")
 		return http.StatusMethodNotAllowed, decisionBlocked, false
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), reservedForwardTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), sessionForwardTimeout)
 	defer cancel()
 	select {
-	case reservedForwardSlots <- struct{}{}:
-		defer func() { <-reservedForwardSlots }()
+	case sessionForwardSlots <- struct{}{}:
+		defer func() { <-sessionForwardSlots }()
 	case <-ctx.Done():
 		if r.Context().Err() == nil {
 			writeProxyError(w, http.StatusServiceUnavailable, decisionError, errorCodeBusy,
@@ -141,7 +144,7 @@ func (ps *proxyServer) forwardReservedRequest(w http.ResponseWriter, r *http.Req
 	resp, err := ps.callInfisical(ctx, r.Method, route, r.URL.RawQuery, sessionToken)
 	if err != nil {
 		log.Warn().Err(err).Str("sessionKey", sessionKey(sessionToken)).Str("path", route.infisicalPath).
-			Msg("agent-vault: could not reach Infisical for the reserved name")
+			Msg("agent-vault: could not reach Infisical for the session")
 		writeProxyError(w, http.StatusBadGateway, decisionError, errorCodeInfisicalUnreachable,
 			"the proxy could not reach Infisical")
 		return http.StatusBadGateway, decisionError, false
@@ -153,7 +156,7 @@ func (ps *proxyServer) forwardReservedRequest(w http.ResponseWriter, r *http.Req
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	// Passed on so a client can also tell an answer that stopped short from a whole one.
-	if length := resp.RawResponse.ContentLength; length >= 0 && length <= reservedForwardMaxBytes {
+	if length := resp.RawResponse.ContentLength; length >= 0 && length <= sessionForwardMaxBytes {
 		w.Header().Set("Content-Length", strconv.FormatInt(length, 10))
 	}
 	// The slot is held until the answer is out, so a client that stops reading must not keep it past the request's own
@@ -166,9 +169,9 @@ func (ps *proxyServer) forwardReservedRequest(w http.ResponseWriter, r *http.Req
 		return resp.StatusCode(), route.decision, false
 	}
 
-	copied, err := io.Copy(w, io.LimitReader(resp.RawBody(), reservedForwardMaxBytes+1))
-	if err == nil && copied > reservedForwardMaxBytes {
-		err = errReservedAnswerTooLarge
+	copied, err := io.Copy(w, io.LimitReader(resp.RawBody(), sessionForwardMaxBytes+1))
+	if err == nil && copied > sessionForwardMaxBytes {
+		err = errSessionAnswerTooLarge
 	}
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
@@ -180,9 +183,9 @@ func (ps *proxyServer) forwardReservedRequest(w http.ResponseWriter, r *http.Req
 }
 
 // The session's own token is the only credential sent, whatever the agent put in its Authorization header, so an agent
-// handed someone else's token can't use the reserved name to act as that session.
-func (ps *proxyServer) callInfisical(ctx context.Context, method string, route reservedRoute, rawQuery, sessionToken string) (*resty.Response, error) {
-	client, err := reservedNameClient()
+// handed someone else's token can't use these endpoints to act as that session.
+func (ps *proxyServer) callInfisical(ctx context.Context, method string, route sessionRoute, rawQuery, sessionToken string) (*resty.Response, error) {
+	client, err := sessionEndpointClient()
 	if err != nil {
 		return nil, err
 	}

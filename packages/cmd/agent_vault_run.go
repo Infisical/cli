@@ -125,8 +125,9 @@ neither flag is passed, the run stops and asks which you meant.
 The proxy's certificate authority is fetched from the proxy on every run and trusted for the agent. Pass
 --ca-fingerprint to abort if the served certificate does not match the proxy's fingerprint from Infisical.
 
-The agent can list the services its session reaches at the URL in INFISICAL_AGENT_VAULT_SERVICES_URL, through
-the proxy, with no credential of its own.
+The proxy says which Infisical it works with, and the agent gets that API URL in INFISICAL_AGENT_VAULT_API_URL.
+Through the proxy, the agent lists the services its session reaches at
+$INFISICAL_AGENT_VAULT_API_URL/v1/agent-vault/session/services, with no credential of its own.
 
 The skills in the session's access bundle, plus infisical-agent-vault, which tells the agent how to work behind
 the proxy, are fetched through the proxy and installed when the agent starts, into
@@ -449,7 +450,8 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		Set("pinned", pinnedFingerprint != "").
 		Set("caTrust", !noCaTrust))
 
-	env := buildAgentVaultRunEnv(os.Environ(), proxyAddr, sessionToken, caPath, extraNoProxy)
+	proxyAPIURL := askAgentVaultProxyAPIURL(proxyAddr, sessionToken)
+	env := buildAgentVaultRunEnv(os.Environ(), proxyAddr, sessionToken, caPath, extraNoProxy, proxyAPIURL)
 
 	printAgentVaultRunSummary(proxyAddr, caResp, servedFingerprint, minted, project, tokenSource, bundleSource)
 
@@ -466,6 +468,7 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 				sessionToken:      sessionToken,
 				retryUnauthorized: minted != nil,
 				includeBuiltin:    !noBuiltinSkill,
+				proxyTooOld:       proxyAPIURL == "",
 				beforeDirect: func() {
 					if minted == nil {
 						useAgentVaultSessionTokenDomain()
@@ -473,8 +476,10 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 				},
 			}
 			// Trusts only the certificate authority checked above, so nothing between here and the proxy can change the skills.
-			if tunnel, tunnelErr := newAgentVaultSkillsTunnel(proxyAddr, sessionToken, caPEM); tunnelErr == nil {
-				skillsClient.tunnel = tunnel
+			if proxyAPIURL != "" {
+				if tunnel, tunnelErr := newAgentVaultSkillsTunnel(proxyAddr, sessionToken, proxyAPIURL, caPEM); tunnelErr == nil {
+					skillsClient.tunnel = tunnel
+				}
 			}
 			installAgentVaultRunSkills(ctx, skillsClient, agentvault.InstallOptions{Dir: skillsDir, ForceClaude: agentVaultRunStartsClaude(args)}, !noBuiltinSkill)
 		},
@@ -735,8 +740,9 @@ func isAgentVaultSessionTokenKey(key string) bool {
 //
 // 'secrets agent-proxy run' strips a longer list because its agent is sandboxed and cannot read those
 // credentials back from disk.
-func buildAgentVaultRunEnv(parent []string, proxyAddr, sessionToken, caPath, extraNoProxy string) []string {
-	stale := map[string]bool{}
+func buildAgentVaultRunEnv(parent []string, proxyAddr, sessionToken, caPath, extraNoProxy, apiURL string) []string {
+	// The API URL is the proxy's to name, so a value from the environment never reaches the agent in its place.
+	stale := map[string]bool{agentvault.APIURLEnv: true}
 	for _, k := range proxyEnvKeys {
 		stale[k] = true
 	}
@@ -762,7 +768,9 @@ func buildAgentVaultRunEnv(parent []string, proxyAddr, sessionToken, caPath, ext
 
 	setProxyEnv(env, agentVaultProxyURL(proxyAddr, sessionToken), mergeNoProxy(append(operatorNoProxy, extraNoProxy)...))
 	// Through the proxy like any request, so the session comes from the tunnel and the agent never handles its token.
-	env[agentvault.ServicesURLEnv] = agentvault.DiscoveryURL
+	if apiURL != "" {
+		env[agentvault.APIURLEnv] = apiURL
+	}
 
 	if caPath != "" {
 		for _, k := range caTrustEnvVars {

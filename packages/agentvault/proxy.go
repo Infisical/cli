@@ -225,10 +225,11 @@ func classifyGateRefusal(err error) gateRefusal {
 		"agent-vault: refused, the session could not be resolved"}
 }
 
-// A well-formed token is enough to open the reserved name: the proxy then answers only for that session, after it
-// checks the session itself, and a token that isn't one never gets that far.
-func reservedNameDefersGate(hostname, sessionToken string) bool {
-	return isDiscoveryHost(hostname) && plausibleSessionToken(sessionToken)
+// A well-formed token is enough to open a tunnel to the proxy's own Infisical: inside it, every request checks the
+// session itself, so a refused session's reason reaches the agent as JSON rather than as a failed CONNECT it can't
+// read. A token that isn't one never gets that far.
+func infisicalHostDefersGate(hostname, port, sessionToken string) bool {
+	return isProxyInfisicalHost(hostname, port) && plausibleSessionToken(sessionToken)
 }
 
 func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
@@ -246,9 +247,8 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Resolve before the leaf minting further down, so an unauthenticated caller cannot make the proxy work
-	// on their behalf. The reserved name checks the session inside the tunnel instead, so a refused session's reason
-	// reaches the client as JSON over TLS rather than as a failed CONNECT it can't read.
-	if !reservedNameDefersGate(hostname, sessionToken) {
+	// on their behalf. The proxy's own Infisical checks the session inside the tunnel instead.
+	if !infisicalHostDefersGate(hostname, port, sessionToken) {
 		if _, err := ps.cache.get(sessionToken); err != nil {
 			ps.denyAtGate(w, sessionToken, hostname, port, err)
 			return
@@ -275,7 +275,12 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	defer clientConn.Close()
 
-	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
+	// Names the proxy's Infisical, so agent-vault run can tell the agent where its session's endpoints are.
+	established := "HTTP/1.1 200 Connection Established\r\n"
+	if apiURL := proxyAPIURL(); apiURL != "" {
+		established += HeaderAPIURL + ": " + apiURL + "\r\n"
+	}
+	if _, err := clientConn.Write([]byte(established + "\r\n")); err != nil {
 		return
 	}
 
@@ -614,7 +619,7 @@ func (ps *proxyServer) handlePlainForward(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if !reservedNameDefersGate(hostname, sessionToken) {
+	if !infisicalHostDefersGate(hostname, port, sessionToken) {
 		if _, err := ps.cache.get(sessionToken); err != nil {
 			ps.denyAtGate(w, sessionToken, hostname, port, err)
 			return
@@ -625,8 +630,8 @@ func (ps *proxyServer) handlePlainForward(w http.ResponseWriter, r *http.Request
 }
 
 func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, t tunnel) {
-	if isDiscoveryHost(t.hostname) {
-		ps.serveReservedName(w, r, t)
+	if route, ok := sessionRouteFor(t, r.URL.Path); ok {
+		ps.serveSessionEndpoint(w, r, t, route)
 		return
 	}
 	scheme, hostname, port := t.scheme, t.hostname, t.port

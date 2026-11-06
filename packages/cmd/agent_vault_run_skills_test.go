@@ -650,10 +650,13 @@ func TestTheSkillsClientAsksABusyInfisicalAgain(t *testing.T) {
 	}
 }
 
-// A stand-in for an Agent Vault proxy at the reserved name. "forwards" opens the tunnel and answers the way a proxy that
-// forwards to Infisical does, marked; "busy-once" answers its first request the way a proxy with no free slot does, then
-// forwards; "refuses" turns the CONNECT down the way an older proxy under service hosts only does; "unmarked" opens the
-// tunnel and fails upstream the way an older proxy under any host does.
+// The Infisical the fake proxy names, which tunnels to it reach through the proxy.
+const testProxyAPIURL = "https://infisical.test/api"
+
+// A stand-in for an Agent Vault proxy. "forwards" names its Infisical on every CONNECT and answers for the session the
+// way a proxy that forwards to Infisical does, marked; "busy-once" answers its first request the way a proxy with no free
+// slot does, then forwards; "refuses" turns the CONNECT down, and "old" opens it, the way an older proxy does, neither
+// naming an Infisical.
 type fakeTunnelProxy struct {
 	addr           string
 	caPEM          []byte
@@ -671,8 +674,8 @@ func newFakeTunnelProxy(t *testing.T, mode string, status int, body any) *fakeTu
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: agentvault.DiscoveryHost},
-		DNSNames:              []string{agentvault.DiscoveryHost},
+		Subject:               pkix.Name{CommonName: "infisical.test"},
+		DNSNames:              []string{"infisical.test"},
 		NotBefore:             time.Now().Add(-time.Minute),
 		NotAfter:              time.Now().Add(time.Hour),
 		IsCA:                  true,
@@ -707,7 +710,11 @@ func newFakeTunnelProxy(t *testing.T, mode string, status int, body any) *fakeTu
 			_, _ = io.WriteString(conn, "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
 			return
 		}
-		_, _ = io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\n")
+		established := "HTTP/1.1 200 Connection Established\r\n"
+		if mode != "old" {
+			established += agentvault.HeaderAPIURL + ": " + testProxyAPIURL + "\r\n"
+		}
+		_, _ = io.WriteString(conn, established+"\r\n")
 		inner := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{cert}})
 		req, err := http.ReadRequest(bufio.NewReader(inner))
 		if err != nil {
@@ -747,7 +754,7 @@ func newFakeTunnelProxy(t *testing.T, mode string, status int, body any) *fakeTu
 
 func throughTunnel(t *testing.T, client *agentVaultSkillsClient, proxy *fakeTunnelProxy, askedDirectly *bool) *agentVaultSkillsClient {
 	t.Helper()
-	tunnel, err := newAgentVaultSkillsTunnel(proxy.addr, client.sessionToken, proxy.caPEM)
+	tunnel, err := newAgentVaultSkillsTunnel(proxy.addr, client.sessionToken, testProxyAPIURL, proxy.caPEM)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -779,21 +786,37 @@ func TestRunGetsSkillsThroughTheProxysTunnel(t *testing.T) {
 	}
 }
 
-func TestRunAsksInfisicalWhenAnOlderProxyRefusesTheTunnel(t *testing.T) {
-	for _, mode := range []string{"refuses", "unmarked"} {
+func TestRunAsksTheProxyWhichInfisicalItWorksWith(t *testing.T) {
+	proxy := newFakeTunnelProxy(t, "forwards", http.StatusOK, skillsBody())
+	if got := askAgentVaultProxyAPIURL(proxy.addr, "agv_tok"); got != testProxyAPIURL {
+		t.Fatalf("the proxy named %q, want %q", got, testProxyAPIURL)
+	}
+	if got := proxy.sessionToken.Load(); got != "agv_tok" {
+		t.Fatalf("the CONNECT carried session token %v", got)
+	}
+	if got := proxy.requests.Load(); got != 0 {
+		t.Fatalf("asking sent %d requests through the tunnel", got)
+	}
+}
+
+// An older proxy names no Infisical, so the run asks Infisical directly rather than through the proxy.
+func TestRunAsksInfisicalDirectlyBehindAProxyThatNamesNoInfisical(t *testing.T) {
+	for _, mode := range []string{"refuses", "old"} {
 		t.Run(mode, func(t *testing.T) {
 			home := isolateSkillsHome(t)
 			proxy := newFakeTunnelProxy(t, mode, 0, nil)
+			if got := askAgentVaultProxyAPIURL(proxy.addr, "agv_tok"); got != "" {
+				t.Fatalf("an older proxy named %q", got)
+			}
 			var askedDirectly bool
-			client := throughTunnel(t, fakeSessionSkills(t, http.StatusOK, nil, testSessionSkill("code-review", "x")), proxy, &askedDirectly)
+			client := fakeSessionSkills(t, http.StatusOK, nil, testSessionSkill("code-review", "x"))
+			client.proxyTooOld = true
+			client.includeBuiltin = true
+			client.beforeDirect = func() { askedDirectly = true }
 
 			installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{}, true)
-			if !askedDirectly {
-				t.Fatal("an older proxy should send the run to Infisical directly")
-			}
-			// An older proxy's answer is never asked for again: it would only slow the move to Infisical.
-			if got := proxy.requests.Load(); got > 1 {
-				t.Fatalf("asked an older proxy %d times", got)
+			if !askedDirectly || proxy.requests.Load() != 0 {
+				t.Fatalf("asked directly %v, through the older proxy %d times", askedDirectly, proxy.requests.Load())
 			}
 			if _, err := os.Stat(filepath.Join(home, ".agents", "skills", "code-review", "SKILL.md")); err != nil {
 				t.Fatalf("the skill from Infisical wasn't installed: %v", err)
@@ -806,9 +829,9 @@ func TestAnOldProxyAndAnUnreachableInfisicalNameTheProxy(t *testing.T) {
 	isolateSkillsHome(t)
 	warnings := captureWarnings(t)
 	useInfisicalURL(t, "http://127.0.0.1:1/api")
-	proxy := newFakeTunnelProxy(t, "refuses", 0, nil)
 	var askedDirectly bool
-	client := throughTunnel(t, &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok"}, proxy, &askedDirectly)
+	client := &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok", proxyTooOld: true,
+		beforeDirect: func() { askedDirectly = true }}
 
 	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{}, true)
 	want := "The proxy is too old to pass skills on, so this host asked Infisical directly. Update the Infisical CLI that runs the proxy, or pass --no-skills."
