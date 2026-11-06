@@ -363,7 +363,7 @@ func TestARefreshThatEndsTheSessionIsAnsweredAsARevokedSession(t *testing.T) {
 		status int
 		body   string
 	}{
-		{"session revoked", &api.APIError{StatusCode: http.StatusUnauthorized, Name: infisicalUnauthorizedName}, http.StatusForbidden, "the session is no longer valid"},
+		{"session revoked", &api.APIError{StatusCode: http.StatusUnauthorized, Name: infisicalUnauthorizedName}, http.StatusForbidden, "the session is no longer valid, or it belongs to a different Agent Vault project than this proxy"},
 		{"proxy token revoked", &api.APIError{StatusCode: http.StatusUnauthorized, Name: proxyTokenRejectedName}, http.StatusServiceUnavailable, proxyRevokedBody},
 	}
 	for _, tc := range cases {

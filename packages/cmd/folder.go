@@ -29,7 +29,7 @@ func buildFolderCmd() *cobra.Command {
 	}
 	getCmd.Flags().StringP("path", "p", "/", "The path from where folders should be fetched from")
 	getCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
-	getCmd.Flags().String("projectId", "", "manually set the projectId to fetch folders from when using machine identity based auth")
+	getCmd.Flags().String("projectId", "", projectIDForReads)
 	util.AddOutputFlagsToCmd(getCmd, "The output to format the folders in.")
 	folderCmd.AddCommand(getCmd)
 
@@ -41,7 +41,7 @@ func buildFolderCmd() *cobra.Command {
 	createCmd.Flags().StringP("path", "p", "/", "Path to where the folder should be created")
 	createCmd.Flags().StringP("name", "n", "", "Name of the folder to be created in selected `--path`")
 	createCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
-	createCmd.Flags().String("projectId", "", "manually set the project ID for creating folders in when using machine identity based auth")
+	createCmd.Flags().String("projectId", "", projectIDFallsBack)
 	util.AddOutputFlagsToCmd(createCmd, "The output to format the folders in.")
 	folderCmd.AddCommand(createCmd)
 
@@ -52,7 +52,7 @@ func buildFolderCmd() *cobra.Command {
 	}
 	deleteCmd.Flags().StringP("path", "p", "/", "Path to the folder to be deleted")
 	deleteCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
-	deleteCmd.Flags().String("projectId", "", "manually set the projectId to delete folders when using machine identity based auth")
+	deleteCmd.Flags().String("projectId", "", projectIDFallsBack)
 	deleteCmd.Flags().StringP("name", "n", "", "Name of the folder to be deleted within selected `--path`")
 	util.AddOutputFlagsToCmd(deleteCmd, "The output to format the folders in.")
 	folderCmd.AddCommand(deleteCmd)

@@ -119,15 +119,21 @@ func newFakeSkillsAPI(t *testing.T, f *fakeSkillsAPI) *resty.Client {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		body, _ := io.ReadAll(r.Body)
+		raw, _ := io.ReadAll(r.Body)
+		var sent map[string]json.RawMessage
+		_ = json.Unmarshal(raw, &sent)
+		// What a version holds is its files, so that is what decides whether a publish changed anything.
+		body := string(sent["files"])
 		w.Header().Set("Content-Type", "application/json")
 		path := strings.TrimPrefix(r.URL.Path, "/api/v1/agent-vault")
 		switch {
 		case r.Method == http.MethodGet && path == "/skills":
-			f.calls = append(f.calls, "find "+r.URL.Query().Get("name"))
+			f.calls = append(f.calls, "find "+r.URL.Query().Get("projectId")+" "+r.URL.Query().Get("name"))
 			_ = json.NewEncoder(w).Encode(map[string]any{"skills": f.existing, "totalCount": len(f.existing)})
 		case r.Method == http.MethodPost && path == "/skills":
-			f.calls = append(f.calls, "create")
+			var projectID string
+			_ = json.Unmarshal(sent["projectId"], &projectID)
+			f.calls = append(f.calls, "create "+projectID)
 			if f.createStatus != 0 {
 				f.existing = f.existingAfterConflict
 				w.WriteHeader(f.createStatus)
@@ -135,15 +141,19 @@ func newFakeSkillsAPI(t *testing.T, f *fakeSkillsAPI) *resty.Client {
 				return
 			}
 			f.existing = []api.AgentVaultSkill{{ID: "new", Name: "code-review"}}
-			f.lastBody, f.lastVersion = string(body), 1
+			f.lastBody, f.lastVersion = body, 1
 			_ = json.NewEncoder(w).Encode(map[string]any{"skill": map[string]any{"id": "new", "name": "code-review"}, "version": map[string]any{"version": 1}})
 		case r.Method == http.MethodPatch && strings.Count(path, "/") == 2:
-			f.calls = append(f.calls, "update "+strings.Split(path, "/")[2])
-			if f.lastBody == string(body) {
+			call := "update " + strings.Split(path, "/")[2]
+			if _, ok := sent["projectId"]; ok {
+				call += " with a projectId"
+			}
+			f.calls = append(f.calls, call)
+			if f.lastBody == body {
 				_ = json.NewEncoder(w).Encode(map[string]any{"version": map[string]any{"version": f.lastVersion}, "unchanged": true})
 				return
 			}
-			f.lastBody, f.lastVersion = string(body), 4
+			f.lastBody, f.lastVersion = body, 4
 			_ = json.NewEncoder(w).Encode(map[string]any{"version": map[string]any{"version": 4}, "unchanged": false})
 		default:
 			http.NotFound(w, r)
@@ -165,18 +175,18 @@ func TestPushAgentVaultSkill(t *testing.T) {
 		wantOut   string
 		wantErr   bool
 	}{
-		{"new name creates", &fakeSkillsAPI{}, "find code-review,create", "code-review: created v1", false},
-		{"known name publishes", &fakeSkillsAPI{existing: found}, "find code-review,update sk1", "code-review: v4", false},
+		{"new name creates", &fakeSkillsAPI{}, "find p1 code-review,create p1", "code-review: created v1", false},
+		{"known name publishes", &fakeSkillsAPI{existing: found}, "find p1 code-review,update sk1", "code-review: v4", false},
 		{"lost create race publishes", &fakeSkillsAPI{createStatus: http.StatusConflict, existingAfterConflict: found},
-			"find code-review,create,find code-review,update sk1", "code-review: v4", false},
+			"find p1 code-review,create p1,find p1 code-review,update sk1", "code-review: v4", false},
 		{"409 with nothing to find fails", &fakeSkillsAPI{createStatus: http.StatusConflict},
-			"find code-review,create,find code-review", "", true},
+			"find p1 code-review,create p1,find p1 code-review", "", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := tc.api
 			client := newFakeSkillsAPI(t, f)
-			out, err := pushAgentVaultSkill(client, "code-review", api.AgentVaultSkillFilesRequest{})
+			out, err := pushAgentVaultSkill(client, "p1", "code-review", nil)
 			if (err != nil) != tc.wantErr || out != tc.wantOut {
 				t.Fatalf("out %q, err %v", out, err)
 			}
@@ -201,7 +211,7 @@ func TestPushAgentVaultSkillTwiceIsUnchanged(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		out, err := pushAgentVaultSkill(client, name, api.AgentVaultSkillFilesRequest{Files: files})
+		out, err := pushAgentVaultSkill(client, "p1", name, files)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -210,7 +220,7 @@ func TestPushAgentVaultSkillTwiceIsUnchanged(t *testing.T) {
 	if got := strings.Join(outs, "|"); got != "code-review: created v1|code-review: unchanged (v1)" {
 		t.Fatalf("outputs %s", got)
 	}
-	if got := strings.Join(f.calls, ","); got != "find code-review,create,find code-review,update new" {
+	if got := strings.Join(f.calls, ","); got != "find p1 code-review,create p1,find p1 code-review,update new" {
 		t.Fatalf("calls %s", got)
 	}
 }

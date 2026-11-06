@@ -251,7 +251,7 @@ func TestSocks5RefusesAtLogin(t *testing.T) {
 		// Only a session that is gone fails the login; a problem on the proxy's side fails the request.
 		wantAuth, wantRep byte
 	}{
-		{"revoked or expired session", &api.APIError{StatusCode: 401, Name: infisicalUnauthorizedName}, "the session is no longer valid", socks5AuthStatusRefus, 0},
+		{"revoked or expired session", &api.APIError{StatusCode: 401, Name: infisicalUnauthorizedName}, "the session is no longer valid, or it belongs to a different Agent Vault project than this proxy", socks5AuthStatusRefus, 0},
 		{"proxy token rejected", &api.APIError{StatusCode: 401, Name: proxyTokenRejectedName}, "Infisical rejected this proxy's token", socks5AuthStatusOK, socks5RepFailure},
 		{"Infisical unreachable", errors.New("dial tcp: connection refused"), "the session could not be resolved", socks5AuthStatusOK, socks5RepFailure},
 		{"Infisical rate limited", &api.APIError{StatusCode: 429}, "the session could not be resolved", socks5AuthStatusOK, socks5RepFailure},
@@ -351,7 +351,7 @@ func TestSocks5RefusalWarningsAreRateLimited(t *testing.T) {
 	if n := strings.Count(out, `"level":"warn","door":"socks5"`); n != 1 {
 		t.Fatalf("got %d warn lines for 4 refusals in a minute, want 1: %s", n, out)
 	}
-	if n := strings.Count(out, "the session is no longer valid"); n != 4 {
+	if n := strings.Count(out, "the session is no longer valid, or it belongs to a different Agent Vault project than this proxy"); n != 4 {
 		t.Fatalf("got %d refusal lines, want each one at warn or debug: %s", n, out)
 	}
 }

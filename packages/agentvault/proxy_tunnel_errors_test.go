@@ -66,7 +66,7 @@ func TestASessionLostInsideTheTunnelIsA403WithTheGateText(t *testing.T) {
 	if status != http.StatusForbidden {
 		t.Fatalf("a dead session inside the tunnel got %d, which SDKs retry; want 403", status)
 	}
-	if body != "the session is no longer valid" {
+	if body != "the session is no longer valid, or it belongs to a different Agent Vault project than this proxy" {
 		t.Fatalf("body %q differs from what the CONNECT gate says", body)
 	}
 }

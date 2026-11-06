@@ -12,6 +12,7 @@ import (
 	credentials "cloud.google.com/go/iam/credentials/apiv1"
 	"cloud.google.com/go/iam/credentials/apiv1/credentialspb"
 	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"google.golang.org/api/option"
 )
@@ -60,7 +61,7 @@ func LoginGatewayWithGcp(ctx context.Context, httpClient *resty.Client, gatewayI
 }
 
 func fetchGcpIdentityToken(ctx context.Context, audience string) (string, error) {
-	res, err := resty.New().
+	res, err := util.GetRestyClientWithoutCustomHeaders(util.DefaultRetryPolicy()).
 		SetTimeout(gcpMetadataTimeout).
 		R().
 		SetContext(ctx).
@@ -148,7 +149,7 @@ func resolveGcpServiceAccountEmail(ctx context.Context, serviceAccountKeyPath st
 		return key.ClientEmail, nil
 	}
 
-	res, err := resty.New().
+	res, err := util.GetRestyClientWithoutCustomHeaders(util.DefaultRetryPolicy()).
 		SetTimeout(gcpMetadataTimeout).
 		R().
 		SetContext(ctx).

@@ -1,17 +1,22 @@
 package cmd
 
 import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
 
-// smTree lists every command that must exist both at the top level and under `sm`.
+// smTree lists every command that must exist both at the top level and under `secrets-manager`.
+// export and agent-proxy are left out: they're only at the top level now, hidden.
 var smTree = [][]string{
 	{"run"},
-	{"export"},
 	{"secrets"},
 	{"secrets", "get"},
 	{"secrets", "set"},
@@ -21,10 +26,6 @@ var smTree = [][]string{
 	{"secrets", "folders", "get"},
 	{"secrets", "folders", "create"},
 	{"secrets", "folders", "delete"},
-	{"secrets", "agent-proxy"},
-	{"secrets", "agent-proxy", "connect"},
-	{"secrets", "agent-proxy", "start"},
-	{"secrets", "agent-proxy", "run"},
 	{"dynamic-secrets"},
 	{"dynamic-secrets", "lease"},
 	{"dynamic-secrets", "lease", "create"},
@@ -33,14 +34,14 @@ var smTree = [][]string{
 	{"dynamic-secrets", "lease", "delete"},
 }
 
-// findCommand walks the tree by name, without parsing flags or running anything.
+// findCommand walks the tree by name or alias, without parsing flags or running anything.
 func findCommand(t *testing.T, path []string) *cobra.Command {
 	t.Helper()
 	current := RootCmd
 	for _, name := range path {
 		var next *cobra.Command
 		for _, child := range current.Commands() {
-			if child.Name() == name {
+			if child.Name() == name || child.HasAlias(name) {
 				next = child
 				break
 			}
@@ -54,7 +55,7 @@ func findCommand(t *testing.T, path []string) *cobra.Command {
 }
 
 func smPath(path []string) []string {
-	return append([]string{smCommandName}, path...)
+	return append([]string{secretsManagerCommandName}, path...)
 }
 
 // flagSignature describes a flag the way a user sees it, so two independently built
@@ -79,7 +80,7 @@ func TestSmRegistersEveryCommandAtBothLevels(t *testing.T) {
 		if got, want := top.CommandPath(), "infisical "+name; got != want {
 			t.Errorf("%s: top-level command path is %q, want %q (re-parented?)", name, got, want)
 		}
-		if got, want := sm.CommandPath(), "infisical sm "+name; got != want {
+		if got, want := sm.CommandPath(), "infisical secrets-manager "+name; got != want {
 			t.Errorf("%s: sm command path is %q, want %q", name, got, want)
 		}
 	}
@@ -97,14 +98,20 @@ func TestSmFlagsMatchTopLevel(t *testing.T) {
 		} {
 			topFlags, smFlags := flagSignature(pair[0]), flagSignature(pair[1])
 			for flag, signature := range topFlags {
-				if smFlags[flag] != signature {
-					t.Errorf("%s: %s flag --%s differs under sm: top=%q sm=%q", name, kind, flag, signature, smFlags[flag])
+				if smFlags[flag] == signature {
+					continue
 				}
+				t.Errorf("%s: %s flag --%s differs under sm: top=%q sm=%q", name, kind, flag, signature, smFlags[flag])
 			}
 			for flag := range smFlags {
-				if _, ok := topFlags[flag]; !ok {
-					t.Errorf("%s: %s flag --%s exists only under sm", name, kind, flag)
+				if _, ok := topFlags[flag]; ok {
+					continue
 				}
+				// Deletes confirm only under secrets-manager; the legacy copies keep deleting without asking.
+				if _, confirmed := confirmedUnderSecretsManager[name]; confirmed && kind == "local" && flag == "yes" {
+					continue
+				}
+				t.Errorf("%s: %s flag --%s exists only under sm", name, kind, flag)
 			}
 		}
 	}
@@ -140,54 +147,41 @@ func TestSmFlagStateIsSeparate(t *testing.T) {
 }
 
 func TestSmRejectsUnknownSubcommand(t *testing.T) {
-	sm := findCommand(t, []string{smCommandName})
+	sm := findCommand(t, []string{secretsManagerCommandName})
 	err := sm.ValidateArgs([]string{"rnu"})
 	if err == nil || !strings.Contains(err.Error(), "unknown command") {
-		t.Errorf("`sm rnu` should fail as an unknown command, got %v", err)
+		t.Errorf("`secrets-manager rnu` should fail as an unknown command, got %v", err)
 	}
 	if err := sm.ValidateArgs(nil); err != nil {
-		t.Errorf("bare `sm` should be accepted (prints help), got %v", err)
+		t.Errorf("bare `secrets-manager` should be accepted (prints help), got %v", err)
 	}
 }
 
-// `sm agent-proxy` is a shorter path to `secrets agent-proxy`: same subcommands and flags, its own
-// instances. It has no `secrets` parent, so the --env/--tags that `secrets` passes down (which
-// agent-proxy ignores) are not inherited there.
-func TestSmAgentProxyShortcut(t *testing.T) {
-	for _, sub := range [][]string{{}, {"connect"}, {"start"}, {"run"}} {
-		viaSecrets := findCommand(t, append([]string{"secrets", "agent-proxy"}, sub...))
-		shortcut := findCommand(t, append([]string{smCommandName, "agent-proxy"}, sub...))
-		name := strings.TrimSpace("agent-proxy " + strings.Join(sub, " "))
-
-		if viaSecrets == shortcut {
-			t.Errorf("%s: shortcut shares its instance with `secrets agent-proxy`", name)
-		}
-		if got, want := shortcut.CommandPath(), "infisical sm "+name; got != want {
-			t.Errorf("%s: shortcut path is %q, want %q", name, got, want)
-		}
-
-		want, got := flagSignature(viaSecrets.LocalFlags()), flagSignature(shortcut.LocalFlags())
-		for flag, signature := range want {
-			if got[flag] != signature {
-				t.Errorf("%s: --%s differs on the shortcut: secrets=%q sm=%q", name, flag, signature, got[flag])
+// agent-proxy and export are gone from secrets-manager (export lives at `secrets export`). The
+// hidden top-level copies keep working for existing scripts.
+func TestAgentProxyAndExportAreNotUnderSecretsManager(t *testing.T) {
+	hasChild := func(parent *cobra.Command, name string) bool {
+		for _, child := range parent.Commands() {
+			if child.Name() == name {
+				return true
 			}
 		}
-		for flag := range got {
-			if _, ok := want[flag]; !ok {
-				t.Errorf("%s: --%s exists only on the shortcut", name, flag)
-			}
-		}
-		for _, inherited := range []string{"env", "tags"} {
-			if len(sub) == 0 && shortcut.InheritedFlags().Lookup(inherited) != nil {
-				t.Errorf("%s: shortcut should not inherit --%s from `secrets`", name, inherited)
-			}
-		}
+		return false
 	}
-
-	for _, child := range RootCmd.Commands() {
-		if child.Name() == "agent-proxy" {
-			t.Errorf("agent-proxy must not be added at the top level; only `sm agent-proxy` is new")
+	for _, prefix := range []string{secretsManagerCommandName, secretsManagerAlias} {
+		root := findCommand(t, []string{prefix})
+		for _, name := range []string{"agent-proxy", "export"} {
+			if hasChild(root, name) {
+				t.Errorf("%s %s is still registered", prefix, name)
+			}
 		}
+		if hasChild(findCommand(t, []string{prefix, "secrets"}), "agent-proxy") {
+			t.Errorf("%s secrets agent-proxy is still registered", prefix)
+		}
+		findCommand(t, []string{prefix, "secrets", "export"})
+	}
+	for _, path := range [][]string{{"export"}, {"secrets", "agent-proxy", "connect"}, {"secrets", "agent-proxy", "run"}, {"secrets", "agent-proxy", "start"}} {
+		findCommand(t, path)
 	}
 }
 
@@ -197,11 +191,10 @@ func TestTopLevelCommandNameSeesThroughSm(t *testing.T) {
 		"sm secrets get":                  "secrets",
 		"sm secrets folders get":          "secrets",
 		"sm run":                          "run",
-		"sm":                              "sm",
+		"sm":                              "secrets-manager",
+		"secrets-manager run":             "run",
 		"secrets agent-proxy run":         "secrets",
-		"sm secrets agent-proxy run":      "secrets",
 		"sm dynamic-secrets lease create": "dynamic-secrets",
-		"sm agent-proxy run":              "agent-proxy",
 		"sm projects list":                "projects",
 	}
 	for path, want := range cases {
@@ -211,14 +204,410 @@ func TestTopLevelCommandNameSeesThroughSm(t *testing.T) {
 	}
 }
 
-// Projects are typed per product, so `projects` lives only under `sm`, not at the top level.
+// Projects are typed per product, so `projects` lives only under `secrets-manager`, not at the top level.
 func TestProjectsIsRegisteredOnlyUnderSm(t *testing.T) {
 	for _, path := range [][]string{{"projects", "list"}, {"projects", "get"}, {"projects", "create"}} {
 		findCommand(t, smPath(path))
 	}
 	for _, child := range RootCmd.Commands() {
 		if child.Name() == "projects" {
-			t.Fatal("projects is registered at the top level; it should only be under sm")
+			t.Fatal("projects is registered at the top level; it should only be under secrets-manager")
 		}
+	}
+}
+
+// `sm` is an alias, not a second tree: both names must resolve to the same command instances.
+func TestSmIsAnAliasOfSecretsManager(t *testing.T) {
+	for _, path := range append(smTree, []string{"projects", "list"}, []string{"agent-proxy", "run"}) {
+		viaAlias, _, err := RootCmd.Find(append([]string{secretsManagerAlias}, path...))
+		if err != nil {
+			t.Fatalf("sm %s: %v", strings.Join(path, " "), err)
+		}
+		viaName, _, err := RootCmd.Find(smPath(path))
+		if err != nil {
+			t.Fatalf("secrets-manager %s: %v", strings.Join(path, " "), err)
+		}
+		if viaAlias != viaName {
+			t.Errorf("`sm %s` and `secrets-manager %s` resolve to different commands", strings.Join(path, " "), strings.Join(path, " "))
+		}
+	}
+}
+
+// Hidden commands keep working under secrets-manager; only their help listing goes away, and the
+// top-level copies are untouched.
+func TestSecretsManagerHidesLegacyCommands(t *testing.T) {
+	for _, path := range hiddenUnderSecretsManager {
+		cmd := findCommand(t, smPath(path))
+		if !cmd.Hidden {
+			t.Errorf("secrets-manager %s should be hidden from help", strings.Join(path, " "))
+		}
+	}
+	for _, path := range [][]string{{"secrets", "generate-example-env"}, {"secrets", "agent-proxy"}} {
+		if findCommand(t, path).Hidden {
+			t.Errorf("top-level `%s` should stay visible", strings.Join(path, " "))
+		}
+	}
+	for _, path := range [][]string{{"secrets"}, {"secrets", "get"}, {"secrets", "export"}, {"projects"}, {"run"}, {"dynamic-secrets"}} {
+		if findCommand(t, smPath(path)).Hidden {
+			t.Errorf("secrets-manager %s should be visible", strings.Join(path, " "))
+		}
+	}
+}
+
+func TestServiceTokenAnnotationHoldsUnderEveryName(t *testing.T) {
+	for _, path := range [][]string{{"projects", "list"}, {"projects", "create"}} {
+		for _, prefix := range []string{secretsManagerCommandName, secretsManagerAlias} {
+			cmd, _, err := RootCmd.Find(append([]string{prefix}, path...))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !rejectsServiceTokens(cmd) {
+				t.Errorf("%s %s should reject service tokens", prefix, strings.Join(path, " "))
+			}
+		}
+	}
+	if rejectsServiceTokens(findCommand(t, smPath([]string{"projects", "get"}))) {
+		t.Error("projects get accepts service tokens")
+	}
+}
+
+// Deletes under secrets-manager (and so under sm) confirm and take -y/--yes. The legacy top-level copies
+// must not change: existing scripts keep deleting without --yes.
+func TestDeletesConfirmOnlyUnderSecretsManager(t *testing.T) {
+	if len(confirmedUnderSecretsManager) != 3 {
+		t.Errorf("want the three existing deletes wired, got %d", len(confirmedUnderSecretsManager))
+	}
+	for path := range confirmedUnderSecretsManager {
+		words := strings.Fields(path)
+		for _, prefix := range []string{secretsManagerCommandName, secretsManagerAlias} {
+			cmd, _, err := RootCmd.Find(append([]string{prefix}, words...))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if f := cmd.Flags().Lookup("yes"); f == nil || f.Shorthand != "y" {
+				t.Errorf("%s %s should take -y/--yes", prefix, path)
+			}
+		}
+		if findCommand(t, words).Flags().Lookup("yes") != nil {
+			t.Errorf("legacy top-level %s must not change", path)
+		}
+	}
+}
+
+// The real commands, not a stand-in: without a terminal and without --yes, each stops with
+// confirmation_required before its own Run, which would otherwise log in and call the API.
+func TestRegisteredDeletesStopWithoutConfirmation(t *testing.T) {
+	t.Setenv(util.INFISICAL_PROJECT_ID_NAME, testProjectID)
+	t.Setenv(util.INFISICAL_ENVIRONMENT_NAME, "staging")
+	t.Setenv(util.INFISICAL_SECRET_PATH_NAME, "/app")
+	fakeTerminal(t, false, "", errors.New("must not prompt"))
+	stderr := captureStderr(t)
+	exits := 0
+	oldExit := exitProcess
+	exitProcess = func(int) { exits++ }
+	t.Cleanup(func() { exitProcess = oldExit })
+
+	folderDelete := findCommand(t, smPath([]string{"secrets", "folders", "delete"}))
+	_ = folderDelete.Flags().Set("name", "api")
+	t.Cleanup(func() { _ = folderDelete.Flags().Set("name", ""); folderDelete.Flags().Lookup("name").Changed = false })
+
+	// The suggestion pins what the variables chose, so running it without them deletes the same thing.
+	// Folder delete reads --path only from its flag, so it acts at / and says so.
+	wantScope := map[string]string{
+		"secrets delete":               "--env staging --path /app --projectId " + testProjectID + " --yes",
+		"secrets folders delete":       "--env staging --path / --projectId " + testProjectID + " --yes",
+		"dynamic-secrets lease delete": "--env staging --path /app --projectId " + testProjectID + " --yes",
+	}
+	for path := range confirmedUnderSecretsManager {
+		stderr.Reset()
+		exits = 0
+		cmd := findCommand(t, smPath(strings.Fields(path)))
+		cmd.Run(cmd, []string{"API_KEY"})
+		if exits != 1 || !strings.Contains(stderr.String(), "needs confirmation") || !strings.Contains(stderr.String(), wantScope[path]+"\n") {
+			t.Errorf("%s: exits=%d, stderr=%q, want the suggestion to end with %q", path, exits, stderr.String(), wantScope[path])
+		}
+	}
+}
+
+func TestDescribeDeletes(t *testing.T) {
+	t.Setenv(util.INFISICAL_PROJECT_ID_NAME, testProjectID)
+	secretsDelete := findCommand(t, smPath([]string{"secrets", "delete"}))
+	one, ok := describeSecretsDelete(secretsDelete, []string{"API_KEY"})
+	if !ok || one.Target != `secret "API_KEY"` || one.Expected != "API_KEY" || one.Label != "the secret name" || scopeValue(one, "projectId") != testProjectID {
+		t.Errorf("one secret: %+v", one)
+	}
+	if want := "in project " + testProjectID + " (from INFISICAL_PROJECT_ID)"; !strings.Contains(one.Description, want) {
+		t.Errorf("the question should name the project and where it came from: %q", one.Description)
+	}
+	pasted := "API_KEY=st.abc.def.ghi"
+	for _, args := range [][]string{{pasted}, {"OK", pasted}} {
+		unsafe, _ := describeSecretsDelete(secretsDelete, args)
+		if strings.Contains(unsafe.Target+unsafe.Description, "st.abc") {
+			t.Errorf("a pasted value reached the question or the error: %+v", unsafe)
+		}
+	}
+	many, _ := describeSecretsDelete(secretsDelete, []string{"A", "B", "C"})
+	if many.Target != "3 secrets" || many.Expected != "3" || !strings.Contains(many.Description, "A, B, C") {
+		t.Errorf("several secrets: %+v", many)
+	}
+	if _, ok := describeSecretsDelete(secretsDelete, nil); ok {
+		t.Error("no names: the command's own validation should report it")
+	}
+
+	folderDelete := findCommand(t, smPath([]string{"secrets", "folders", "delete"}))
+	if _, ok := describeFolderDelete(folderDelete, nil); ok {
+		t.Error("no --name: the command's own error should report it")
+	}
+	_ = folderDelete.Flags().Set("name", "api")
+	t.Cleanup(func() { _ = folderDelete.Flags().Set("name", ""); folderDelete.Flags().Lookup("name").Changed = false })
+	if folder, ok := describeFolderDelete(folderDelete, nil); !ok || folder.Expected != "api" || folder.Label != "the folder name" {
+		t.Errorf("folder: %+v", folder)
+	}
+
+	lease, ok := describeLeaseDelete(findCommand(t, smPath([]string{"dynamic-secrets", "lease", "delete"})), []string{testProjectID})
+	if !ok || lease.Expected != testProjectID || lease.Label != "the lease ID" {
+		t.Errorf("lease: %+v", lease)
+	}
+}
+
+func scopeValue(action destructiveAction, flag string) string {
+	for _, f := range action.Scope {
+		if f.Name == flag {
+			return f.Value
+		}
+	}
+	return ""
+}
+
+// A project chosen by flag is named without a source; the rerun repeats the typed flag once.
+func TestDescribeDeletesNamesAFlaggedProject(t *testing.T) {
+	t.Setenv(util.INFISICAL_PROJECT_ID_NAME, "")
+	secretsDelete := findCommand(t, smPath([]string{"secrets", "delete"}))
+	_ = secretsDelete.Flags().Set("projectId", testProjectID)
+	t.Cleanup(func() {
+		_ = secretsDelete.Flags().Set("projectId", "")
+		secretsDelete.Flags().Lookup("projectId").Changed = false
+	})
+	action, ok := describeSecretsDelete(secretsDelete, []string{"API_KEY"})
+	if !ok || !strings.HasSuffix(action.Description, "in project "+testProjectID) {
+		t.Errorf("%+v", action)
+	}
+	if got := rerunWithYes(secretsDelete, []string{"API_KEY"}, action.Scope); strings.Count(got, "--projectId") != 1 {
+		t.Errorf("--projectId should appear once: %s", got)
+	}
+}
+
+// With no project anywhere, the command's own "run infisical init" error reports it, as before.
+func TestDescribeDeletesWithoutAProject(t *testing.T) {
+	t.Setenv(util.INFISICAL_PROJECT_ID_NAME, "")
+	t.Chdir(t.TempDir())
+	if _, ok := describeSecretsDelete(findCommand(t, smPath([]string{"secrets", "delete"})), []string{"API_KEY"}); ok {
+		t.Error("no project: the command should report it, not ask")
+	}
+}
+
+// A workspace file with no project ID doesn't make the deletes fail: they would send the request with
+// an empty project. So the question can't be skipped there; the command stops with project_not_linked.
+func TestDeletesStopOnAWorkspaceFileWithoutAProject(t *testing.T) {
+	t.Setenv(util.INFISICAL_PROJECT_ID_NAME, "")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME), []byte("secrets-management:\n  project-id: \"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	type stopped struct{}
+	stderr := captureStderr(t)
+	oldExit := exitProcess
+	exitProcess = func(int) { panic(stopped{}) }
+	t.Cleanup(func() { exitProcess = oldExit })
+
+	for path, describe := range confirmedUnderSecretsManager {
+		stderr.Reset()
+		cmd := findCommand(t, smPath(strings.Fields(path)))
+		exited := func() (exited bool) {
+			defer func() {
+				if r := recover(); r != nil {
+					if _, ok := r.(stopped); !ok {
+						panic(r)
+					}
+					exited = true
+				}
+			}()
+			describe(cmd, []string{"API_KEY"})
+			return false
+		}()
+		if !exited || !strings.Contains(stderr.String(), "No project is selected") {
+			t.Errorf("%s: exited=%v stderr=%q", path, exited, stderr.String())
+		}
+	}
+}
+
+// From a linked directory, the question names the workspace file the project came from.
+func TestDescribeDeletesNamesTheWorkspaceFile(t *testing.T) {
+	t.Setenv(util.INFISICAL_PROJECT_ID_NAME, "")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME), []byte("secrets-management:\n  project-id: "+testProjectID+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	action, ok := describeSecretsDelete(findCommand(t, smPath([]string{"secrets", "delete"})), []string{"API_KEY"})
+	if !ok || scopeValue(action, "projectId") != testProjectID || !strings.Contains(action.Description, util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME+")") {
+		t.Errorf("%+v", action)
+	}
+}
+
+// Under secrets-manager, `get` without names lists and create/update join the upsert `set`, which is
+// hidden. The top-level `infisical secrets` keeps its old shape.
+func TestSecretsManagerSecretsShape(t *testing.T) {
+	for _, prefix := range []string{secretsManagerCommandName, secretsManagerAlias} {
+		for _, action := range []string{"create", "update"} {
+			if cmd, _, err := RootCmd.Find([]string{prefix, "secrets", action}); err != nil || cmd.Name() != action {
+				t.Errorf("%s secrets %s should exist: %v", prefix, action, err)
+			}
+		}
+		get, _, _ := RootCmd.Find([]string{prefix, "secrets", "get"})
+		if err := get.Args(get, nil); err != nil {
+			t.Errorf("%s secrets get should accept no names: %v", prefix, err)
+		}
+	}
+
+	for _, action := range []string{"create", "update"} {
+		if cmd, _, _ := RootCmd.Find([]string{"secrets", action}); cmd.Name() == action {
+			t.Errorf("top-level secrets %s must not be added", action)
+		}
+	}
+	topGet := findCommand(t, []string{"secrets", "get"})
+	if topGet.Args(topGet, nil) == nil {
+		t.Error("top-level secrets get must still require names")
+	}
+	if findCommand(t, []string{"secrets", "set"}).Hidden {
+		t.Error("top-level secrets set must stay visible")
+	}
+}
+
+// create and update read the same flags as set, through the same code. Only the descriptions differ.
+func TestSecretsCreateAndUpdateTakeSetFlags(t *testing.T) {
+	withoutUsage := func(signatures map[string]string) map[string]string {
+		for flag, signature := range signatures {
+			parts := strings.SplitN(signature, "|", 4)
+			signatures[flag] = strings.Join(parts[:3], "|")
+		}
+		return signatures
+	}
+	set := withoutUsage(flagSignature(findCommand(t, smPath([]string{"secrets", "set"})).LocalFlags()))
+	for _, action := range []string{"create", "update"} {
+		got := withoutUsage(flagSignature(findCommand(t, smPath([]string{"secrets", action})).LocalFlags()))
+		for flag, signature := range set {
+			if got[flag] != signature {
+				t.Errorf("secrets %s --%s: got %q, set has %q", action, flag, got[flag], signature)
+			}
+		}
+		for flag := range got {
+			if _, ok := set[flag]; !ok {
+				t.Errorf("secrets %s has --%s, which set doesn't", action, flag)
+			}
+		}
+	}
+}
+
+func TestSecretWriteRejectsAnUnknownType(t *testing.T) {
+	build := func() *cobra.Command {
+		secretsCmd := buildSecretsCmd()
+		namespaceSecretsCmd(secretsCmd)
+		return secretsCmd
+	}
+	for _, action := range []string{"set", "create", "update"} {
+		stderr, _, exited := runUnderSecretsManager(t, build, "secrets", action, "A=1", "--type", "team", "--projectId", testProjectID, "-o", "json")
+		if !exited || errorCode(t, stderr) != errCodeInvalidFlagValue {
+			t.Errorf("%s -o json: exited=%v stderr=%s", action, exited, stderr)
+		}
+		stderr, _, _ = runUnderSecretsManager(t, build, "secrets", action, "A=1", "--type", "team", "--projectId", testProjectID)
+		if strings.Contains(stderr, "<nil>") || !strings.Contains(stderr, `--type must be "shared" or "personal", not "team".`) {
+			t.Errorf("%s: %q", action, stderr)
+		}
+		pasted := "test secret value"
+		stderr, _, _ = runUnderSecretsManager(t, build, "secrets", action, "A=1", "--type", pasted, "--projectId", testProjectID)
+		if strings.Contains(stderr, pasted) || !strings.Contains(stderr, "not <type>.") {
+			t.Errorf("%s: a pasted --type value reached the error: %q", action, stderr)
+		}
+	}
+}
+
+// With a token, create and update fall back to .infisical.yaml like the other secrets-manager
+// commands, so with no project anywhere they say so with project_not_linked.
+func TestSecretWriteWithATokenAndNoProject(t *testing.T) {
+	build := func() *cobra.Command {
+		secretsCmd := buildSecretsCmd()
+		namespaceSecretsCmd(secretsCmd)
+		return secretsCmd
+	}
+	for _, action := range []string{"create", "update"} {
+		stderr, _, exited := runUnderSecretsManager(t, build, "secrets", action, "A=1", "-o", "json")
+		if !exited || errorCode(t, stderr) != errCodeProjectNotLinked {
+			t.Errorf("%s: exited=%v stderr=%s", action, exited, stderr)
+		}
+	}
+}
+
+func TestSecretWriteErrorMapsToCodes(t *testing.T) {
+	scope := errorScope{ProjectID: testProjectID, Environment: "dev", SecretPath: "/app", SecretType: util.SECRET_TYPE_SHARED}
+	cases := map[util.SecretWriteMode]string{util.SecretWriteCreateOnly: errCodeSecretExists, util.SecretWriteUpdateOnly: errCodeSecretNotFound}
+	for mode, code := range cases {
+		err := secretWriteError(&util.SecretWriteConflict{Mode: mode, Keys: []string{"A", "B"}}, mode, scope)
+		var cliErr *util.CLIError
+		if !errors.As(err, &cliErr) || cliErr.Code != code || !strings.Contains(cliErr.Message, `"A", "B"`) ||
+			!strings.HasSuffix(cliErr.Next[0].Command, "=<value> --env dev --path /app --projectId "+testProjectID) {
+			t.Errorf("mode %d: got %+v", mode, err)
+		}
+	}
+
+	if err := secretWriteError(&util.SecretWriteRepeated{Key: "DUP"}, util.SecretWriteCreateOnly, scope); codeOf(err) != errCodeInvalidArgument {
+		t.Errorf("repeated name: got %v", err)
+	}
+
+	other := errors.New("network down")
+	if secretWriteError(other, util.SecretWriteCreateOnly, scope) != other {
+		t.Error("errors the CLI can't identify must pass through unchanged")
+	}
+}
+
+// Running the suggestion for a refused personal write must act on the personal override, never on the
+// shared secret with the same name.
+// INFISICAL_SECRET_PATH or .infisical.yaml would choose another folder when the suggestion runs, so
+// the root folder is repeated too.
+func TestSecretWriteSuggestionKeepsTheRootFolder(t *testing.T) {
+	scope := errorScope{ProjectID: testProjectID, Environment: "dev", SecretPath: "/"}
+	var cliErr *util.CLIError
+	errors.As(secretWriteError(&util.SecretWriteConflict{Mode: util.SecretWriteCreateOnly, Keys: []string{"A"}}, util.SecretWriteCreateOnly, scope), &cliErr)
+	if cliErr == nil || !strings.HasSuffix(cliErr.Next[0].Command, "=<value> --env dev --path / --projectId "+testProjectID) {
+		t.Errorf("got %+v", cliErr)
+	}
+}
+
+func TestSecretWriteSuggestionKeepsThePersonalType(t *testing.T) {
+	scope := errorScope{ProjectID: testProjectID, Environment: "dev", SecretType: util.SECRET_TYPE_PERSONAL}
+	for _, mode := range []util.SecretWriteMode{util.SecretWriteCreateOnly, util.SecretWriteUpdateOnly} {
+		var cliErr *util.CLIError
+		errors.As(secretWriteError(&util.SecretWriteConflict{Mode: mode, Keys: []string{"A"}}, mode, scope), &cliErr)
+		if cliErr == nil || !strings.HasSuffix(cliErr.Next[0].Command, "=<value> --env dev --type personal --projectId "+testProjectID) {
+			t.Errorf("mode %d: got %+v", mode, cliErr)
+		}
+	}
+}
+
+// WriteRawSecrets wraps API errors, so create and update must still find them; set must print them as
+// it always has.
+func TestSecretWriteErrorClassifiesAPIErrorsForCreateAndUpdateOnly(t *testing.T) {
+	scope := errorScope{ProjectID: testProjectID, Environment: "dev"}
+	denied := fmt.Errorf("unable to process new secret creations [err=%w]", apiError(403, "PermissionDenied", "You are not allowed to create on secrets"))
+	if codeOf(secretWriteError(denied, util.SecretWriteCreateOnly, scope)) != errCodePermissionDenied {
+		t.Error("create: a wrapped 403 PermissionDenied should be permission_denied")
+	}
+	notMember := fmt.Errorf("unable to retrieve secrets [err=%w]", apiError(403, "ProjectMembershipNotFound", "You are not a member of this project"))
+	if codeOf(secretWriteError(notMember, util.SecretWriteUpdateOnly, scope)) != errCodeProjectNotFound {
+		t.Error("update: a wrapped ProjectMembershipNotFound should be project_not_found")
+	}
+	if secretWriteError(denied, util.SecretWriteUpsert, scope) != denied {
+		t.Error("set must print API errors unchanged")
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/mattn/go-isatty"
 	"github.com/posthog/posthog-go"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
@@ -178,7 +179,7 @@ var profileListCmd = &cobra.Command{
 
 var profileCurrentCmd = &cobra.Command{
 	Use:                   "current",
-	Short:                 "Show which profile commands run here will use, and why",
+	Short:                 "Show the profile, project, and environment commands run here will use, and why",
 	DisableFlagsInUseLine: true,
 	Example:               "infisical profile current",
 	Args:                  cobra.NoArgs,
@@ -236,6 +237,8 @@ var profileCurrentCmd = &cobra.Command{
 			util.PrintlnStdout("Sub-organization:", labelWithID(subName, profile.SubOrganizationID))
 		}
 		util.PrintlnStdout("Domain:", util.DisplayDomain(profile.Domain))
+		printSecretsManagerDefaults()
+		printAgentVaultProjectForProfile()
 
 		Telemetry.CaptureEvent("cli-command:profile current", posthog.NewProperties().Set("version", util.CLI_VERSION))
 	},
@@ -763,4 +766,44 @@ func init() {
 	profileCmd.AddCommand(profileRenameCmd)
 	profileCmd.AddCommand(profileDeleteCmd)
 	RootCmd.AddCommand(profileCmd)
+}
+
+// Resolved with the functions secrets, run and export call, on a command carrying their flag
+// defaults, so the report can't drift from what those commands do.
+func printSecretsManagerDefaults() {
+	defaults := &cobra.Command{}
+	defaults.Flags().String("env", "dev", "")
+	defaults.Flags().String("path", "/", "")
+
+	if configFile, err := util.FindWorkspaceConfigFile(); err == nil {
+		util.PrintlnStdout("Project config:", util.SanitizeDisplay(configFile))
+	}
+	switch projectID, source, err := util.ResolveProjectIDWithSource(defaults); {
+	case err != nil:
+		log.Debug().Err(err).Msg("profile current: project config")
+		util.PrintlnStdout("Project: unknown. The project config can't be read, so commands here that need a project fail. Run [infisical init] to link this directory again.")
+	case projectID == "":
+		util.PrintlnStdout("Project: none. Run [infisical init] to link this directory, or pass --projectId to each command.")
+	default:
+		util.PrintlnStdout("Project:", util.SanitizeDisplay(projectID))
+		hint := overrideHint("projectId")
+		// secrets, run and export only take a machine identity's project from --projectId or
+		// INFISICAL_PROJECT_ID, never from the config file.
+		if source == util.INFISICAL_WORKSPACE_CONFIG_FILE_NAME || source == util.LEGACY_INFISICAL_WORKSPACE_CONFIG_FILE_NAME {
+			hint = " (override with --projectId; machine identities may ignore it)"
+		}
+		util.PrintlnStdout("Project via:", source+hint)
+	}
+
+	environment, source := util.ResolveEnvironmentNameWithSource(defaults)
+	util.PrintlnStdout("Environment:", util.SanitizeDisplay(environment))
+	util.PrintlnStdout("Environment via:", util.SanitizeDisplay(source)+overrideHint("env"))
+	secretPath, source := util.ResolveSecretPathWithSource(defaults)
+	util.PrintlnStdout("Secret path:", util.SanitizeDisplay(secretPath))
+	util.PrintlnStdout("Secret path via:", util.SanitizeDisplay(source)+overrideHint("path"))
+}
+
+// The report is what a command uses when it's given no flags, so each line says which flag changes it.
+func overrideHint(flag string) string {
+	return " (override with --" + flag + ")"
 }
