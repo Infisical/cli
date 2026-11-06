@@ -180,6 +180,10 @@ func (ps *proxyServer) handleNativeConnect(w http.ResponseWriter, r *http.Reques
 	}
 	defer clientConn.Close()
 	// PAM's handlers don't all watch the context, so closing the connection is what ends them.
+	// TODO: this only cuts the agent off. PAM's MySQL handler ignores the context, so a query already running when
+	// the service is removed or the session ends keeps its server connection and runs to completion. The Postgres
+	// handler drops its server connection, but the database can still finish the query. Stopping it needs PAM's
+	// handlers to cancel the query (KILL QUERY for MySQL, a cancel request for Postgres).
 	stop := context.AfterFunc(conn.ctx, func() { _ = clientConn.Close() })
 	defer stop()
 
@@ -238,6 +242,11 @@ func serveNative(ctx context.Context, conn net.Conn, svc *resolvedService, tlsCo
 			SessionLogger:  logger,
 		}).HandleConnection(ctx, conn)
 	case serviceKindMySQL:
+		// TODO: PAM's MySQL handler offers the client only mysql_native_password, so clients built without that plugin
+		// (the current Homebrew mysql) fail to log in. MySQL 8, the official mysql:9 image and MariaDB clients work.
+		// Fix in PAM's handler by also offering caching_sha2_password.
+		// TODO: PAM's MySQL handler logs a statement the database refused as NO_RESPONSE, so the session log doesn't
+		// say it was denied. Fix in PAM's handler by recording MySQL's error instead.
 		return pammysql.NewMysqlProxy(pammysql.MysqlProxyConfig{
 			TargetAddr:     target.addr(),
 			InjectUsername: cred.username,
@@ -268,6 +277,9 @@ func serveNative(ctx context.Context, conn net.Conn, svc *resolvedService, tlsCo
 		}
 		// TODO: PAM's SSH handler never reads the server's stderr, so the agent doesn't see error output and a command
 		// writing a lot to stderr can stall its channel. The fix belongs in PAM's handler.
+		// TODO: PAM's SSH handler closes an exec channel about 6 seconds after the client's stdin ends (proxy.go waits
+		// 3s for output, then 3s for exit-status), so `ssh -n host 'long command'`, the usual way agents run
+		// commands, is cut off with exit 255. The fix belongs in PAM's handler and must keep scp working.
 		return pamssh.NewSSHProxy(config).HandleConnection(ctx, conn)
 	}
 	return fmt.Errorf("service kind %q has no native handler", svc.kind)
