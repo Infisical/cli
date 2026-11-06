@@ -42,7 +42,7 @@ func staticCredentialRejectedBody(svc *resolvedService) string {
 
 func reauthorizationNeededBody(svc *resolvedService) string {
 	if svc.memberProvided {
-		return upstreamAuthBody("upstream_auth_failed", fmt.Sprintf("Reconnect your %s account on access bundle %q in Infisical Agent Vault.", svc.name, svc.accessBundleName))
+		return upstreamAuthBody("upstream_auth_failed", fmt.Sprintf("Reconnect your account for the %s service on access bundle %q in Infisical Agent Vault.", svc.name, svc.accessBundleName))
 	}
 	return upstreamAuthBody("upstream_auth_failed", fmt.Sprintf("The %s service needs to be reauthorized in Infisical Agent Vault.", svc.name))
 }

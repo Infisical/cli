@@ -485,7 +485,7 @@ func TestAMemberProvidedRejectionTellsTheMemberWhatToFix(t *testing.T) {
 		}, acceptOnly("nothing"))
 
 		resp, body := doWith(t, client, http.MethodGet, fmt.Sprintf("https://%s/mcp", host), "", nil)
-		assertUpstreamAuthFailed(t, resp, body, `{"error":"upstream_auth_failed","message":"Reconnect your linear account on access bundle \"bundle\" in Infisical Agent Vault."}`)
+		assertUpstreamAuthFailed(t, resp, body, `{"error":"upstream_auth_failed","message":"Reconnect your account for the linear service on access bundle \"bundle\" in Infisical Agent Vault."}`)
 	})
 }
 
