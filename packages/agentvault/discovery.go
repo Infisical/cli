@@ -23,9 +23,19 @@ const BuiltinSkillName = "infisical-agent-vault"
 // its own refusals, so agent-vault run can point the agent at its session's endpoints there, through the proxy.
 const HeaderAPIURL = "X-Agent-Vault-Api-Url"
 
-// APIURLEnv holds that API URL in the agent's environment: agent-vault run sets it from the proxy's header, and code
-// that starts agents itself sets it to the same URL. The built-in skill reads it.
-const APIURLEnv = "INFISICAL_AGENT_VAULT_API_URL"
+// URLEnv holds the URL of the proxy's Infisical in the agent's environment, such as https://app.infisical.com, the
+// same URL as --domain: agent-vault run sets it once the proxy's header is confirmed, and code that starts agents itself
+// sets it to what it passed the proxy. The agent reaches its session's endpoints under <URL>/api, through the proxy.
+const URLEnv = "INFISICAL_AGENT_VAULT_URL"
+
+// InfisicalURL is the URL an agent gets in URLEnv for apiURL, or "" if apiURL doesn't end in /api, since the agent adds
+// /api itself.
+func InfisicalURL(apiURL string) string {
+	if !strings.HasSuffix(apiURL, "/api") {
+		return ""
+	}
+	return strings.TrimSuffix(apiURL, "/api")
+}
 
 // Under the API URL. Through the proxy, the agent reaches these with its session's own token, which it never holds.
 const (
@@ -176,7 +186,7 @@ func proxyErrorHint(code string) string {
 	if !strings.Contains(hint, servicesURLPlaceholder) {
 		return hint
 	}
-	servicesURL := "$" + APIURLEnv + sessionServicesPath
+	servicesURL := "$" + URLEnv + "/api" + sessionServicesPath
 	if apiURL := proxyAPIURL(); apiURL != "" {
 		servicesURL = apiURL + sessionServicesPath
 	}

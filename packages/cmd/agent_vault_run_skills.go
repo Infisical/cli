@@ -242,8 +242,8 @@ func (t *agentVaultSkillsTunnel) confirm(ctx context.Context) {
 }
 
 // prepareAgentVaultRunProxy asks the proxy which Infisical it works with, then installs the session's skills through
-// installSkills, or with --no-skills (nil) only confirms the answer. It returns the API URL for the agent's
-// INFISICAL_AGENT_VAULT_API_URL, which stays empty unless an answer from inside TLS confirmed it.
+// installSkills, or with --no-skills (nil) only confirms the answer. It returns the API URL the agent's
+// INFISICAL_AGENT_VAULT_URL comes from, or "" unless an answer from inside TLS confirmed it.
 func prepareAgentVaultRunProxy(ctx context.Context, proxyAddr, sessionToken string, caPEM []byte,
 	installSkills func(ctx context.Context, tunnel *agentVaultSkillsTunnel, proxyTooOld bool)) string {
 	claimed, answered := askAgentVaultProxyAPIURL(ctx, proxyAddr, sessionToken)
@@ -271,7 +271,7 @@ func prepareAgentVaultRunProxy(ctx context.Context, proxyAddr, sessionToken stri
 	}
 	if tunnel.contradicted {
 		util.PrintWarning("The proxy's answer from inside TLS didn't name the Infisical it named on its CONNECT answer, so the agent gets no " +
-			agentvault.APIURLEnv + " and no skills came through the proxy. Something between this host and the proxy may be changing its answers.")
+			agentvault.URLEnv + " and no skills came through the proxy. Something between this host and the proxy may be changing its answers.")
 	}
 	if !tunnel.confirmed {
 		return ""

@@ -628,3 +628,18 @@ func TestAnAPIURLWithCredentialsQueryOrFragmentIsNotTaken(t *testing.T) {
 		t.Fatalf("APIURLFromHeader trimmed to %q", got)
 	}
 }
+
+// Agents get the URL people already pass to --domain, and add /api themselves.
+func TestTheAgentGetsInfisicalsURLWithoutAPI(t *testing.T) {
+	for apiURL, want := range map[string]string{
+		"https://app.infisical.com/api":     "https://app.infisical.com",
+		"http://localhost:8080/api":         "http://localhost:8080",
+		"https://example.com/infisical/api": "https://example.com/infisical",
+		"https://example.com/custom":        "",
+		"":                                  "",
+	} {
+		if got := InfisicalURL(apiURL); got != want {
+			t.Errorf("InfisicalURL(%q) = %q, want %q", apiURL, got, want)
+		}
+	}
+}

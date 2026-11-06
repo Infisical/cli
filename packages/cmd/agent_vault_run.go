@@ -125,9 +125,9 @@ neither flag is passed, the run stops and asks which you meant.
 The proxy's certificate authority is fetched from the proxy on every run and trusted for the agent. Pass
 --ca-fingerprint to abort if the served certificate does not match the proxy's fingerprint from Infisical.
 
-The proxy says which Infisical it works with, and the agent gets that API URL in INFISICAL_AGENT_VAULT_API_URL.
+The proxy says which Infisical it works with, and the agent gets that Infisical's URL in INFISICAL_AGENT_VAULT_URL.
 Through the proxy, the agent lists the services its session reaches at
-$INFISICAL_AGENT_VAULT_API_URL/v1/agent-vault/session/services, with no credential of its own.
+$INFISICAL_AGENT_VAULT_URL/api/v1/agent-vault/session/services, with no credential of its own.
 
 The skills in the session's access bundle, plus infisical-agent-vault, which tells the agent how to work behind
 the proxy, are fetched through the proxy and installed when the agent starts, into
@@ -738,8 +738,8 @@ func isAgentVaultSessionTokenKey(key string) bool {
 // 'secrets agent-proxy run' strips a longer list because its agent is sandboxed and cannot read those
 // credentials back from disk.
 func buildAgentVaultRunEnv(parent []string, proxyAddr, sessionToken, caPath, extraNoProxy, apiURL string) []string {
-	// The API URL is the proxy's to name, so a value from the environment never reaches the agent in its place.
-	stale := map[string]bool{agentvault.APIURLEnv: true}
+	// The URL is the proxy's to name, so a value from the environment never reaches the agent in its place.
+	stale := map[string]bool{agentvault.URLEnv: true}
 	for _, k := range proxyEnvKeys {
 		stale[k] = true
 	}
@@ -765,8 +765,8 @@ func buildAgentVaultRunEnv(parent []string, proxyAddr, sessionToken, caPath, ext
 
 	setProxyEnv(env, agentVaultProxyURL(proxyAddr, sessionToken), mergeNoProxy(append(operatorNoProxy, extraNoProxy)...))
 	// Through the proxy like any request, so the session comes from the tunnel and the agent never handles its token.
-	if apiURL != "" {
-		env[agentvault.APIURLEnv] = apiURL
+	if infisicalURL := agentvault.InfisicalURL(apiURL); infisicalURL != "" {
+		env[agentvault.URLEnv] = infisicalURL
 	}
 
 	if caPath != "" {
