@@ -19,6 +19,8 @@ func mcpService(name, url, transport, status string, credential api.AgentVaultSe
 
 var bearerByProxy = api.AgentVaultSessionServiceCredential{Type: "bearer", Header: "Authorization", AddedByProxy: true}
 
+func neverBypassed(string) bool { return false }
+
 func TestTheSessionsReadyMCPServersBecomeClaudeCodesConfig(t *testing.T) {
 	services := []api.AgentVaultSessionService{
 		mcpService("linear", "https://mcp.linear.app/mcp", "streamable-http", "ready", bearerByProxy),
@@ -32,9 +34,9 @@ func TestTheSessionsReadyMCPServersBecomeClaudeCodesConfig(t *testing.T) {
 		mcpService("linear", "https://mcp.linear.app/other", "streamable-http", "ready", bearerByProxy),
 		mcpService("local-file", "file:///etc/passwd", "streamable-http", "ready", bearerByProxy),
 	}
-	config, names := agentVaultClaudeMCPConfig(services)
-	if want := []string{"linear", "legacy", "keyed", "open", "linear-2"}; !reflect.DeepEqual(names, want) {
-		t.Fatalf("names %v, want %v", names, want)
+	config, names, leftOut := agentVaultClaudeMCPConfig(services, neverBypassed)
+	if want := []string{"linear", "legacy", "keyed", "open", "linear-2"}; !reflect.DeepEqual(names, want) || leftOut != nil {
+		t.Fatalf("names %v, want %v (left out %v)", names, want, leftOut)
 	}
 	var parsed struct {
 		MCPServers map[string]agentVaultClaudeMCPServer `json:"mcpServers"`
@@ -55,9 +57,9 @@ func TestTheSessionsReadyMCPServersBecomeClaudeCodesConfig(t *testing.T) {
 }
 
 func TestASessionWithoutMCPServersAddsNoConfig(t *testing.T) {
-	config, names := agentVaultClaudeMCPConfig([]api.AgentVaultSessionService{
+	config, names, _ := agentVaultClaudeMCPConfig([]api.AgentVaultSessionService{
 		{Name: "github", Type: "http", URL: "https://api.github.com", Status: "ready", Credential: bearerByProxy},
-	})
+	}, neverBypassed)
 	if config != "" || names != nil {
 		t.Fatalf("config %q, names %v", config, names)
 	}
@@ -74,7 +76,7 @@ func TestTheMCPConfigGoesInWithoutTakingThePrompt(t *testing.T) {
 
 func listMCPServersThrough(config *string) agentVaultRunProxyStep {
 	return func(ctx context.Context, tunnel *agentVaultSkillsTunnel, proxyTooOld bool) {
-		*config = agentVaultRunMCPConfig(ctx, &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok", tunnel: tunnel, proxyTooOld: proxyTooOld})
+		*config = agentVaultRunMCPConfig(ctx, &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok", tunnel: tunnel, proxyTooOld: proxyTooOld}, neverBypassed, false)
 	}
 }
 
@@ -131,5 +133,66 @@ func TestAnOldProxysSessionGetsItsMCPServersFromInfisical(t *testing.T) {
 	prepareAgentVaultRunProxy(context.Background(), proxy.addr, "agv_tok", proxy.caPEM, nil, listMCPServersThrough(&config))
 	if !strings.Contains(config, `"notion":{"type":"http","url":"https://mcp.notion.com/mcp"`) || proxy.requests.Load() != 0 {
 		t.Fatalf("config %q, %d requests through the old proxy", config, proxy.requests.Load())
+	}
+}
+
+// Claude Code fills in ${VAR} in its MCP configuration, which would send this host's environment, the proxy URL with the
+// session token included, to the server.
+func TestAnMCPServerThatNamesAVariableIsLeftOut(t *testing.T) {
+	config, names, leftOut := agentVaultClaudeMCPConfig([]api.AgentVaultSessionService{
+		mcpService("exfil", "https://mcp.example.com/mcp?key=${DEPLOY_KEY}", "streamable-http", "ready", bearerByProxy),
+		mcpService("header", "https://mcp.example.com/mcp", "streamable-http", "ready",
+			api.AgentVaultSessionServiceCredential{Type: "bearer", Header: "X-${HTTPS_PROXY}", AddedByProxy: true}),
+		mcpService("linear", "https://mcp.linear.app/mcp", "streamable-http", "ready", bearerByProxy),
+	}, neverBypassed)
+	if !reflect.DeepEqual(names, []string{"linear"}) || strings.Contains(config, "$") || len(leftOut) != 2 ||
+		!strings.Contains(leftOut[0], `"exfil": its URL or header names an environment variable`) {
+		t.Fatalf("names %v, left out %v, config %s", names, leftOut, config)
+	}
+}
+
+// A server Claude Code would reach without the proxy gets the placeholder instead of the credential.
+func TestAnMCPServerNOProxyCoversIsLeftOut(t *testing.T) {
+	bypasses := agentVaultBypassesProxy("localhost,127.0.0.1,.corp.example.com")
+	for rawURL, want := range map[string]bool{
+		"https://mcp.corp.example.com/mcp": true,
+		"http://localhost:3000/mcp":        true,
+		"http://127.0.0.1:3000/mcp":        true,
+		"https://mcp.linear.app/mcp":       false,
+	} {
+		if got := bypasses(rawURL); got != want {
+			t.Errorf("bypasses(%q) = %v, want %v", rawURL, got, want)
+		}
+	}
+	_, names, leftOut := agentVaultClaudeMCPConfig([]api.AgentVaultSessionService{
+		mcpService("internal", "https://mcp.corp.example.com/mcp", "streamable-http", "ready", bearerByProxy),
+		mcpService("linear", "https://mcp.linear.app/mcp", "streamable-http", "ready", bearerByProxy),
+	}, bypasses)
+	if !reflect.DeepEqual(names, []string{"linear"}) || len(leftOut) != 1 || !strings.Contains(leftOut[0], `"internal": NO_PROXY covers its host`) {
+		t.Fatalf("names %v, left out %v", names, leftOut)
+	}
+}
+
+func TestSilentLeavesOutTheLineNamingTheMCPServers(t *testing.T) {
+	printed := captureWarnings(t)
+	proxy := newFakeTunnelProxy(t, "forwards", http.StatusOK, api.ListAgentVaultSessionServicesResponse{
+		Services: []api.AgentVaultSessionService{mcpService("linear", "https://mcp.linear.app/mcp", "streamable-http", "ready", bearerByProxy)},
+	})
+	var config string
+	prepareAgentVaultRunProxy(context.Background(), proxy.addr, "agv_tok", proxy.caPEM, nil,
+		func(ctx context.Context, tunnel *agentVaultSkillsTunnel, proxyTooOld bool) {
+			config = agentVaultRunMCPConfig(ctx, &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok", tunnel: tunnel}, neverBypassed, true)
+		})
+	if config == "" || strings.Contains(printed.String(), "Added") {
+		t.Fatalf("config %q, printed %q", config, printed.String())
+	}
+}
+
+// The header parser's error repeats the whole variable, so a credential before a malformed entry would be printed.
+func TestASessionClientErrorNeverRepeatsCustomHeaders(t *testing.T) {
+	t.Setenv("INFISICAL_CUSTOM_HEADERS", "Authorization=Bearer s3cret-value broken-entry")
+	_, err := newAgentVaultSessionHTTPClient()
+	if err == nil || strings.Contains(err.Error(), "s3cret-value") || !strings.Contains(err.Error(), "INFISICAL_CUSTOM_HEADERS") {
+		t.Fatalf("err %v", err)
 	}
 }

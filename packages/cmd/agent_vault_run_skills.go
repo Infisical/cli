@@ -53,6 +53,19 @@ func newAgentVaultSkillsHTTPClient() (*resty.Client, error) {
 	return httpClient, nil
 }
 
+// The only setup error is INFISICAL_CUSTOM_HEADERS that can't be read, and its message repeats the variable's value,
+// credentials included, so it is never printed.
+var errAgentVaultSessionHTTPClient = errors.New("INFISICAL_CUSTOM_HEADERS couldn't be read; set it as headerKey1=value1 headerKey2=value2")
+
+// newAgentVaultSessionHTTPClient is newAgentVaultSkillsHTTPClient with an error safe to print.
+func newAgentVaultSessionHTTPClient() (*resty.Client, error) {
+	client, err := newAgentVaultSkillsHTTPClient()
+	if err != nil {
+		return nil, errAgentVaultSessionHTTPClient
+	}
+	return client, nil
+}
+
 // A session token goes only to a domain the user chose: --domain, the domain variables, or the logged-in
 // profile, else US Cloud. A command holding only the token has not loaded the profile, so nothing else would
 // point it at the profile's domain.

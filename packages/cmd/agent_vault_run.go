@@ -459,7 +459,7 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	noBuiltinSkill, _ := cmd.Flags().GetBool("no-agent-vault-skill")
 	noMCPServers, _ := cmd.Flags().GetBool("no-mcp-servers")
 	sessionClient := func(tunnel *agentVaultSkillsTunnel, proxyTooOld bool) (*agentVaultSkillsClient, error) {
-		httpClient, err := newAgentVaultSkillsHTTPClient()
+		httpClient, err := newAgentVaultSessionHTTPClient()
 		if err != nil {
 			return nil, err
 		}
@@ -493,13 +493,15 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	var mcpConfig string
 	var listMCPServers agentVaultRunProxyStep
 	if !noMCPServers && agentVaultRunStartsClaude(args) {
+		silent, _ := cmd.Flags().GetBool("silent")
+		bypassesProxy := agentVaultBypassesProxy(agentVaultRunNoProxy(os.Environ(), extraNoProxy))
 		listMCPServers = func(ctx context.Context, tunnel *agentVaultSkillsTunnel, proxyTooOld bool) {
 			servicesClient, clientErr := sessionClient(tunnel, proxyTooOld)
 			if clientErr != nil {
 				util.PrintWarning(fmt.Sprintf("Starting Claude Code without the session's MCP servers: %v.", clientErr))
 				return
 			}
-			mcpConfig = agentVaultRunMCPConfig(ctx, servicesClient)
+			mcpConfig = agentVaultRunMCPConfig(ctx, servicesClient, bypassesProxy, silent)
 		}
 	}
 	var agentAPIURL string
@@ -765,6 +767,18 @@ func isAgentVaultSessionTokenKey(key string) bool {
 //
 // 'secrets agent-proxy run' strips a longer list because its agent is sandboxed and cannot read those
 // credentials back from disk.
+// agentVaultRunNoProxy is the agent's NO_PROXY: the operator's own entries and --no-proxy, merged with the ones every
+// run needs.
+func agentVaultRunNoProxy(parent []string, extraNoProxy string) string {
+	var operatorNoProxy []string
+	for _, kv := range parent {
+		if key, value, ok := strings.Cut(kv, "="); ok && (key == "NO_PROXY" || key == "no_proxy") {
+			operatorNoProxy = append(operatorNoProxy, value)
+		}
+	}
+	return mergeNoProxy(append(operatorNoProxy, extraNoProxy)...)
+}
+
 func buildAgentVaultRunEnv(parent []string, proxyAddr, sessionToken, caPath, extraNoProxy, apiURL string) []string {
 	// The URL is the proxy's to name, so a value from the environment never reaches the agent in its place.
 	stale := map[string]bool{agentvault.URLEnv: true}
@@ -772,7 +786,6 @@ func buildAgentVaultRunEnv(parent []string, proxyAddr, sessionToken, caPath, ext
 		stale[k] = true
 	}
 
-	var operatorNoProxy []string
 	env := map[string]string{}
 	for _, kv := range parent {
 		parts := strings.SplitN(kv, "=", 2)
@@ -780,7 +793,6 @@ func buildAgentVaultRunEnv(parent []string, proxyAddr, sessionToken, caPath, ext
 			continue
 		}
 		if parts[0] == "NO_PROXY" || parts[0] == "no_proxy" {
-			operatorNoProxy = append(operatorNoProxy, parts[1])
 			continue
 		}
 		if isAgentVaultSessionTokenKey(parts[0]) && parts[1] != sessionToken {
@@ -791,7 +803,7 @@ func buildAgentVaultRunEnv(parent []string, proxyAddr, sessionToken, caPath, ext
 		}
 	}
 
-	setProxyEnv(env, agentVaultProxyURL(proxyAddr, sessionToken), mergeNoProxy(append(operatorNoProxy, extraNoProxy)...))
+	setProxyEnv(env, agentVaultProxyURL(proxyAddr, sessionToken), agentVaultRunNoProxy(parent, extraNoProxy))
 	// Through the proxy like any request, so the session comes from the tunnel and the agent never handles its token.
 	if infisicalURL := agentvault.InfisicalURL(apiURL); infisicalURL != "" {
 		env[agentvault.URLEnv] = infisicalURL
