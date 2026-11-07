@@ -7,11 +7,13 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	stdlog "log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -437,6 +439,9 @@ func serve(opts Options, s startup) error {
 		MaxHeaderBytes:    maxRequestHeaderBytes,
 		// Never HTTP/2 on the TLS door: a database tunnel is a hijacked HTTP/1.1 CONNECT.
 		TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){},
+		// net/http prints every failed TLS handshake on the door, which scanners and dropped clients cause all the
+		// time, as plain text on stderr.
+		ErrorLog: stdlog.New(debugLogWriter{}, "", 0),
 	}
 
 	// A database or SSH connection keeps its slot for as long as it stays open, like an HTTPS tunnel.
@@ -444,7 +449,7 @@ func serve(opts Options, s startup) error {
 		log.Warn().
 			Int("limit", maxConcurrentConns).
 			Msg("agent-vault: connection limit reached, new connections are waiting for a slot")
-	}), proxyDoorTLSConfig(ca), frontReadHeaderTimeout)
+	}), proxyDoorTLSConfig(ca), doorPeekTimeout)
 
 	stop := make(chan struct{})
 	fatal := make(chan error, 1)
@@ -658,4 +663,11 @@ func (ps *proxyServer) tick(st stateSaver) (tokenRejected bool) {
 
 	ps.cache.refreshInBackground()
 	return tokenRejected
+}
+
+type debugLogWriter struct{}
+
+func (debugLogWriter) Write(p []byte) (int, error) {
+	log.Debug().Msg("agent-vault: " + strings.TrimRight(string(p), "\n"))
+	return len(p), nil
 }

@@ -15,12 +15,18 @@ type nativeConn struct {
 	serviceID string
 	target    nativeTarget
 	kind      string
+	// The session's expiry, kept here so the connection still closes on time while Infisical is down and the
+	// session's cache entry has been dropped.
+	expiresAt *time.Time
 	ctx       context.Context
 	cancel    context.CancelFunc
 	release   sync.Once
 }
 
-var errNativeServiceChanged = errors.New("the service changed while the connection was being opened, try again")
+var (
+	errNativeServiceChanged = errors.New("the service changed while the connection was being opened, try again")
+	errProxyShuttingDown    = errors.New("the proxy is shutting down, try again once it is back")
+)
 
 // registerNative admits a connection for svc only if the session's cache entry still holds that service as it was
 // looked up, so a revoke or an edit that landed in between can't leave a connection nothing will close.
@@ -30,6 +36,11 @@ func (c *sessionCache) registerNative(sessionToken string, svc *resolvedService)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// After closeNative has cancelled everything, a connection admitted now would never be closed, and its
+	// nativeOpen.Add could race the shutdown's Wait.
+	if c.closing {
+		return nil, errProxyShuttingDown
+	}
 	entry, ok := c.entries[key]
 	if !ok || (entry.expiresAt != nil && time.Now().After(*entry.expiresAt)) {
 		return nil, errSessionGone
@@ -45,6 +56,7 @@ func (c *sessionCache) registerNative(sessionToken string, svc *resolvedService)
 		serviceID: svc.id,
 		target:    *svc.native,
 		kind:      svc.kind,
+		expiresAt: entry.expiresAt,
 		ctx:       ctx,
 		cancel:    cancel,
 	}
@@ -84,6 +96,15 @@ func (c *sessionCache) pinnedLocked(key string) bool {
 	return len(c.native[key]) > 0
 }
 
+func (c *sessionCache) nativeExpiredLocked(key string, now time.Time) bool {
+	for conn := range c.native[key] {
+		if conn.expiresAt != nil && now.After(*conn.expiresAt) {
+			return true
+		}
+	}
+	return false
+}
+
 // The session really ended, so every connection it opened closes. Cancelling never blocks: each connection closes
 // itself on its own goroutine.
 func (c *sessionCache) endNativeLocked(key string) {
@@ -95,8 +116,9 @@ func (c *sessionCache) endNativeLocked(key string) {
 // A connection survives a new resolve only if its service is still there and still points at the same server.
 // A rotated password or a member clearing their personal values leaves it open: the login is already made, and new
 // connections use the new values or are refused.
-func (c *sessionCache) applyNativeLocked(key string, services []*resolvedService) {
+func (c *sessionCache) applyNativeLocked(key string, services []*resolvedService, expiresAt *time.Time) {
 	for conn := range c.native[key] {
+		conn.expiresAt = expiresAt
 		current := findServiceByID(services, conn.serviceID)
 		if current == nil || current.native == nil || current.kind != conn.kind || !current.native.equal(conn.target) {
 			conn.cancel()
@@ -122,6 +144,7 @@ func (c *sessionCache) forgetLocked(key string, ended bool) {
 // are recorded before the session logs close.
 func (c *sessionCache) closeNative(timeout time.Duration) {
 	c.mu.Lock()
+	c.closing = true
 	for key := range c.native {
 		c.endNativeLocked(key)
 	}

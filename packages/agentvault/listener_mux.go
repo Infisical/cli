@@ -6,6 +6,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // The proxy's HTTP port serves two kinds of client. Agents speak plain HTTP to it, as their HTTPS_PROXY says:
@@ -53,20 +55,32 @@ func proxyDoorTLSConfig(ca *caManager) *tls.Config {
 	}
 }
 
+const maxAcceptBackoff = time.Second
+
+// A temporary accept error, such as running out of file descriptors, is waited out the way net/http does. Handing it
+// to net/http instead would end this loop while net/http kept calling Accept, and the port would stop answering.
 func (d *doorListener) acceptLoop() {
+	var backoff time.Duration
 	for {
 		conn, err := d.inner.Accept()
 		if err != nil {
+			if !errors.Is(err, net.ErrClosed) && isTemporaryAcceptError(err) {
+				backoff = nextAcceptBackoff(backoff)
+				log.Warn().Err(err).Dur("retryIn", backoff).Msg("agent-vault: accept failed, retrying")
+				select {
+				case <-time.After(backoff):
+					continue
+				case <-d.done:
+					return
+				}
+			}
 			select {
 			case d.errs <- err:
 			case <-d.done:
 			}
-			var netErr net.Error
-			if errors.As(err, &netErr) && netErr.Timeout() {
-				continue
-			}
 			return
 		}
+		backoff = 0
 		// One goroutine per connection, so a client that connects and says nothing never holds up the others.
 		go d.classify(conn)
 	}
@@ -112,3 +126,15 @@ func (d *doorListener) Close() error {
 }
 
 func (d *doorListener) Addr() net.Addr { return d.inner.Addr() }
+
+func isTemporaryAcceptError(err error) bool {
+	var temporary interface{ Temporary() bool }
+	return errors.As(err, &temporary) && temporary.Temporary()
+}
+
+func nextAcceptBackoff(backoff time.Duration) time.Duration {
+	if backoff == 0 {
+		return 5 * time.Millisecond
+	}
+	return min(backoff*2, maxAcceptBackoff)
+}

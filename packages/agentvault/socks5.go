@@ -182,7 +182,6 @@ func writeSocks5Reply(w io.Writer, rep byte) error {
 
 const (
 	socks5StepTimeout       = 3 * time.Second
-	socks5MaxAcceptBackoff  = time.Second
 	socks5MismatchWarnEvery = time.Minute
 	socks5RefusalWarnEvery  = time.Minute
 )
@@ -237,13 +236,8 @@ func (s *socks5Server) serve(l net.Listener) error {
 			if errors.Is(err, net.ErrClosed) {
 				return nil
 			}
-			var temporary interface{ Temporary() bool }
-			if errors.As(err, &temporary) && temporary.Temporary() {
-				if backoff == 0 {
-					backoff = 5 * time.Millisecond
-				} else {
-					backoff = min(backoff*2, socks5MaxAcceptBackoff)
-				}
+			if isTemporaryAcceptError(err) {
+				backoff = nextAcceptBackoff(backoff)
 				log.Warn().Err(err).Dur("retryIn", backoff).Msg("agent-vault: SOCKS5 accept failed, retrying")
 				time.Sleep(backoff)
 				continue

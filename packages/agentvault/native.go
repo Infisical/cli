@@ -107,7 +107,8 @@ func checkSSHKey(svc *resolvedService) error {
 	if svc.credential.kind != credentialSSHKey {
 		return nil
 	}
-	if _, err := ssh.ParsePrivateKey(svc.credential.privateKey); err != nil {
+	signer, err := ssh.ParsePrivateKey(svc.credential.privateKey)
+	if err != nil {
 		var missing *ssh.PassphraseMissingError
 		if errors.As(err, &missing) {
 			return fmt.Errorf("the SSH key stored on service %q can't be used: it is protected by a passphrase. Ask an admin to update the service", svc.name)
@@ -116,8 +117,12 @@ func checkSSHKey(svc *resolvedService) error {
 	}
 	if svc.credential.certificate != "" {
 		pub, _, _, _, err := ssh.ParseAuthorizedKey([]byte(svc.credential.certificate))
-		if _, isCert := pub.(*ssh.Certificate); err != nil || !isCert {
+		cert, isCert := pub.(*ssh.Certificate)
+		if err != nil || !isCert {
 			return fmt.Errorf("the SSH certificate stored on service %q can't be used: it isn't an SSH certificate. Ask an admin to update the service", svc.name)
+		}
+		if _, err := ssh.NewCertSigner(cert, signer); err != nil {
+			return fmt.Errorf("the SSH certificate stored on service %q doesn't match its private key. Ask an admin to update the service", svc.name)
 		}
 	}
 	return nil
@@ -277,6 +282,8 @@ func serveNative(ctx context.Context, conn net.Conn, svc *resolvedService, tlsCo
 		}
 		// TODO: PAM's SSH handler never reads the server's stderr, so the agent doesn't see error output and a command
 		// writing a lot to stderr can stall its channel. The fix belongs in PAM's handler.
+		// TODO: PAM's SSH handler can close the client's channel before it replies to `exec`, so a command that
+		// finishes fast can fail with "exec request failed" even though it ran. The fix belongs in PAM's handler.
 		// TODO: PAM's SSH handler closes an exec channel about 6 seconds after the client's stdin ends (proxy.go waits
 		// 3s for output, then 3s for exit-status), so `ssh -n host 'long command'`, the usual way agents run
 		// commands, is cut off with exit 255. The fix belongs in PAM's handler and must keep scp working.

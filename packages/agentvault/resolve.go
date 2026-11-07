@@ -66,7 +66,7 @@ func (r *infisicalResolver) resolve(sessionToken string, held *sessionLogGrant) 
 		// A database or SSH service is reached by name only. It never gets host patterns, so no HTTP request can
 		// pick it and carry its password, whatever its host pattern holds.
 		var hostPatterns []hostPattern
-		if native == nil && !isNativeKind(kind) {
+		if !isNativeKind(kind) {
 			hostPatterns = parseHostPatterns(wire.HostPattern)
 		}
 		services = append(services, &resolvedService{

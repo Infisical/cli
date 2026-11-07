@@ -130,3 +130,38 @@ func TestAResolveCarriesWhichServicesLackPersonalValues(t *testing.T) {
 		t.Fatal("a service without the field resolved as missing its personal values")
 	}
 }
+
+// A database or SSH service whose host pattern isn't null, with or without a target, must still get no HTTP patterns,
+// or an HTTP request to that host would carry its password.
+func TestAResolvedNativeServiceGetsNoHTTPHostPatterns(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"sessionId":"s1","services":[
+			{"id":"a","name":"with-target","type":"postgres","hostPattern":"db.internal","native":{"host":"db.internal","port":5432,"database":"app"},"credential":{"type":"basic","username":"u","password":"p"}},
+			{"id":"b","name":"no-target","type":"postgres","hostPattern":"db.internal","native":null,"credential":{"type":"basic","username":"u","password":"p"}},
+			{"id":"c","name":"api","type":"http","hostPattern":"api.internal","credential":{"type":"passthrough"}}
+		],"sessionLogs":{"enabled":false}}`))
+	}))
+	defer srv.Close()
+	old := config.INFISICAL_URL
+	config.INFISICAL_URL = srv.URL + "/api"
+	defer func() { config.INFISICAL_URL = old }()
+
+	resolver, err := newInfisicalResolver(func() string { return "ptok" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := resolver.resolve("tok", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, svc := range result.Services {
+		if svc.kind == serviceKindPostgres && len(svc.hostPatterns) != 0 {
+			t.Fatalf("native service %q resolved with HTTP host patterns %v", svc.name, svc.hostPatterns)
+		}
+		if svc.kind == serviceKindHTTP && len(svc.hostPatterns) == 0 {
+			t.Fatal("the HTTP service lost its host patterns, so the check above proves nothing")
+		}
+	}
+}

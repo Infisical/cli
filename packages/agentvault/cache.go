@@ -153,6 +153,8 @@ type sessionCache struct {
 	// never drops it and the poll loop keeps asking about it, so a revoke is noticed however idle it sits.
 	native     map[string]map[*nativeConn]struct{}
 	nativeOpen sync.WaitGroup
+	// Set by closeNative, so no connection is admitted once shutdown has cancelled the open ones.
+	closing bool
 }
 
 type refusedEntry struct {
@@ -314,7 +316,7 @@ func (c *sessionCache) lookup(sessionToken string, admit func() bool) ([]*resolv
 			fetchedAt:  time.Now().Round(0),
 		}
 		c.tokens[key] = sessionToken
-		c.applyNativeLocked(key, result.Services)
+		c.applyNativeLocked(key, result.Services, result.ExpiresAt)
 		return cacheLookup{services: result.Services, sessionLog: result.SessionLog}, nil
 	})
 	if err != nil {
@@ -378,8 +380,13 @@ func (c *sessionCache) refresh() {
 		}
 		targets[key] = c.tokens[key]
 	}
-	// A pinned session whose entry went past the grace window during an outage is still asked about.
+	// A pinned session whose entry went past the grace window during an outage is still asked about, and still
+	// ends at its expiry without Infisical saying so.
 	for key := range c.native {
+		if _, ok := c.entries[key]; !ok && c.nativeExpiredLocked(key, now) {
+			c.forgetLocked(key, true)
+			continue
+		}
 		if _, ok := targets[key]; !ok && c.tokens[key] != "" {
 			targets[key] = c.tokens[key]
 		}
@@ -425,7 +432,7 @@ func (c *sessionCache) refreshOne(key, token string) {
 		entry.services = keepNewerSwaps(entry, result.Services, startGen)
 		entry.sessionLog = result.SessionLog
 		entry.fetchedAt = time.Now().Round(0)
-		c.applyNativeLocked(key, entry.services)
+		c.applyNativeLocked(key, entry.services, entry.expiresAt)
 		return
 	}
 	if c.pinnedLocked(key) {
@@ -437,7 +444,7 @@ func (c *sessionCache) refreshOne(key, token string) {
 			lastSeen:   time.Now().Round(0),
 			fetchedAt:  time.Now().Round(0),
 		}
-		c.applyNativeLocked(key, result.Services)
+		c.applyNativeLocked(key, result.Services, result.ExpiresAt)
 	}
 }
 

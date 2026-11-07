@@ -2,6 +2,7 @@ package agentvault
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -261,5 +262,107 @@ func TestShutdownClosesNativeConnectionsAndWaitsForThem(t *testing.T) {
 	cache.closeNative(time.Second)
 	if !closed(conn) || time.Since(start) >= time.Second {
 		t.Fatal("shutdown didn't close the connection and wait for it to finish")
+	}
+}
+
+// The entry goes past the grace window while Infisical is down and is dropped, so only the connection still knows
+// when the session ends. It must close then, not when Infisical is back to say so.
+func TestANativeConnectionClosesAtExpiryWhileInfisicalIsDown(t *testing.T) {
+	resolver := &stubResolver{}
+	expiresAt := time.Now().Add(time.Hour)
+	resolver.result = &resolveResult{SessionID: "s1", ExpiresAt: &expiresAt, Services: []*resolvedService{nativeService("db", "db.internal")}}
+	cache := newTestCache(resolver)
+	services, err := cache.get(nativeTestToken)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	conn, err := cache.registerNative(nativeTestToken, services[0])
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	t.Cleanup(func() { cache.releaseNative(conn) })
+	key := sessionKey(nativeTestToken)
+
+	setResult(resolver, nil, errors.New("connection refused"))
+	cache.mu.Lock()
+	cache.entries[key].fetchedAt = time.Now().Add(-2 * cache.grace())
+	cache.mu.Unlock()
+	cache.refresh()
+
+	cache.mu.Lock()
+	_, stillCached := cache.entries[key]
+	cache.mu.Unlock()
+	if stillCached || closed(conn) {
+		t.Fatalf("after the grace window: cached=%v closed=%v, want false false", stillCached, closed(conn))
+	}
+
+	past := time.Now().Add(-time.Second)
+	cache.mu.Lock()
+	conn.expiresAt = &past
+	cache.mu.Unlock()
+	cache.refresh()
+
+	if !closed(conn) {
+		t.Fatal("the connection stayed open past the session's expiry while Infisical was down")
+	}
+	if polled(cache) {
+		t.Fatal("an expired session is still polled")
+	}
+}
+
+func TestARefreshMovesAConnectionsExpiryWithTheSession(t *testing.T) {
+	resolver := &stubResolver{}
+	cache, conn := openNativeConn(t, resolver)
+
+	later := time.Now().Add(2 * time.Hour)
+	setResult(resolver, &resolveResult{SessionID: "s1", ExpiresAt: &later, Services: []*resolvedService{nativeService("db", "db.internal")}}, nil)
+	cache.refreshOne(sessionKey(nativeTestToken), nativeTestToken)
+
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if conn.expiresAt == nil || !conn.expiresAt.Equal(later) {
+		t.Fatalf("connection expiry = %v, want the refreshed %v", conn.expiresAt, later)
+	}
+}
+
+func TestNoConnectionIsRegisteredOnceShutdownBegan(t *testing.T) {
+	resolver := &stubResolver{}
+	resolver.result = &resolveResult{SessionID: "s1", Services: []*resolvedService{nativeService("db", "db.internal")}}
+	cache := newTestCache(resolver)
+	services, err := cache.get(nativeTestToken)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+
+	cache.closeNative(time.Second)
+
+	if conn, err := cache.registerNative(nativeTestToken, services[0]); !errors.Is(err, errProxyShuttingDown) {
+		if conn != nil {
+			cache.releaseNative(conn)
+		}
+		t.Fatalf("register during shutdown: %v, want errProxyShuttingDown", err)
+	}
+}
+
+func TestEvictionSkipsASessionWithAnOpenConnection(t *testing.T) {
+	resolver := &stubResolver{}
+	cache, conn := openNativeConn(t, resolver)
+	pinned := sessionKey(nativeTestToken)
+
+	cache.mu.Lock()
+	cache.entries[pinned].lastSeen = time.Now().Add(-(sessionInactiveTTL + time.Minute))
+	for i := len(cache.entries); i < maxSessionCacheEntries; i++ {
+		cache.entries[sessionKey(fmt.Sprintf("k%d", i))] = &sessionEntry{lastSeen: time.Now()}
+	}
+	cache.evictIfFullLocked()
+	_, kept := cache.entries[pinned]
+	size := len(cache.entries)
+	cache.mu.Unlock()
+
+	if !kept || closed(conn) {
+		t.Fatalf("eviction: pinned kept=%v closed=%v, want true false", kept, closed(conn))
+	}
+	if size != maxSessionCacheEntries-1 {
+		t.Fatalf("cache holds %d entries after eviction, want %d", size, maxSessionCacheEntries-1)
 	}
 }
