@@ -27,19 +27,20 @@ var watcherWaitGroup = new(sync.WaitGroup)
 
 func buildRunCmd() *cobra.Command {
 	runCmd := &cobra.Command{
-		Example: `
-	infisical run --env=dev -- npm run dev
-	infisical run --command "first-command && second-command; more-commands..."
-	`,
+		Example: `infisical secrets-manager run --env dev -- npm run dev
+infisical secrets-manager run --env prod --path /backend -- ./start.sh
+
+# Several commands in one shell
+infisical secrets-manager run --env dev --command "npm run migrate && npm start"`,
 		Use:                   "run [any infisical run command flags] -- [your application start command]",
-		Short:                 "Used to inject environments variables into your application process",
+		Short:                 "Run a command with an environment's secrets injected as environment variables",
 		DisableFlagsInUseLine: true,
 		Args:                  validateRunArgs,
 		Run:                   runRun,
 	}
 
 	runCmd.Flags().String("token", "", "fetch secrets using service token or machine identity access token")
-	runCmd.Flags().String("projectId", "", "manually set the project ID to fetch secrets from when using machine identity based auth")
+	runCmd.Flags().String("projectId", "", projectIDForReads)
 	runCmd.Flags().StringP("env", "e", "dev", "set the environment (dev, prod, etc.) from which your secrets should be pulled from")
 	runCmd.Flags().Bool("expand", true, "parse shell parameter expansions in your secrets")
 	runCmd.Flags().Bool("include-imports", true, "import linked secrets ")

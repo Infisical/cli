@@ -4,6 +4,7 @@ Copyright (c) 2023 Infisical Inc.
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -29,6 +30,10 @@ func maskSecretValue(value string) string {
 }
 
 func runSecrets(cmd *cobra.Command, args []string) {
+	listSecrets(cmd, false)
+}
+
+func listSecrets(cmd *cobra.Command, valuesOnly bool) {
 	environmentName := util.ResolveEnvironmentName(cmd)
 
 	token, err := util.GetInfisicalToken(cmd)
@@ -124,7 +129,11 @@ func runSecrets(cmd *cobra.Command, args []string) {
 	} else {
 		if plainOutput {
 			for _, secret := range secrets {
-				util.PrintfStdout("%s=%s\n", secret.Key, secret.Value)
+				if valuesOnly {
+					util.PrintlnStdout(secret.Value)
+				} else {
+					util.PrintfStdout("%s=%s\n", secret.Key, secret.Value)
+				}
 			}
 		} else {
 			visualize.PrintAllSecretDetails(secrets)
@@ -145,6 +154,60 @@ func validateSecretsSetArgs(cmd *cobra.Command, args []string) error {
 }
 
 func runSecretsSet(cmd *cobra.Command, args []string) {
+	runSecretsWrite(cmd, args, util.SecretWriteUpsert)
+}
+
+var secretWriteEvents = map[util.SecretWriteMode]string{
+	util.SecretWriteUpsert:     "cli-command:secrets set",
+	util.SecretWriteCreateOnly: "cli-command:secrets create",
+	util.SecretWriteUpdateOnly: "cli-command:secrets update",
+}
+
+// secretWriteError turns a refused create or update into its CLIError, naming where the command
+// looked so the suggested command targets the same place and secret type. API errors are classified
+// only for create and update: set is shared with the legacy `infisical secrets set`, whose errors
+// print as they always have.
+func secretWriteError(err error, mode util.SecretWriteMode, scope errorScope) error {
+	var conflict *util.SecretWriteConflict
+	if errors.As(err, &conflict) {
+		if conflict.Mode == util.SecretWriteCreateOnly {
+			return errSecretExists(conflict.Keys, scope)
+		}
+		return errSecretNotFound(conflict.Keys, scope)
+	}
+	var repeated *util.SecretWriteRepeated
+	if errors.As(err, &repeated) {
+		return errSecretRepeated(repeated.Key)
+	}
+	var invalid *util.SecretArgInvalid
+	if errors.As(err, &invalid) {
+		return errSecretArgumentInvalid(invalid)
+	}
+	var badFile *util.SecretFileInvalid
+	if errors.As(err, &badFile) && mode != util.SecretWriteUpsert {
+		return errSecretFileInvalid(badFile)
+	}
+	if mode == util.SecretWriteUpsert {
+		return err
+	}
+	return classifyAPIError(err, scope, nil)
+}
+
+// A service token reads its own project's secrets whatever project is selected, so create and update
+// would check one project's keys and send the writes to another. They write to the token's project,
+// and refuse a different one selected with --projectId, INFISICAL_PROJECT_ID or .infisical.yaml.
+func serviceTokenWriteProject(cmd *cobra.Command, serviceToken, selected string) string {
+	tokenProject, err := util.GetServiceTokenProjectID(serviceToken)
+	if err != nil {
+		exitWithError(cmd, classifyAPIError(err, errorScope{ProjectID: selected}, nil), "Unable to set secrets")
+	}
+	if selected != "" && selected != tokenProject {
+		exitWithError(cmd, errServiceTokenProjectMismatch(selected, tokenProject))
+	}
+	return tokenProject
+}
+
+func runSecretsWrite(cmd *cobra.Command, args []string, mode util.SecretWriteMode) {
 	token, err := util.GetInfisicalToken(cmd)
 	if err != nil {
 		util.HandleError(err, "Unable to parse flag")
@@ -167,8 +230,11 @@ func runSecretsSet(cmd *cobra.Command, args []string) {
 	secretsPath := util.ResolveSecretPath(cmd)
 
 	secretType, err := cmd.Flags().GetString("type")
-	if err != nil || (secretType != util.SECRET_TYPE_SHARED && secretType != util.SECRET_TYPE_PERSONAL) {
+	if err != nil {
 		util.HandleError(err, "Unable to parse secret type")
+	}
+	if secretType != util.SECRET_TYPE_SHARED && secretType != util.SECRET_TYPE_PERSONAL {
+		exitWithError(cmd, errInvalidSecretType(secretType))
 	}
 
 	outputFormat, err := cmd.Flags().GetString("output")
@@ -187,9 +253,14 @@ func runSecretsSet(cmd *cobra.Command, args []string) {
 	}
 
 	processedArgs := []string{}
-	for _, arg := range args {
+	for i, arg := range args {
 		splitKeyValue := strings.SplitN(arg, "=", 2)
 		if len(splitKeyValue) != 2 {
+			// set keeps its legacy message. create and update don't repeat the argument, which can be a
+			// pasted value or token.
+			if mode != util.SecretWriteUpsert {
+				exitWithError(cmd, errSecretAssignmentInvalid(i+1))
+			}
 			util.HandleError(fmt.Errorf("invalid argument format: %s. Expected format: key=value or key=@filepath", arg), "")
 		}
 
@@ -215,16 +286,44 @@ func runSecretsSet(cmd *cobra.Command, args []string) {
 		util.HandleError(err, "Unable to parse flag")
 	}
 
+	usesToken := token != nil && (token.Type == util.SERVICE_TOKEN_IDENTIFIER || token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER)
+	// set has always sent a token's values as typed, @filepath included, and keeps doing so for
+	// compatibility. create and update read the file the way a login session does.
+	writeArgs := processedArgs
+	if usesToken && mode == util.SecretWriteUpsert {
+		writeArgs = args
+	}
+
+	if writeArgs, err = util.CollectSecretArgs(mode, writeArgs, file); err != nil {
+		var invalid *util.SecretArgInvalid
+		var badFile *util.SecretFileInvalid
+		if mode == util.SecretWriteUpsert && (errors.As(err, &invalid) || errors.As(err, &badFile) && badFile.Problem != util.SecretFileUnreadable) {
+			util.PrintErrorMessageAndExit(err.Error())
+		}
+		exitWithError(cmd, secretWriteError(err, mode, errorScope{}), "Unable to set secrets")
+	}
+
 	var secretOperations []models.SecretSetOperation
-	if token != nil && (token.Type == util.SERVICE_TOKEN_IDENTIFIER || token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER) {
+	if usesToken {
+		// set has always required --projectId with a token. create and update also read .infisical.yaml,
+		// like every other secrets-manager command.
+		if projectId == "" && mode != util.SecretWriteUpsert {
+			projectId = resolveProjectID(cmd)
+		}
+		if mode != util.SecretWriteUpsert && token.Type == util.SERVICE_TOKEN_IDENTIFIER {
+			projectId = serviceTokenWriteProject(cmd, token.Token, projectId)
+		}
+		if projectId == "" && mode != util.SecretWriteUpsert {
+			exitWithError(cmd, errProjectNotLinked())
+		}
 		if projectId == "" {
 			util.PrintErrorMessageAndExit("When using service tokens or machine identities, you must set the --projectId flag")
 		}
 
-		secretOperations, err = util.SetRawSecrets(args, secretType, environmentName, secretsPath, projectId, token, file, tags)
+		secretOperations, err = util.WriteRawSecrets(mode, writeArgs, secretType, environmentName, secretsPath, projectId, token, tags)
 
 		if err != nil {
-			util.HandleError(err, "Unable to set secrets")
+			exitWithError(cmd, secretWriteError(err, mode, errorScope{ProjectID: projectId, Environment: environmentName, SecretPath: secretsPath, SecretType: secretType}), "Unable to set secrets")
 		}
 	} else {
 		if projectId == "" {
@@ -245,13 +344,13 @@ func runSecretsSet(cmd *cobra.Command, args []string) {
 			loggedInUserDetails = util.EstablishUserLoginSession()
 		}
 
-		secretOperations, err = util.SetRawSecrets(processedArgs, secretType, environmentName, secretsPath, projectId, &models.TokenDetails{
+		secretOperations, err = util.WriteRawSecrets(mode, writeArgs, secretType, environmentName, secretsPath, projectId, &models.TokenDetails{
 			Type:  "",
 			Token: loggedInUserDetails.UserCredentials.JTWToken,
-		}, file, tags)
+		}, tags)
 
 		if err != nil {
-			util.HandleError(err, "Unable to set secrets")
+			exitWithError(cmd, secretWriteError(err, mode, errorScope{ProjectID: projectId, Environment: environmentName, SecretPath: secretsPath, SecretType: secretType}), "Unable to set secrets")
 		}
 	}
 
@@ -289,7 +388,7 @@ func runSecretsSet(cmd *cobra.Command, args []string) {
 	} else {
 		visualize.Table(headers, rows)
 	}
-	Telemetry.CaptureEvent("cli-command:secrets set", posthog.NewProperties().Set("version", util.CLI_VERSION))
+	Telemetry.CaptureEvent(secretWriteEvents[mode], posthog.NewProperties().Set("version", util.CLI_VERSION))
 }
 
 func runSecretsDelete(cmd *cobra.Command, args []string) {
@@ -743,8 +842,11 @@ func getSecretsByKeys(secrets []models.SingleEnvironmentVariable) map[string]mod
 
 func buildSecretsCmd() *cobra.Command {
 	secretsCmd := &cobra.Command{
-		Example:               `infisical secrets`,
-		Short:                 "Used to create, read update and delete secrets",
+		Short: "List, read, create, update, and delete the secrets of an environment",
+		Example: `# List the secrets at / in the dev environment of the project linked to this directory
+infisical secrets-manager secrets get
+infisical secrets-manager secrets create API_KEY=abc123 --env dev
+infisical secrets-manager secrets delete API_KEY --type shared --env dev --projectId <project-id>`,
 		Use:                   "secrets",
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.NoArgs,
@@ -752,9 +854,16 @@ func buildSecretsCmd() *cobra.Command {
 	}
 
 	secretsGetCmd := &cobra.Command{
-		Example:               `secrets get <secret name A> <secret name B>..."`,
-		Short:                 "Used to retrieve secrets by name",
-		Use:                   "get [secrets]",
+		Short: "List the secrets at a path, or show some by name",
+		Example: `infisical secrets-manager secrets get --env prod --path /backend
+infisical secrets-manager secrets get DB_PASSWORD API_KEY --env prod -o json
+
+# Only the values, one per line
+infisical secrets-manager secrets get DB_PASSWORD --env prod --plain
+
+# To write them to a file, use export
+infisical secrets-manager secrets export --env prod --output-file .env`,
+		Use:                   "get [name]...",
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.MinimumNArgs(1),
 		Run:                   getSecretsByNames,
@@ -779,9 +888,11 @@ func buildSecretsCmd() *cobra.Command {
 	}
 
 	secretsDeleteCmd := &cobra.Command{
-		Example:               `secrets delete <secret name A> <secret name B>..."`,
-		Short:                 "Used to delete secrets by name",
-		Use:                   "delete [secrets]",
+		Short: "Delete secrets by name",
+		Example: `# --type defaults to personal, so shared secrets need --type shared
+infisical secrets-manager secrets delete API_KEY --type shared --env dev --projectId <project-id>
+infisical secrets-manager secrets delete API_KEY DB_URL --type shared --env prod --path /backend --projectId <project-id> --yes`,
+		Use:                   "delete <name>...",
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.MinimumNArgs(1),
 		Run:                   runSecretsDelete,
@@ -794,7 +905,7 @@ func buildSecretsCmd() *cobra.Command {
 	secretsCmd.AddCommand(secretsGenerateExampleEnvCmd)
 
 	secretsGetCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
-	secretsGetCmd.Flags().String("projectId", "", "manually set the project ID to fetch secrets from when using machine identity based auth")
+	secretsGetCmd.Flags().String("projectId", "", projectIDForReads)
 	secretsGetCmd.Flags().String("path", "/", "get secrets within a folder path")
 	secretsGetCmd.Flags().Bool("plain", false, "print values without formatting, one per line")
 	secretsGetCmd.Flags().Bool("raw-value", false, "deprecated. Returns only the value of secret, only works with one secret. Use --plain instead")
@@ -808,7 +919,7 @@ func buildSecretsCmd() *cobra.Command {
 
 	secretsCmd.AddCommand(secretsSetCmd)
 	secretsSetCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
-	secretsSetCmd.Flags().String("projectId", "", "manually set the project ID to for setting secrets when using machine identity based auth")
+	secretsSetCmd.Flags().String("projectId", "", projectIDForSet)
 	secretsSetCmd.Flags().String("path", "/", "set secrets within a folder path")
 	secretsSetCmd.Flags().String("type", util.SECRET_TYPE_SHARED, "the type of secret to create: personal or shared")
 	secretsSetCmd.Flags().String("file", "", "Load secrets from the specified file. File format: .env or YAML (comments: # or //). This option is mutually exclusive with command-line secrets arguments.")
@@ -818,7 +929,7 @@ func buildSecretsCmd() *cobra.Command {
 
 	secretsDeleteCmd.Flags().String("type", "personal", "the type of secret to delete: personal or shared  (default: personal)")
 	secretsDeleteCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
-	secretsDeleteCmd.Flags().String("projectId", "", "manually set the projectId to delete secrets from when using machine identity based auth")
+	secretsDeleteCmd.Flags().String("projectId", "", projectIDFallsBack)
 	secretsDeleteCmd.Flags().String("path", "/", "get secrets within a folder path")
 	util.AddOutputFlagsToCmd(secretsDeleteCmd, "The output to format the secrets in.")
 	secretsCmd.AddCommand(secretsDeleteCmd)
@@ -827,7 +938,7 @@ func buildSecretsCmd() *cobra.Command {
 	secretsCmd.AddCommand(buildAgentProxyCmd())
 
 	secretsCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
-	secretsCmd.Flags().String("projectId", "", "manually set the projectId to fetch secrets when using machine identity based auth")
+	secretsCmd.Flags().String("projectId", "", projectIDForReads)
 	secretsCmd.PersistentFlags().String("env", "dev", "Used to select the environment name on which actions should be taken on")
 	secretsCmd.Flags().Bool("expand", true, "Parse shell parameter expansions in your secrets, and process your referenced secrets")
 	secretsCmd.Flags().Bool("include-imports", true, "Imported linked secrets ")

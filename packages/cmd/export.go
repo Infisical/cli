@@ -30,11 +30,15 @@ const (
 func buildExportCmd() *cobra.Command {
 	exportCmd := &cobra.Command{
 		Use:                   "export",
-		Short:                 "Used to export environment variables to a file",
+		Short:                 "Print an environment's secrets as dotenv, JSON, CSV, or YAML, or write them to a file",
 		DisableFlagsInUseLine: true,
-		Example:               "infisical export --env=prod --format=json > secrets.json\ninfisical export --env=prod --format=json --output-file=secrets.json",
-		Args:                  cobra.NoArgs,
-		Run:                   runExport,
+		Example: `infisical secrets-manager secrets export --env prod --format json > secrets.json
+infisical secrets-manager secrets export --env prod --path /backend --output-file .env
+
+# Render a template instead of a fixed format
+infisical secrets-manager secrets export --env prod --template ./config.tmpl`,
+		Args: cobra.NoArgs,
+		Run:  runExport,
 	}
 
 	exportCmd.Flags().StringP("env", "e", "dev", "Set the environment (dev, prod, etc.) from which your secrets should be pulled from")
@@ -44,7 +48,7 @@ func buildExportCmd() *cobra.Command {
 	exportCmd.Flags().Bool("include-imports", true, "Imported linked secrets")
 	exportCmd.Flags().String("token", "", "Fetch secrets using service token or machine identity access token")
 	exportCmd.Flags().StringP("tags", "t", "", "filter secrets by tag slugs")
-	exportCmd.Flags().String("projectId", "", "manually set the projectId to export secrets from")
+	exportCmd.Flags().String("projectId", "", projectIDForReads)
 	exportCmd.Flags().String("path", "/", "get secrets within a folder path")
 	exportCmd.Flags().String("template", "", "The path to the template file used to render secrets")
 	exportCmd.Flags().StringP("output-file", "o", "", "The path to write the output file to. Can be a full file path, directory, or filename. If not specified, output will be printed to stdout")

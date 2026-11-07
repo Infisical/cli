@@ -113,7 +113,9 @@ Two ways to get a session, exactly one of them required:
 
   --access-bundle   mint one now over the named bundle, or set INFISICAL_AGENT_VAULT_ACCESS_BUNDLE
                     (needs your login or a machine identity). Revoked when the agent exits unless
-                    --keep-session is set.
+                    --keep-session is set. The bundle is looked up in the Agent Vault project from
+                    --project-id, or else INFISICAL_AGENT_VAULT_PROJECT_ID or INFISICAL_PROJECT_ID,
+                    in that order.
   --session-token   run with a session token minted in the dashboard, or set
                     INFISICAL_AGENT_VAULT_SESSION_TOKEN. Never revoked by this command.
 
@@ -203,7 +205,7 @@ func resolveAgentVaultAccessBundles(cmd *cobra.Command) (bundles []string, sourc
 			return nil, agentVaultSourceNone, err
 		}
 		if bundles = nonBlank(values); len(bundles) == 0 {
-			return nil, agentVaultSourceFlag, fmt.Errorf("--access-bundle was given but names no bundle; pass a name like 'coding-agent'")
+			return nil, agentVaultSourceFlag, errAgentVaultEmptyAccessBundle()
 		}
 		return bundles, agentVaultSourceFlag, nil
 	}
@@ -260,6 +262,27 @@ func resolveAgentVaultSessionLabel(cmd *cobra.Command, sessionToken string, toke
 	return strings.TrimSpace(label), nil
 }
 
+// None of these can reach a session minted in the dashboard: its expiry and project were fixed when it was
+// created, and this command never revokes it.
+func refuseAgentVaultMintOnlyFlags(cmd *cobra.Command, sessionToken string, tokenSource agentVaultSource) error {
+	if sessionToken == "" {
+		return nil
+	}
+	tokenName := agentVaultSourceName(tokenSource, "--session-token", agentVaultSessionTokenEnv)
+	switch {
+	case cmd.Flags().Changed("ttl"):
+		return fmt.Errorf(
+			"--ttl applies to a session this command mints; the one behind %s was given its lifetime in the dashboard. Drop --ttl, or mint here with --access-bundle", tokenName)
+	case cmd.Flags().Changed("keep-session"):
+		return fmt.Errorf(
+			"--keep-session applies to a session this command mints; the one behind %s is never revoked here. Drop --keep-session, or mint here with --access-bundle", tokenName)
+	case cmd.Flags().Changed("project-id"):
+		return fmt.Errorf(
+			"--project-id applies to a session this command mints; the one behind %s already belongs to a project. Drop --project-id, or mint here with --access-bundle", tokenName)
+	}
+	return nil
+}
+
 func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	sessionToken, tokenSource, err := resolveAgentVaultSessionToken(cmd)
 	if err != nil {
@@ -287,14 +310,8 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		tokenSource = agentVaultSourceNone
 	}
 
-	if len(accessBundles) > 1 {
-		util.HandleError(fmt.Errorf("a session carries one access bundle; pass --access-bundle once"))
-	}
-	for _, name := range accessBundles {
-		if !agentVaultBundleNameRe.MatchString(name) {
-			util.HandleError(fmt.Errorf("%q from %s is not an access bundle name; names are lowercase letters, numbers and hyphens, for example 'coding-agent'",
-				name, agentVaultSourceName(bundleSource, "--access-bundle", agentVaultAccessBundleEnv)))
-		}
+	if err := validateAgentVaultAccessBundles(accessBundles, bundleSource); err != nil {
+		util.HandleError(err)
 	}
 
 	skillsDir, noSkills, err := resolveAgentVaultRunSkills(cmd)
@@ -308,16 +325,14 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		util.HandleError(err)
 	}
 
-	// Neither flag can reach a session minted in the dashboard: its expiry was fixed when it was created.
-	if sessionToken != "" {
-		tokenName := agentVaultSourceName(tokenSource, "--session-token", agentVaultSessionTokenEnv)
-		if cmd.Flags().Changed("ttl") {
-			util.HandleError(fmt.Errorf(
-				"--ttl applies to a session this command mints; the one behind %s was given its lifetime in the dashboard. Drop --ttl, or mint here with --access-bundle", tokenName))
-		}
-		if cmd.Flags().Changed("keep-session") {
-			util.HandleError(fmt.Errorf(
-				"--keep-session applies to a session this command mints; the one behind %s is never revoked here. Drop --keep-session, or mint here with --access-bundle", tokenName))
+	if err := refuseAgentVaultMintOnlyFlags(cmd, sessionToken, tokenSource); err != nil {
+		util.HandleError(err)
+	}
+
+	var project agentVaultProject
+	if len(accessBundles) > 0 {
+		if project, err = resolveAgentVaultProject(cmd); err != nil {
+			util.HandleError(err)
 		}
 	}
 
@@ -413,18 +428,8 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	var minted *api.AgentVaultSession
 	if len(accessBundles) > 0 {
 		identity := resolveAgentVaultIdentityToken(cmd)
-		httpClient, clientErr := util.GetRestyClientWithCustomHeaders()
-		if clientErr != nil {
-			util.HandleError(clientErr, "Failed to build the API client")
-		}
-		httpClient.SetAuthToken(identity)
-
-		created, mintErr := api.CallCreateAgentVaultSession(httpClient, api.CreateAgentVaultSessionRequest{AccessBundles: accessBundles, TTL: ttl, Label: label})
-		if mintErr != nil {
-			util.HandleError(mintErr, "Unable to mint an Agent Vault session")
-		}
-		minted = &created.Session
-		sessionToken = created.Session.Token
+		minted = mintAgentVaultSessionOrExit(identity, project, accessBundles, ttl, label)
+		sessionToken = minted.Token
 
 		Telemetry.SetActor(telemetry.IdentityClaimsFromToken(identity))
 	}
@@ -441,7 +446,7 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 
 	env := buildAgentVaultRunEnv(os.Environ(), proxyAddr, sessionToken, caPath, extraNoProxy)
 
-	printAgentVaultRunSummary(proxyAddr, caResp, servedFingerprint, minted, tokenSource, bundleSource)
+	printAgentVaultRunSummary(proxyAddr, caResp, servedFingerprint, minted, project, tokenSource, bundleSource)
 
 	if exitCode, interrupted := runAgentVaultRunSkillsStep(noSkills,
 		func(ctx context.Context) {
@@ -633,6 +638,12 @@ func revocationToken(ctx context.Context, cmd *cobra.Command, loginPolicy util.R
 }
 
 func resolveAgentVaultIdentityToken(cmd *cobra.Command) string {
+	return resolveAgentVaultIdentity(cmd, true)
+}
+
+// Without the wizard, an expired or missing login is an error rather than an interactive sign-in, for a command
+// whose output is being captured and so has nobody watching its prompts.
+func resolveAgentVaultIdentity(cmd *cobra.Command, allowLoginWizard bool) string {
 	clientID, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-id", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID_NAME}, "")
 	clientSecret, _ := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "client-secret", []string{util.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET_NAME}, "")
 	if clientID != "" && clientSecret != "" {
@@ -651,7 +662,13 @@ func resolveAgentVaultIdentityToken(cmd *cobra.Command) string {
 	}
 
 	details, err := util.GetCurrentLoggedInUserDetails(true)
-	if err != nil || !details.IsUserLoggedIn || details.LoginExpired {
+	if err = agentVaultLoginReadError(err); err != nil {
+		util.HandleError(err, "Unable to read your Infisical login")
+	}
+	if !details.IsUserLoggedIn || details.LoginExpired {
+		if !allowLoginWizard {
+			util.HandleError(fmt.Errorf("your Infisical login has expired or is missing, and this command's output is being captured, so it can't sign you in. Run 'infisical login' first, set %s, or pass --client-id and --client-secret", util.INFISICAL_TOKEN_NAME))
+		}
 		details = util.EstablishUserLoginSession()
 	}
 	if details.UserCredentials.JTWToken == "" {
@@ -659,6 +676,15 @@ func resolveAgentVaultIdentityToken(cmd *cobra.Command) string {
 	}
 	failIfTokenExpired(details.UserCredentials.JTWToken, "your login")
 	return details.UserCredentials.JTWToken
+}
+
+// A login missing from the keyring is a missing login, which signing in fixes. Any other error (a broken config
+// file, an unreadable keyring, a profile for another domain) would not be fixed by the wizard, so it is shown.
+func agentVaultLoginReadError(err error) error {
+	if err == nil || errors.Is(err, util.ErrUserNotLoggedIn) {
+		return nil
+	}
+	return err
 }
 
 // Windows resolves variable names case-insensitively, so os.Getenv finds a lowercase spelling and the run
@@ -788,7 +814,7 @@ func agentVaultFingerprintsEqual(a, b string) bool {
 	return normalize(a) != "" && normalize(a) == normalize(b)
 }
 
-func printAgentVaultRunSummary(proxyAddr string, ca agentVaultProxyCa, fingerprint string, minted *api.AgentVaultSession, tokenSource, bundleSource agentVaultSource) {
+func printAgentVaultRunSummary(proxyAddr string, ca agentVaultProxyCa, fingerprint string, minted *api.AgentVaultSession, project agentVaultProject, tokenSource, bundleSource agentVaultSource) {
 	dim := color.HiBlackString
 	fmt.Fprintln(os.Stderr, color.GreenString("Starting agent behind Agent Vault proxy %q at %s", ca.Name, proxyAddr))
 	fmt.Fprintln(os.Stderr, dim("proxy CA fingerprint: "+fingerprint))
@@ -800,6 +826,7 @@ func printAgentVaultRunSummary(proxyAddr string, ca agentVaultProxyCa, fingerpri
 		fmt.Fprintln(os.Stderr, dim("access bundle from "+agentVaultAccessBundleEnv))
 	}
 	if minted != nil {
+		fmt.Fprintln(os.Stderr, dim(fmt.Sprintf("Agent Vault project %s from %s", project.ID, project.Source)))
 		expiry := "never"
 		if minted.ExpiresAt != nil {
 			expiry = *minted.ExpiresAt
@@ -841,6 +868,7 @@ func init() {
 	agentVaultRunCmd.Flags().String("session-token", "", "run with a session token minted in the dashboard instead of minting one (falls back to "+agentVaultSessionTokenEnv+")")
 	agentVaultRunCmd.Flags().String("ttl", "never", "lifetime of the session this command creates: one number and one unit, such as 30m, 8h or 7d (not 2h30m), or never")
 	agentVaultRunCmd.Flags().Bool("keep-session", false, "leave a minted session active when the agent exits")
+	agentVaultRunCmd.Flags().String("project-id", "", "Agent Vault project of the access bundle to mint over (falls back to "+agentVaultProjectIDEnv+", then INFISICAL_PROJECT_ID)")
 	agentVaultRunCmd.Flags().String("label", "", "describe what the session this command creates is for (up to 128 characters)")
 	agentVaultRunCmd.Flags().String("proxy", "", "address of the Agent Vault proxy as host:port (falls back to "+agentVaultProxyAddressEnv+")")
 	agentVaultRunCmd.Flags().String("ca-fingerprint", "", "abort unless the proxy's certificate authority matches this SHA256 fingerprint from Infisical")

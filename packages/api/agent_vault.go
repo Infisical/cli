@@ -105,12 +105,15 @@ type AgentVaultService struct {
 	// A nil slice means unrestricted, which is what JSON null decodes to.
 	AllowedMethods      []string                 `json:"allowedMethods"`
 	AllowedPathPrefixes []string                 `json:"allowedPathPrefixes"`
+	AllowedTools        []string                 `json:"allowedTools"`
 	Credential          AgentVaultCredential     `json:"credential"`
 	CustomHeaders       []AgentVaultCustomHeader `json:"customHeaders"`
 	Substitutions       []AgentVaultSubstitution `json:"substitutions"`
 	// The service takes part of its credential from each member and the session's owner has not set their personal values.
 	// Older servers never send it, which decodes to false.
 	PersonalValuesMissing bool `json:"personalValuesMissing"`
+	// Any credential field is left to each member. Older servers never send it, which decodes to false.
+	MemberProvided bool `json:"memberProvided"`
 }
 
 type AgentVaultSessionLogGrant struct {
@@ -239,15 +242,25 @@ func CallCreateAgentVaultSessionLogChunk(ctx context.Context, httpClient *resty.
 }
 
 type CreateAgentVaultSessionRequest struct {
-	AccessBundles []string `json:"accessBundles"`
-	TTL           string   `json:"ttl"`
-	Label         string   `json:"label,omitempty"`
+	ProjectID    string `json:"projectId,omitempty"`
+	AccessBundle string `json:"accessBundle"`
+	TTL          string `json:"ttl"`
+	Label        string `json:"label,omitempty"`
+}
+
+type AgentVaultSessionAccessBundle struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 type AgentVaultSession struct {
-	ID        string  `json:"id"`
-	Token     string  `json:"token"`
-	ExpiresAt *string `json:"expiresAt"`
+	ID           string                         `json:"id"`
+	Token        string                         `json:"token"`
+	ProjectID    string                         `json:"projectId"`
+	Label        *string                        `json:"label"`
+	AccessBundle *AgentVaultSessionAccessBundle `json:"accessBundle"`
+	ExpiresAt    *string                        `json:"expiresAt"`
+	CreatedAt    string                         `json:"createdAt"`
 }
 
 type CreateAgentVaultSessionResponse struct {
@@ -286,6 +299,33 @@ func CallRevokeAgentVaultSession(ctx context.Context, httpClient *resty.Client, 
 		return NewAPIErrorWithResponse("CallRevokeAgentVaultSession", response, nil)
 	}
 	return nil
+}
+
+type RevokeAgentVaultSessionByTokenResponse struct {
+	Session struct {
+		ID        string  `json:"id"`
+		RevokedAt *string `json:"revokedAt"`
+	} `json:"session"`
+}
+
+// The session token is the only credential: whoever holds it may end the session it names.
+func CallRevokeAgentVaultSessionByToken(ctx context.Context, httpClient *resty.Client, sessionToken string) (RevokeAgentVaultSessionByTokenResponse, error) {
+	var res RevokeAgentVaultSessionByTokenResponse
+	response, err := httpClient.
+		R().
+		SetContext(ctx).
+		SetResult(&res).
+		SetHeader("User-Agent", USER_AGENT).
+		SetAuthToken(sessionToken).
+		Post(fmt.Sprintf("%v/v1/agent-vault/session/revoke", config.INFISICAL_URL))
+
+	if err != nil {
+		return RevokeAgentVaultSessionByTokenResponse{}, NewGenericRequestError("CallRevokeAgentVaultSessionByToken", err)
+	}
+	if response.IsError() {
+		return RevokeAgentVaultSessionByTokenResponse{}, NewAPIErrorWithResponse("CallRevokeAgentVaultSessionByToken", response, nil)
+	}
+	return res, nil
 }
 
 type AgentVaultSkillFile struct {
@@ -352,12 +392,13 @@ type ListAgentVaultSkillsResponse struct {
 	TotalCount int               `json:"totalCount"`
 }
 
-func CallListAgentVaultSkillsByName(httpClient *resty.Client, name string) (ListAgentVaultSkillsResponse, error) {
+func CallListAgentVaultSkillsByName(httpClient *resty.Client, projectID, name string) (ListAgentVaultSkillsResponse, error) {
 	var res ListAgentVaultSkillsResponse
 	response, err := httpClient.
 		R().
 		SetResult(&res).
 		SetHeader("User-Agent", USER_AGENT).
+		SetQueryParam("projectId", projectID).
 		SetQueryParam("name", name).
 		Get(fmt.Sprintf("%v/v1/agent-vault/skills", config.INFISICAL_URL))
 
@@ -374,12 +415,19 @@ type AgentVaultSkillFilesRequest struct {
 	Files []AgentVaultSkillFile `json:"files"`
 }
 
+// Separate from AgentVaultSkillFilesRequest because a publish names its skill by ID and the server takes the
+// project from that skill.
+type CreateAgentVaultSkillRequest struct {
+	ProjectID string                `json:"projectId"`
+	Files     []AgentVaultSkillFile `json:"files"`
+}
+
 type CreateAgentVaultSkillResponse struct {
 	Skill   AgentVaultSkill        `json:"skill"`
 	Version AgentVaultSkillVersion `json:"version"`
 }
 
-func CallCreateAgentVaultSkill(httpClient *resty.Client, request AgentVaultSkillFilesRequest) (CreateAgentVaultSkillResponse, error) {
+func CallCreateAgentVaultSkill(httpClient *resty.Client, request CreateAgentVaultSkillRequest) (CreateAgentVaultSkillResponse, error) {
 	var res CreateAgentVaultSkillResponse
 	response, err := httpClient.
 		R().

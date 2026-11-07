@@ -363,7 +363,7 @@ func TestARefreshThatEndsTheSessionIsAnsweredAsARevokedSession(t *testing.T) {
 		status int
 		body   string
 	}{
-		{"session revoked", &api.APIError{StatusCode: http.StatusUnauthorized, Name: infisicalUnauthorizedName}, http.StatusForbidden, "the session is no longer valid"},
+		{"session revoked", &api.APIError{StatusCode: http.StatusUnauthorized, Name: infisicalUnauthorizedName}, http.StatusForbidden, "the session is no longer valid, or it belongs to a different Agent Vault project than this proxy"},
 		{"proxy token revoked", &api.APIError{StatusCode: http.StatusUnauthorized, Name: proxyTokenRejectedName}, http.StatusServiceUnavailable, proxyRevokedBody},
 	}
 	for _, tc := range cases {
@@ -411,7 +411,7 @@ func TestARememberedRefreshFailureExpires(t *testing.T) {
 	resolver := &oauthResolver{err: errors.New("dial tcp: connection refused")}
 	cache := newSessionCache(resolver, func() time.Duration { return time.Minute })
 	resolver.services = []*resolvedService{oauthMCPService("mcp.example", "old-token")}
-	if _, _, err := cache.lookup("tok"); err != nil {
+	if _, _, err := cache.lookup("tok", nil); err != nil {
 		t.Fatal(err)
 	}
 	sent := oauthToken("old-token")
@@ -462,6 +462,31 @@ func TestAStaticCredential401OnAnMCPServiceGivesA502WithoutTheChallenge(t *testi
 	if got := len(resolver.refreshCalls()); got != 0 {
 		t.Fatalf("a stored credential was sent for refresh %d times", got)
 	}
+}
+
+func TestAMemberProvidedRejectionTellsTheMemberWhatToFix(t *testing.T) {
+	t.Run("static credential", func(t *testing.T) {
+		client, host, _ := newOAuthFixture(t, &oauthResolver{}, func(h string) *resolvedService {
+			svc := mcpService(h)
+			svc.memberProvided = true
+			return svc
+		}, acceptOnly("nothing"))
+
+		resp, body := doWith(t, client, http.MethodPost, fmt.Sprintf("https://%s/mcp", host), "application/json", strings.NewReader(mcpCallBody))
+		assertUpstreamAuthFailed(t, resp, body, `{"error":"upstream_auth_failed","message":"The linear service rejected your credential. Update your personal value on access bundle \"bundle\" in Infisical Agent Vault."}`)
+	})
+
+	t.Run("oauth needs reauthorization", func(t *testing.T) {
+		resolver := &oauthResolver{issue: oauthToken("old-token"), status: oauthStatusNeedsReauthorization}
+		client, host, _ := newOAuthFixture(t, resolver, func(h string) *resolvedService {
+			svc := oauthMCPService(h, "old-token")
+			svc.memberProvided = true
+			return svc
+		}, acceptOnly("nothing"))
+
+		resp, body := doWith(t, client, http.MethodGet, fmt.Sprintf("https://%s/mcp", host), "", nil)
+		assertUpstreamAuthFailed(t, resp, body, `{"error":"upstream_auth_failed","message":"Reconnect your account for the linear service on access bundle \"bundle\" in Infisical Agent Vault."}`)
+	})
 }
 
 func TestAStaticCredentialInsufficientScopeOnAnMCPServiceGivesA502WithoutTheChallenge(t *testing.T) {

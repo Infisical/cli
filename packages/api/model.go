@@ -137,8 +137,6 @@ type GetProjectByIdResponse struct {
 	Project Project `json:"workspace"`
 }
 
-type GetProjectBySlugResponse Project
-
 type PkiApplication struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
@@ -263,6 +261,72 @@ type CreateProjectRequest struct {
 
 type CreateProjectResponse struct {
 	Project ProjectDetails `json:"project"`
+}
+
+// ProjectSettings adds what a delete has to respect to ProjectDetails. It is a separate type so
+// `projects get -o json` keeps its shape.
+type ProjectSettings struct {
+	ProjectDetails
+	HasDeleteProtection bool `json:"hasDeleteProtection"`
+}
+
+// UpdateProjectRequest sends only the fields that are set. An empty Description clears it.
+type UpdateProjectRequest struct {
+	Name        *string `json:"name,omitempty"`
+	Description *string `json:"description,omitempty"`
+	Slug        *string `json:"slug,omitempty"`
+}
+
+type UpdateProjectResponse struct {
+	Project ProjectDetails `json:"project"`
+}
+
+type DeleteProjectResponse struct {
+	Project ProjectDetails `json:"project"`
+}
+
+// Environment is a project environment as the /v1/projects/:projectId/environments endpoints return
+// it. DeleteAfter is set once it is soft-deleted, and is when it will be permanently deleted.
+type Environment struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Slug        string `json:"slug"`
+	Position    int    `json:"position,omitempty"`
+	ProjectID   string `json:"projectId"`
+	DeleteAfter string `json:"deleteAfter,omitempty"`
+}
+
+type EnvironmentResponse struct {
+	Environment Environment `json:"environment"`
+}
+
+type DeletedEnvironment struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Slug        string `json:"slug"`
+	DeleteAfter string `json:"deleteAfter"`
+}
+
+// ProjectEnvironments is a project with its active environments, in position order, and the ones
+// pending deletion. It is decoded from the same response as ProjectDetails, which leaves out
+// deletedEnvironments so `projects get -o json` keeps its shape.
+type ProjectEnvironments struct {
+	ProjectDetails
+	DeletedEnvironments []DeletedEnvironment `json:"deletedEnvironments"`
+}
+
+type GetProjectEnvironmentsResponse struct {
+	Project ProjectEnvironments `json:"project"`
+}
+
+type CreateEnvironmentRequest struct {
+	Name string `json:"name"`
+	Slug string `json:"slug"`
+}
+
+type UpdateEnvironmentRequest struct {
+	Name *string `json:"name,omitempty"`
+	Slug *string `json:"slug,omitempty"`
 }
 
 type RawSecret struct {
@@ -407,6 +471,47 @@ type GetEncryptedSecretsV3Request struct {
 	SecretPath    string `json:"secretPath"`
 	IncludeImport bool   `json:"include_imports"`
 	Recursive     bool   `json:"recursive"`
+}
+
+type Folder struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	CreatedAt   string `json:"createdAt,omitempty"`
+	UpdatedAt   string `json:"updatedAt,omitempty"`
+}
+
+type ListFoldersResponse struct {
+	Folders []Folder `json:"folders"`
+}
+
+type FolderResponse struct {
+	Folder Folder `json:"folder"`
+}
+
+type CreateFolderRequest struct {
+	ProjectID   string  `json:"projectId"`
+	Environment string  `json:"environment"`
+	Name        string  `json:"name"`
+	Path        string  `json:"path"`
+	Description *string `json:"description,omitempty"`
+}
+
+// UpdateFolderRequest always carries a name, which the route requires even when only the description
+// changes. A nil Description leaves it as it is.
+type UpdateFolderRequest struct {
+	ProjectID   string  `json:"projectId"`
+	Environment string  `json:"environment"`
+	Name        string  `json:"name"`
+	Path        string  `json:"path"`
+	Description *string `json:"description,omitempty"`
+}
+
+type DeleteFolderRequest struct {
+	ProjectID   string `json:"projectId"`
+	Environment string `json:"environment"`
+	Path        string `json:"path"`
+	ForceDelete bool   `json:"forceDelete"`
 }
 
 type GetFoldersV1Request struct {

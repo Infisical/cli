@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Infisical/infisical-merge/packages/config"
+	"github.com/Infisical/infisical-merge/packages/models"
 	"github.com/Infisical/infisical-merge/packages/telemetry"
 	"github.com/Infisical/infisical-merge/packages/util"
 )
@@ -85,6 +86,18 @@ func isStructuredOutputRequested(cmd *cobra.Command) bool {
 	return false
 }
 
+// warnTokenOverridesSession tells a logged-in user that a token is used instead of their session. With
+// -o json or yaml (or another structured format) it's only logged: on stderr it would come before the
+// structured error, and stderr would no longer parse as one document.
+func warnTokenOverridesSession(cmd *cobra.Command, token *models.TokenDetails) {
+	message := fmt.Sprintf("Your logged-in session is being overwritten by the token provided from the %s.", token.Source)
+	if isStructuredOutputRequested(cmd) {
+		log.Debug().Msg(message)
+		return
+	}
+	util.PrintWarningWithWriter(message, cmd.ErrOrStderr())
+}
+
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the RootCmd.
 func Execute() {
@@ -97,29 +110,75 @@ func Execute() {
 
 // resolveDomain picks the domain by precedence: --domain flag > env > .infisical.yaml > default (flagValue).
 // Must run after flag parsing (PersistentPreRun, not init) so cmd.Flags().Changed is reliable.
-func resolveDomain(cmd *cobra.Command, flagValue string) string {
+func resolveDomain(cmd *cobra.Command, flagValue string) (string, error) {
 	if cmd.Flags().Changed("domain") {
-		return flagValue
+		return flagValue, nil
 	}
 
 	if envDomain, ok := util.GetEnvDomain(); ok {
-		return envDomain
+		return envDomain, nil
 	}
 
 	domain, valid := util.GetDomainFromFile()
+
+	// Agent Vault commands send session tokens and mint sessions, and a .infisical.yaml can arrive with a cloned
+	// repo, so they skip it. The domain comes from the flag, the variables, or the logged-in profile, which is returned
+	// here so paths that never load the login (proxy tokens, client secrets) use it too. A file that names another instance stops the command instead, so a user who relied on it is not
+	// sent to the profile's instance without knowing.
+	if isAgentVaultCommand(cmd) {
+		effectiveDomain := util.ActiveProfileDomain()
+		if effectiveDomain == "" {
+			effectiveDomain = flagValue
+		}
+		if domain != "" && valid && util.AppendAPIEndpoint(effectiveDomain) != util.AppendAPIEndpoint(domain) && !agentVaultRunNeverContactsInfisical(cmd) {
+			return "", fmt.Errorf(".infisical.yaml names a server that Agent Vault commands don't read. Pass --domain <domain> or set INFISICAL_DOMAIN.")
+		}
+		return effectiveDomain, nil
+	}
+
 	if domain == "" {
-		return flagValue
+		return flagValue, nil
 	}
 
 	if !valid {
 		util.PrintWarningWithWriter("The 'general.domain' field in .infisical.yaml (or 'domain' in a legacy .infisical.json) is not a valid URL (must be an http:// or https:// URL with a host). It will be ignored.", cmd.ErrOrStderr())
-		return flagValue
+		return flagValue, nil
 	}
 
 	// A .infisical.yaml is usually committed to the repo, so a malicious one could redirect requests
 	// and credentials. Always surface where traffic is going (even under --silent); it goes to stderr.
 	util.PrintWarningWithWriter(fmt.Sprintf("Using domain '%s' from .infisical.yaml (or a legacy .infisical.json); all requests and credentials will be sent there.", domain), cmd.ErrOrStderr())
-	return domain
+	return domain, nil
+}
+
+// A run on a session token with --no-skills mints nothing and installs no skills, so no domain is used and a
+// repo file naming another server can't misdirect anything.
+func agentVaultRunNeverContactsInfisical(cmd *cobra.Command) bool {
+	if cmd != agentVaultRunCmd {
+		return false
+	}
+	if noSkills, err := cmd.Flags().GetBool("no-skills"); err != nil || !noSkills {
+		return false
+	}
+	_, tokenSource, err := resolveAgentVaultSessionToken(cmd)
+	if err != nil {
+		return false
+	}
+	_, bundleSource, err := resolveAgentVaultAccessBundles(cmd)
+	if err != nil {
+		return false
+	}
+	useToken, _, err := decideAgentVaultSession(tokenSource, bundleSource)
+	return err == nil && useToken
+}
+
+func isAgentVaultCommand(cmd *cobra.Command) bool {
+	for current := cmd; current != nil; current = current.Parent() {
+		if current == agentVaultCmd {
+			return true
+		}
+	}
+	return false
 }
 
 // Commands that manage profiles/sessions themselves print their own outcome,
@@ -137,7 +196,7 @@ var profileNoticeExemptCommands = map[string]bool{
 func topLevelCommandName(cmd *cobra.Command) string {
 	current := cmd
 	for current.Parent() != nil && current.Parent() != RootCmd {
-		if current.Parent().Name() == smCommandName && current.Parent().Parent() == RootCmd {
+		if current.Parent().Name() == secretsManagerCommandName && current.Parent().Parent() == RootCmd {
 			break
 		}
 		current = current.Parent()
@@ -190,7 +249,11 @@ func init() {
 		_, envDomainSet := util.GetEnvDomain()
 		config.INFISICAL_DOMAIN_EXPLICITLY_SET = cmd.Flags().Changed("domain") || envDomainSet
 
-		config.INFISICAL_URL = util.AppendAPIEndpoint(resolveDomain(cmd, config.INFISICAL_URL))
+		domain, err := resolveDomain(cmd, config.INFISICAL_URL)
+		if err != nil {
+			util.HandleError(err)
+		}
+		config.INFISICAL_URL = util.AppendAPIEndpoint(domain)
 
 		if !util.IsRunningInDocker() && !silent && !isStructuredOutputRequested(cmd) {
 			util.CheckForUpdateWithWriter(cmd.ErrOrStderr())
@@ -201,8 +264,8 @@ func init() {
 		if !silent && err == nil && loggedInDetails.IsUserLoggedIn && !loggedInDetails.LoginExpired {
 			token, err := util.GetInfisicalToken(cmd)
 
-			if err == nil && token != nil && !ignoresEnvServiceToken(cmd, token) {
-				util.PrintWarningWithWriter(fmt.Sprintf("Your logged-in session is being overwritten by the token provided from the %s.", token.Source), cmd.ErrOrStderr())
+			if err == nil && token != nil && !ignoresEnvServiceToken(cmd, args, token) {
+				warnTokenOverridesSession(cmd, token)
 			}
 		}
 

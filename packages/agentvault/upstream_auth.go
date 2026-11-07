@@ -33,26 +33,32 @@ func upstreamAuthBody(code, message string) string {
 }
 
 // For a credential the user stored, which only they can replace.
-func staticCredentialRejectedBody(serviceName string) string {
-	return upstreamAuthBody("upstream_auth_failed", fmt.Sprintf("The %s service's credential was rejected. Update it in Infisical Agent Vault.", serviceName))
+func staticCredentialRejectedBody(svc *resolvedService) string {
+	if svc.memberProvided {
+		return upstreamAuthBody("upstream_auth_failed", fmt.Sprintf("The %s service rejected your credential. Update your personal value on access bundle %q in Infisical Agent Vault.", svc.name, svc.accessBundleName))
+	}
+	return upstreamAuthBody("upstream_auth_failed", fmt.Sprintf("The %s service's credential was rejected. Update it in Infisical Agent Vault.", svc.name))
 }
 
-func reauthorizationNeededBody(serviceName string) string {
-	return upstreamAuthBody("upstream_auth_failed", fmt.Sprintf("The %s service needs to be reauthorized in Infisical Agent Vault.", serviceName))
+func reauthorizationNeededBody(svc *resolvedService) string {
+	if svc.memberProvided {
+		return upstreamAuthBody("upstream_auth_failed", fmt.Sprintf("Reconnect your account for the %s service on access bundle %q in Infisical Agent Vault.", svc.name, svc.accessBundleName))
+	}
+	return upstreamAuthBody("upstream_auth_failed", fmt.Sprintf("The %s service needs to be reauthorized in Infisical Agent Vault.", svc.name))
 }
 
 // For a failure that may pass on its own: Infisical or the provider unreachable, a body that could not be
 // replayed, or a refreshed token rejected for a reason Infisical does not know about.
-func credentialUnavailableBody(serviceName string) string {
-	return upstreamAuthBody("upstream_auth_unavailable", fmt.Sprintf("Couldn't get a valid credential for the %s service. Try again in a moment.", serviceName))
+func credentialUnavailableBody(svc *resolvedService) string {
+	return upstreamAuthBody("upstream_auth_unavailable", fmt.Sprintf("Couldn't get a valid credential for the %s service. Try again in a moment.", svc.name))
 }
 
 // Only a status Infisical reports, or an insufficient_scope challenge, means the user has to reauthorize.
-func refreshFailedBody(serviceName, status string) string {
+func refreshFailedBody(svc *resolvedService, status string) string {
 	if status == oauthStatusNeedsReauthorization || status == oauthStatusNeedsAdditionalScopes {
-		return reauthorizationNeededBody(serviceName)
+		return reauthorizationNeededBody(svc)
 	}
-	return credentialUnavailableBody(serviceName)
+	return credentialUnavailableBody(svc)
 }
 
 // The request body as it will go upstream, when it can be sent a second time. Only a body already held in
@@ -69,7 +75,7 @@ func replayableBody(req *http.Request) ([]byte, bool) {
 
 // handleUpstreamAuth runs only for a refreshable credential the proxy injected, so every other credential
 // sees the upstream's response untouched.
-func (ps *proxyServer) handleUpstreamAuth(req *http.Request, resp *http.Response, svc *resolvedService, sessionToken string, sent *credential, body []byte, replayable bool) (*http.Response, error) {
+func (ps *proxyServer) handleUpstreamAuth(upstream http.RoundTripper, req *http.Request, resp *http.Response, svc *resolvedService, sessionToken string, sent *credential, body []byte, replayable bool) (*http.Response, error) {
 	switch resp.StatusCode {
 	case http.StatusUnauthorized:
 		// An auth-error body can stay open indefinitely; draining it would stall the refresh.
@@ -83,17 +89,17 @@ func (ps *proxyServer) handleUpstreamAuth(req *http.Request, resp *http.Response
 		if errors.As(err, &notRecovered) {
 			log.Warn().Str("service", svc.name).Str("serviceId", svc.id).Str("status", notRecovered.status).
 				Msg("agent-vault: the upstream rejected the OAuth token and Infisical has no other, not retrying")
-			return upstreamAuthFailed(req, refreshFailedBody(svc.name, notRecovered.status)), nil
+			return upstreamAuthFailed(req, refreshFailedBody(svc, notRecovered.status)), nil
 		}
 		if err != nil {
 			log.Warn().Err(err).Str("service", svc.name).Str("serviceId", svc.id).
 				Msg("agent-vault: the upstream rejected the OAuth token and Infisical could not refresh it")
-			return upstreamAuthFailed(req, credentialUnavailableBody(svc.name)), nil
+			return upstreamAuthFailed(req, credentialUnavailableBody(svc)), nil
 		}
 		if !replayable {
 			log.Warn().Str("service", svc.name).Str("serviceId", svc.id).Bool("replayable", replayable).Str("status", status).
 				Msg("agent-vault: the upstream rejected the OAuth token, not retrying")
-			return upstreamAuthFailed(req, refreshFailedBody(svc.name, status)), nil
+			return upstreamAuthFailed(req, refreshFailedBody(svc, status)), nil
 		}
 
 		retry := req.Clone(req.Context())
@@ -103,7 +109,7 @@ func (ps *proxyServer) handleUpstreamAuth(req *http.Request, resp *http.Response
 			retry.Body = &bufferedBody{Reader: bytes.NewReader(body), data: body}
 		}
 		injectCredential(retry, &fresh)
-		retryResp, err := ps.transport.RoundTrip(retry)
+		retryResp, err := upstream.RoundTrip(retry)
 		if err != nil {
 			return nil, err
 		}
@@ -119,7 +125,7 @@ func (ps *proxyServer) handleUpstreamAuth(req *http.Request, resp *http.Response
 		ps.cache.rememberRejectedRefresh(sessionToken, svc.id, svc.hostPattern, &fresh, status)
 		log.Warn().Str("service", svc.name).Str("serviceId", svc.id).Int("retryStatus", retryResp.StatusCode).
 			Msg("agent-vault: the upstream rejected the refreshed OAuth token too")
-		return upstreamAuthFailed(req, refreshFailedBody(svc.name, status)), nil
+		return upstreamAuthFailed(req, refreshFailedBody(svc, status)), nil
 
 	case http.StatusForbidden:
 		if !ps.reportInsufficientScope(resp, sessionToken, svc, sent) {
@@ -128,7 +134,7 @@ func (ps *proxyServer) handleUpstreamAuth(req *http.Request, resp *http.Response
 		_ = resp.Body.Close()
 		log.Warn().Str("service", svc.name).Str("serviceId", svc.id).
 			Msg("agent-vault: the upstream needs OAuth scopes this service was not granted")
-		return upstreamAuthFailed(req, reauthorizationNeededBody(svc.name)), nil
+		return upstreamAuthFailed(req, reauthorizationNeededBody(svc)), nil
 	}
 	return resp, nil
 }

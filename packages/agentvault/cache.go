@@ -64,15 +64,19 @@ type resolvedService struct {
 	// As Infisical sent it, so a credential refresh can name the destination the rejected token went to.
 	hostPattern  string
 	hostPatterns []hostPattern
-	// A nil map means every method is allowed; an empty slice of prefixes means every path.
+	// A nil map means every method is allowed; an empty slice of prefixes means every path. allowedTools is
+	// MCP only, the exact names tools/call may name, and nil means every tool.
 	allowedMethods      map[string]bool
 	allowedPathPrefixes []string
+	allowedTools        map[string]bool
 	credential          credential
 	customHeaders       []customHeader
 	substitutions       []substitution
 	// Set when the session's owner still has to set their personal values. The server sends the
 	// service with no credential, so forwarding it would reach the host unauthenticated.
 	personalValuesMissing bool
+	// Some credential field comes from each member, so a rejection is theirs to fix rather than an admin's.
+	memberProvided bool
 }
 
 // lastSeen and fetchedAt are wall-clock (Round(0)) so time asleep counts toward the grace and idle windows.
@@ -190,7 +194,7 @@ func recentLocked(entries map[string]refusedEntry, key string) (refusedEntry, bo
 	return refusedEntry{}, false
 }
 
-var errSessionGone = errors.New("session is no longer valid")
+var errSessionGone = errors.New("session is no longer valid, or it belongs to a different Agent Vault project than this proxy")
 
 // The name the server puts on a 401 that is about this proxy's own token rather than the session it asked
 // about. Without it the two are the same status and the same error class.
@@ -226,7 +230,14 @@ func isSessionGone(err error) bool {
 }
 
 func (c *sessionCache) get(sessionToken string) ([]*resolvedService, error) {
-	services, _, err := c.lookup(sessionToken)
+	services, _, err := c.lookup(sessionToken, nil)
+	return services, err
+}
+
+// getAdmitted is get for a caller that rations lookups of tokens it hasn't seen: admit runs only when Infisical
+// would be asked, so a known session, or one already refused, never spends from the budget.
+func (c *sessionCache) getAdmitted(sessionToken string, admit func() bool) ([]*resolvedService, error) {
+	services, _, err := c.lookup(sessionToken, admit)
 	return services, err
 }
 
@@ -235,7 +246,7 @@ type cacheLookup struct {
 	sessionLog *sessionLogGrant
 }
 
-func (c *sessionCache) lookup(sessionToken string) ([]*resolvedService, *sessionLogGrant, error) {
+func (c *sessionCache) lookup(sessionToken string, admit func() bool) ([]*resolvedService, *sessionLogGrant, error) {
 	key := sessionKey(sessionToken)
 
 	c.mu.Lock()
@@ -268,6 +279,10 @@ func (c *sessionCache) lookup(sessionToken string) ([]*resolvedService, *session
 	c.mu.Unlock()
 
 	resolved, err, _ := c.inflight.Do(key, func() (any, error) {
+		// Inside the shared lookup, so connections waiting on the same token spend one ask, not one each.
+		if admit != nil && !admit() {
+			return nil, errResolveBudget
+		}
 		result, err := c.resolver.resolve(sessionToken, nil)
 		if err != nil {
 			// A rejected proxy token is remembered too: the poll loop exits after two such heartbeats, but

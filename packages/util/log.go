@@ -2,6 +2,7 @@ package util
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -69,6 +70,13 @@ func HandleError(err error, messages ...string) {
 }
 
 func PrintErrorAndExit(exitCode int, err error, messages ...string) {
+	// A CLIError that reaches here instead of exitWithError still prints its next step.
+	var cliErr *CLIError
+	if errors.As(err, &cliErr) {
+		WriteCLIError(GetStderrWriter(), cliErr, "")
+		os.Exit(exitCode)
+	}
+
 	// Check if it's an API error for special formatting
 	if apiErr, ok := err.(*api.APIError); ok {
 		if len(messages) > 0 {
@@ -101,6 +109,11 @@ func PrintWarningWithWriter(message string, w io.Writer) {
 
 func PrintSuccessMessage(message string) {
 	color.New(color.FgGreen).Println(message)
+}
+
+// PrintSuccessMessageStderr is PrintSuccessMessage for commands whose stdout carries only their data.
+func PrintSuccessMessageStderr(message string) {
+	color.New(color.FgGreen).Fprintln(GetStderrWriter(), message)
 }
 
 func PrintErrorMessageAndExit(messages ...string) {
@@ -152,6 +165,7 @@ func printPrettyAPIError(apiErr api.APIError) {
 		Foreground(lipgloss.Color(statusColor))
 
 	domain := extractDomainFromURL(apiErr.URL)
+	apiErr.URL = displayRequestURL(apiErr.URL)
 
 	// Request details
 	content.WriteString(labelStyle.Render("Request: "))
@@ -263,7 +277,23 @@ func printPrettyAPIError(apiErr api.APIError) {
 	supportMsg := supportStyle.Render("If this issue continues, get support at ") + linkStyle.Render("https://infisical.com/slack")
 	content.WriteString(supportMsg)
 
-	PrintlnStderr(content.String())
+	PrintlnStderr(RedactCredentials(content.String()))
+}
+
+// displayRequestURL is the request URL as the error box shows it. The URL carries what the user typed
+// (a --path in the query, a name in the path), where an encoded "/" in front of a pasted token hides it
+// from RedactCredentials. When decoding reveals a credential, the decoded URL is shown redacted, with
+// control characters an encoding could smuggle in (%0A, %1B) removed. Otherwise it's shown as it was
+// sent, still encoded, so the box reads as it always has.
+func displayRequestURL(raw string) string {
+	decoded, err := url.PathUnescape(raw)
+	if err != nil {
+		return raw
+	}
+	if redacted := RedactCredentials(decoded); redacted != decoded {
+		return SanitizeDisplay(redacted)
+	}
+	return raw
 }
 
 func getStatusCodeColor(statusCode int) string {

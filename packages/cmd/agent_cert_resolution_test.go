@@ -109,7 +109,7 @@ func newLegacyServer(t *testing.T, projectSlug, projectID, profileSlug, profileI
 			w.Header().Set("Content-Type", "application/json")
 			switch r.URL.Path {
 			case "/v1/projects/slug/" + projectSlug:
-				_ = json.NewEncoder(w).Encode(api.GetProjectBySlugResponse{ID: projectID, Slug: projectSlug})
+				_ = json.NewEncoder(w).Encode(api.Project{ID: projectID, Slug: projectSlug})
 			case "/v1/cert-manager/certificate-profiles/slug/" + profileSlug:
 				if r.URL.Query().Get("projectId") != projectID {
 					http.Error(w, "wrong projectId", http.StatusBadRequest)
@@ -157,7 +157,7 @@ func TestResolveCertificateNameReferences_LegacyProjectMissingProfile(t *testing
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			if r.URL.Path == "/v1/projects/slug/"+projectSlug {
-				_ = json.NewEncoder(w).Encode(api.GetProjectBySlugResponse{ID: projectID, Slug: projectSlug})
+				_ = json.NewEncoder(w).Encode(api.Project{ID: projectID, Slug: projectSlug})
 				return
 			}
 			http.NotFound(w, r)
