@@ -390,6 +390,75 @@ func listAgentVaultSessionSkills(ctx context.Context, httpClient *resty.Client, 
 	return res, nil
 }
 
+// AgentVaultSessionService is one service in a session's services list, as far as agent-vault run reads it.
+type AgentVaultSessionService struct {
+	Name string `json:"name"`
+	// "http" or "mcp".
+	Type string `json:"type"`
+	// An MCP service's server URL.
+	URL string `json:"url"`
+	// An MCP service's transport: "streamable-http" or "sse".
+	Transport string `json:"transport"`
+	// "ready", or "needs-personal-values" until the user sets them; the proxy refuses requests to such a service.
+	Status     string                             `json:"status"`
+	Credential AgentVaultSessionServiceCredential `json:"credential"`
+}
+
+type AgentVaultSessionServiceCredential struct {
+	// "bearer", "oauth", "basic" or "none".
+	Type string `json:"type"`
+	// The header the proxy sets.
+	Header       string `json:"header"`
+	AddedByProxy bool   `json:"addedByProxy"`
+}
+
+type ListAgentVaultSessionServicesResponse struct {
+	Services []AgentVaultSessionService `json:"services"`
+}
+
+// A services list is small; the limit only keeps a broken answer from filling memory.
+const agentVaultSessionServicesResponseLimit = 4 << 20
+
+// CallListAgentVaultSessionServices asks Infisical for the session's services.
+func CallListAgentVaultSessionServices(ctx context.Context, httpClient *resty.Client, sessionToken string) (ListAgentVaultSessionServicesResponse, error) {
+	return listAgentVaultSessionServices(ctx, httpClient, fmt.Sprintf("%v/v1/agent-vault/session/services", config.INFISICAL_URL),
+		sessionToken, "CallListAgentVaultSessionServices", nil)
+}
+
+// CallListAgentVaultSessionServicesThroughProxy asks for the session's services at proxyAPIURL, the API of the proxy's
+// own Infisical, through the proxy, which answers for the session itself. httpClient has to send its requests through the
+// proxy and trust the proxy's certificate authority. check sees the answer before anything is read from it, and an
+// error from it is returned as is.
+func CallListAgentVaultSessionServicesThroughProxy(ctx context.Context, httpClient *resty.Client, proxyAPIURL, sessionToken string, check func(*resty.Response) error) (ListAgentVaultSessionServicesResponse, error) {
+	return listAgentVaultSessionServices(ctx, httpClient, proxyAPIURL+"/v1/agent-vault/session/services",
+		sessionToken, "CallListAgentVaultSessionServicesThroughProxy", check)
+}
+
+func listAgentVaultSessionServices(ctx context.Context, httpClient *resty.Client, url, sessionToken, operation string, check func(*resty.Response) error) (ListAgentVaultSessionServicesResponse, error) {
+	var res ListAgentVaultSessionServicesResponse
+	response, err := httpClient.
+		R().
+		SetContext(ctx).
+		SetResponseBodyLimit(agentVaultSessionServicesResponseLimit).
+		SetResult(&res).
+		SetHeader("User-Agent", USER_AGENT).
+		SetAuthToken(sessionToken).
+		Get(url)
+
+	if err != nil {
+		return ListAgentVaultSessionServicesResponse{}, NewGenericRequestError(operation, err)
+	}
+	if check != nil {
+		if err := check(response); err != nil {
+			return ListAgentVaultSessionServicesResponse{}, err
+		}
+	}
+	if response.IsError() {
+		return ListAgentVaultSessionServicesResponse{}, NewAPIErrorWithResponse(operation, response, nil)
+	}
+	return res, nil
+}
+
 type AgentVaultSkill struct {
 	ID            string `json:"id"`
 	Name          string `json:"name"`

@@ -137,6 +137,30 @@ func (c *agentVaultSkillsClient) list(ctx context.Context) (api.ListAgentVaultSe
 	return listed, err
 }
 
+// services gets the session's services the way list gets its skills: through the proxy's tunnel when there is one, and
+// from Infisical directly otherwise or when the tunnel's answer isn't confirmed.
+func (c *agentVaultSkillsClient) services(ctx context.Context) (api.ListAgentVaultSessionServicesResponse, error) {
+	if c.tunnel != nil {
+		listed, err := agentVaultRetrying(ctx, c.retryUnauthorized, func() (api.ListAgentVaultSessionServicesResponse, error) {
+			return api.CallListAgentVaultSessionServicesThroughProxy(ctx, c.tunnel.httpClient, c.tunnel.tlsAPIURL, c.sessionToken,
+				func(res *resty.Response) error { return c.tunnel.check(res, agentvault.DecisionDiscovery) })
+		})
+		if !errors.Is(err, errAgentVaultProxyAnswerUnconfirmed) {
+			return listed, err
+		}
+	}
+	if c.beforeDirect != nil {
+		c.beforeDirect()
+	}
+	listed, err := agentVaultRetrying(ctx, c.retryUnauthorized, func() (api.ListAgentVaultSessionServicesResponse, error) {
+		return api.CallListAgentVaultSessionServices(ctx, c.httpClient, c.sessionToken)
+	})
+	if err != nil && c.proxyTooOld {
+		return listed, &agentVaultProxyTooOldError{err: err}
+	}
+	return listed, err
+}
+
 // askAgentVaultProxyAPIURL asks the proxy which Infisical it works with, so the agent reaches its session's endpoints
 // there through the proxy, whatever domain this command uses. The answer is only a claim until a tunnel confirms it.
 // answered is false when the proxy didn't answer in time, which says nothing about its age; a proxy that answered
@@ -241,11 +265,15 @@ func (t *agentVaultSkillsTunnel) confirm(ctx context.Context) {
 	}
 }
 
-// prepareAgentVaultRunProxy asks the proxy which Infisical it works with, then installs the session's skills through
-// installSkills, or with --no-skills (nil) only confirms the answer. It returns the API URL the agent's
-// INFISICAL_AGENT_VAULT_URL comes from, or "" unless an answer from inside TLS confirmed it.
-func prepareAgentVaultRunProxy(ctx context.Context, proxyAddr, sessionToken string, caPEM []byte,
-	installSkills func(ctx context.Context, tunnel *agentVaultSkillsTunnel, proxyTooOld bool)) string {
+// agentVaultRunProxyStep is something the run does through the proxy before the agent starts, such as installing the
+// session's skills. tunnel is nil behind a proxy that named no Infisical, which proxyTooOld says is too old rather than
+// slow to answer.
+type agentVaultRunProxyStep func(ctx context.Context, tunnel *agentVaultSkillsTunnel, proxyTooOld bool)
+
+// prepareAgentVaultRunProxy asks the proxy which Infisical it works with, then runs steps, a nil one skipped, within
+// one budget. It returns the API URL the agent's INFISICAL_AGENT_VAULT_URL comes from, or "" unless an answer from
+// inside TLS confirmed it.
+func prepareAgentVaultRunProxy(ctx context.Context, proxyAddr, sessionToken string, caPEM []byte, steps ...agentVaultRunProxyStep) string {
 	claimed, answered := askAgentVaultProxyAPIURL(ctx, proxyAddr, sessionToken)
 	var tunnel *agentVaultSkillsTunnel
 	if claimed != "" {
@@ -253,17 +281,16 @@ func prepareAgentVaultRunProxy(ctx context.Context, proxyAddr, sessionToken stri
 	}
 	stepCtx, cancel := context.WithTimeout(ctx, agentVaultSkillsTimeout)
 	defer cancel()
-	switch {
-	case installSkills != nil:
-		installSkills(stepCtx, tunnel, answered && claimed == "")
-	case tunnel != nil:
-		tunnel.confirm(stepCtx)
+	for _, step := range steps {
+		if step != nil {
+			step(stepCtx, tunnel, answered && claimed == "")
+		}
 	}
 	if tunnel == nil {
 		return ""
 	}
-	// A skills answer that failed before its headers were checked, such as one cut short, says nothing either way, so the
-	// services list's headers decide.
+	// With no step, or one whose answer failed before its headers were checked, such as one cut short, the services list's
+	// headers decide.
 	if !tunnel.confirmed && !tunnel.contradicted && ctx.Err() == nil {
 		confirmCtx, cancelConfirm := context.WithTimeout(ctx, agentVaultProxyConfirmTimeout)
 		tunnel.confirm(confirmCtx)
@@ -297,8 +324,14 @@ func agentVaultSkillsUnreachableHintFor(err error) string {
 }
 
 func (c *agentVaultSkillsClient) retrying(ctx context.Context, fetch func() (api.ListAgentVaultSessionSkillsResponse, error)) (api.ListAgentVaultSessionSkillsResponse, error) {
+	return agentVaultRetrying(ctx, c.retryUnauthorized, fetch)
+}
+
+// agentVaultRetrying asks again after a refusal of a session this run just minted (retryUnauthorized), which a database
+// replica or the proxy's memory of a refusal can still hold.
+func agentVaultRetrying[T any](ctx context.Context, retryUnauthorized bool, fetch func() (T, error)) (T, error) {
 	listed, err := fetch()
-	if !c.retryUnauthorized {
+	if !retryUnauthorized {
 		return listed, err
 	}
 	for _, delay := range agentVaultSkillsUnauthorizedRetryDelays {

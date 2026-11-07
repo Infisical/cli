@@ -139,6 +139,10 @@ folder instead, with no links, or --no-skills to start without them. Installed s
 exits, and folders of your own with a skill's name are left alone. Restart the agent to pick up changes to
 them. If they cannot be installed, the agent starts without them.
 
+When the agent is claude, the session's MCP servers that are ready are added to it with --mcp-config, on top of any
+you pass, each with a placeholder credential the proxy replaces, so Claude Code has their tools from the start. Pass
+--no-mcp-servers to leave them out.
+
 Unlike 'secrets agent-proxy run', this command does not sandbox the agent: it sets environment variables
 and starts the process.`,
 	Example: `  infisical agent-vault run --access-bundle on-call-infrastructure --proxy 10.0.1.5:17323 -- claude
@@ -453,34 +457,55 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	printAgentVaultRunSummary(proxyAddr, caResp, servedFingerprint, minted, project, tokenSource, bundleSource)
 
 	noBuiltinSkill, _ := cmd.Flags().GetBool("no-agent-vault-skill")
-	var installSkills func(context.Context, *agentVaultSkillsTunnel, bool)
+	noMCPServers, _ := cmd.Flags().GetBool("no-mcp-servers")
+	sessionClient := func(tunnel *agentVaultSkillsTunnel, proxyTooOld bool) (*agentVaultSkillsClient, error) {
+		httpClient, err := newAgentVaultSkillsHTTPClient()
+		if err != nil {
+			return nil, err
+		}
+		return &agentVaultSkillsClient{
+			httpClient:        httpClient,
+			sessionToken:      sessionToken,
+			retryUnauthorized: minted != nil,
+			includeBuiltin:    !noBuiltinSkill,
+			tunnel:            tunnel,
+			proxyTooOld:       proxyTooOld,
+			beforeDirect: func() {
+				if minted == nil {
+					useAgentVaultSessionTokenDomain()
+				}
+			},
+		}, nil
+	}
+	var installSkills agentVaultRunProxyStep
 	if !noSkills {
 		installSkills = func(ctx context.Context, tunnel *agentVaultSkillsTunnel, proxyTooOld bool) {
-			skillsHTTPClient, clientErr := newAgentVaultSkillsHTTPClient()
+			skillsClient, clientErr := sessionClient(tunnel, proxyTooOld)
 			if clientErr != nil {
 				util.PrintWarning(fmt.Sprintf("Starting without skills: %v.", clientErr))
 				return
 			}
-			skillsClient := &agentVaultSkillsClient{
-				httpClient:        skillsHTTPClient,
-				sessionToken:      sessionToken,
-				retryUnauthorized: minted != nil,
-				includeBuiltin:    !noBuiltinSkill,
-				tunnel:            tunnel,
-				proxyTooOld:       proxyTooOld,
-				beforeDirect: func() {
-					if minted == nil {
-						useAgentVaultSessionTokenDomain()
-					}
-				},
-			}
 			installAgentVaultRunSkills(ctx, skillsClient, agentvault.InstallOptions{Dir: skillsDir, ForceClaude: agentVaultRunStartsClaude(args)}, !noBuiltinSkill)
+		}
+	}
+	// Claude Code loads MCP servers only when it starts, so the session's are handed to it rather than left for the agent
+	// to find.
+	var mcpConfig string
+	var listMCPServers agentVaultRunProxyStep
+	if !noMCPServers && agentVaultRunStartsClaude(args) {
+		listMCPServers = func(ctx context.Context, tunnel *agentVaultSkillsTunnel, proxyTooOld bool) {
+			servicesClient, clientErr := sessionClient(tunnel, proxyTooOld)
+			if clientErr != nil {
+				util.PrintWarning(fmt.Sprintf("Starting Claude Code without the session's MCP servers: %v.", clientErr))
+				return
+			}
+			mcpConfig = agentVaultRunMCPConfig(ctx, servicesClient)
 		}
 	}
 	var agentAPIURL string
 	if exitCode, interrupted := runAgentVaultRunStartupStep(
 		func(ctx context.Context) {
-			agentAPIURL = prepareAgentVaultRunProxy(ctx, proxyAddr, sessionToken, caPEM, installSkills)
+			agentAPIURL = prepareAgentVaultRunProxy(ctx, proxyAddr, sessionToken, caPEM, installSkills, listMCPServers)
 		},
 		func(ctx context.Context) {
 			revokeAgentVaultRunSession(ctx, cmd, minted, keepSession, "The run was interrupted", true)
@@ -489,6 +514,9 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	}
 
 	env := buildAgentVaultRunEnv(os.Environ(), proxyAddr, sessionToken, caPath, extraNoProxy, agentAPIURL)
+	if mcpConfig != "" {
+		args = withAgentVaultMCPConfig(args, mcpConfig)
+	}
 	exitCode := runAgentVaultChild(args, env)
 
 	revokeAgentVaultRunSession(context.Background(), cmd, minted, keepSession, "The agent exited", false)
@@ -902,6 +930,7 @@ func init() {
 	agentVaultRunCmd.Flags().String("skills-dir", "", "install the session's skills into this `folder` instead of ~/.agents/skills, without linking them for Claude Code or Hermes")
 	agentVaultRunCmd.Flags().Bool("no-skills", false, "start the agent without installing the session's skills")
 	agentVaultRunCmd.Flags().Bool("no-agent-vault-skill", false, "skip the built-in "+agentvault.BuiltinSkillName+" skill, which tells the agent how to work behind the proxy (--no-skills skips it too)")
+	agentVaultRunCmd.Flags().Bool("no-mcp-servers", false, "don't add the session's MCP servers to Claude Code with --mcp-config")
 	agentVaultRunCmd.Flags().String("client-id", "", "universal auth client id of the machine identity that mints the session (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_ID)")
 	agentVaultRunCmd.Flags().String("client-secret", "", "universal auth client secret of that machine identity (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET)")
 
