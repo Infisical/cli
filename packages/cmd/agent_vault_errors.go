@@ -25,6 +25,8 @@ const (
 	errCodeServiceNotFound      = "service_not_found"
 	errCodeNoServices           = "no_services"
 	errCodeServiceRefused       = "service_refused"
+	errCodeSessionInvalid       = "session_invalid"
+	errCodeLocalPortUnavailable = "local_port_unavailable"
 )
 
 func errAgentVaultInvalidOutput(format string) *util.CLIError {
@@ -144,14 +146,55 @@ func errAgentVaultConnectProxyUnreachable(proxyAddr string, cause error) *util.C
 		Message: fmt.Sprintf("Unable to reach the Agent Vault proxy at %s: check the address and that 'infisical agent-vault proxy' is running there.", proxyAddr)}
 }
 
+const agentVaultFingerprintLocation = "the Certificate Authority column on the Proxies page in Infisical"
+
 func errAgentVaultConnectProxyUntrusted(proxyAddr string, cause error) *util.CLIError {
 	return &util.CLIError{Code: errCodeProxyUntrusted, Cause: cause,
-		Message: fmt.Sprintf("Unable to verify the Agent Vault proxy at %s, so the session token wasn't sent: pass --ca-fingerprint SHA256:... with the fingerprint shown on the proxy's page in Infisical.", proxyAddr)}
+		Message: fmt.Sprintf("Unable to verify the Agent Vault proxy at %s, so the session token wasn't sent to the proxy: pass --ca-fingerprint SHA256:... with the fingerprint shown in %s.", proxyAddr, agentVaultFingerprintLocation)}
 }
 
 func errAgentVaultConnectFingerprintMismatch(proxyAddr, served string) *util.CLIError {
 	return &util.CLIError{Code: errCodeProxyUntrusted,
-		Message: fmt.Sprintf("The proxy at %s serves a certificate authority with fingerprint %s, not the one passed in --ca-fingerprint, so the session token wasn't sent. Check the fingerprint on the proxy's page in Infisical.", proxyAddr, served)}
+		Message: fmt.Sprintf("The proxy at %s serves a certificate authority with fingerprint %s, not the one passed in --ca-fingerprint, so the session token wasn't sent to the proxy. Check the fingerprint in %s.", proxyAddr, served, agentVaultFingerprintLocation)}
+}
+
+func errAgentVaultConnectFingerprintsNotListed(proxyAddr string, cause error) *util.CLIError {
+	return &util.CLIError{Code: errCodeProxyUntrusted, Cause: cause,
+		Message: fmt.Sprintf("This Infisical doesn't list proxy fingerprints yet, so the proxy at %s couldn't be verified and the session token wasn't sent to it: pass --ca-fingerprint SHA256:... with the fingerprint shown in %s.", proxyAddr, agentVaultFingerprintLocation)}
+}
+
+func errAgentVaultConnectInfisicalUnreachable(proxyAddr, domain string, cause error) *util.CLIError {
+	return &util.CLIError{Code: errCodeProxyUntrusted, Cause: cause,
+		Message: fmt.Sprintf("Couldn't reach Infisical at %s to verify the proxy at %s, so the session token wasn't sent to the proxy: check --domain, or pass --ca-fingerprint SHA256:... with the fingerprint shown in %s.", domain, proxyAddr, agentVaultFingerprintLocation)}
+}
+
+func errAgentVaultConnectSessionInvalid(cause error) *util.CLIError {
+	return &util.CLIError{Code: errCodeSessionInvalid, Cause: cause,
+		Message: "This session is no longer valid, or it belongs to a different Agent Vault project than the proxy: start a new session with 'infisical agent-vault sessions create', or run the agent again under 'infisical agent-vault run'."}
+}
+
+func errAgentVaultConnectPortNeedsOneService() *util.CLIError {
+	return &util.CLIError{Code: errCodeInvalidFlagValue,
+		Message: "--port works with one service: name one service, or leave --port out."}
+}
+
+func errAgentVaultConnectInvalidPort(port int) *util.CLIError {
+	return &util.CLIError{Code: errCodeInvalidFlagValue,
+		Message: fmt.Sprintf("--port must be between 1 and 65535, not %d: pass another port, or leave --port out to use a free one.", port)}
+}
+
+func errAgentVaultConnectLocalPort(service string, port int, cause error) *util.CLIError {
+	if port != 0 {
+		return &util.CLIError{Code: errCodeLocalPortUnavailable, Cause: cause,
+			Message: fmt.Sprintf("Unable to open local port %d for %s: %s. Pass another --port, or leave it out to use a free one.", port, quoted(service, "service"), cause)}
+	}
+	return &util.CLIError{Code: errCodeLocalPortUnavailable, Cause: cause,
+		Message: fmt.Sprintf("Unable to open a local port for %s: %s. Close programs you don't need, or raise the open file limit, and run the command again.", quoted(service, "service"), cause)}
+}
+
+func errAgentVaultConnectAllRefused() *util.CLIError {
+	return &util.CLIError{Code: errCodeServiceRefused,
+		Message: "The proxy refused every database and SSH service in this session, for the reasons printed above. Fix one of them, or ask an Agent Vault admin to."}
 }
 
 func errAgentVaultConnectNoServices() *util.CLIError {
@@ -179,6 +222,9 @@ func classifyAgentVaultConnectError(err error, proxyAddr string) error {
 			Message: fmt.Sprintf("The Agent Vault proxy at %s doesn't serve database and SSH services yet: update it to the latest Infisical CLI and restart it.", proxyAddr)}
 	}
 	var refused *agentvault.ProxyRefusedError
+	if errors.As(err, &refused) && refused.SessionInvalid() {
+		return errAgentVaultConnectSessionInvalid(err)
+	}
 	if errors.As(err, &refused) {
 		message := strings.TrimSuffix(refused.Message, ".") + "."
 		return &util.CLIError{Code: errCodeServiceRefused, Cause: err, Message: strings.ToUpper(message[:1]) + message[1:]}

@@ -450,7 +450,7 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	}
 	env := withAgentVaultConnectEnv(
 		buildAgentVaultRunEnv(os.Environ(), proxyAddr, sessionToken, caPath, extraNoProxy),
-		proxyAddr, sessionToken, caPath, config.INFISICAL_URL)
+		proxyAddr, sessionToken, caPath, config.INFISICAL_URL, cmd.Flags().Changed("domain"))
 
 	printAgentVaultRunSummary(proxyAddr, caResp, servedFingerprint, minted, project, tokenSource, bundleSource)
 
@@ -769,15 +769,20 @@ func buildAgentVaultRunEnv(parent []string, proxyAddr, sessionToken, caPath, ext
 // The address goes into the agent's proxy URL with the session token as the password, so anything that is
 // not a bare host and port reaches the agent as a malformed URL, and curl prints that URL, token included.
 func validateProxyAddr(addr string) error {
+	return validateProxyAddrFrom(addr, "--proxy")
+}
+
+// source is where the address came from (a flag or a variable), so the error names what to fix.
+func validateProxyAddrFrom(addr, source string) error {
 	if strings.ContainsAny(addr, "/?#") {
-		return fmt.Errorf("--proxy must be host:port with nothing after the port, such as 10.0.1.5:17323, got %q", addr)
+		return fmt.Errorf("%s must be host:port with nothing after the port, such as 10.0.1.5:17323, got %q", source, addr)
 	}
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil || host == "" || strings.ContainsAny(host, " \t@") {
-		return fmt.Errorf("--proxy must be host:port, such as 10.0.1.5:17323, got %q", addr)
+		return fmt.Errorf("%s must be host:port, such as 10.0.1.5:17323, got %q", source, addr)
 	}
 	if n, convErr := strconv.Atoi(port); convErr != nil || n < 1 || n > 65535 {
-		return fmt.Errorf("--proxy must name a port between 1 and 65535, got %q", addr)
+		return fmt.Errorf("%s must name a port between 1 and 65535, got %q", source, addr)
 	}
 	return nil
 }
@@ -813,8 +818,9 @@ func agentVaultCaFingerprint(certificatePEM string) ([]byte, string, error) {
 
 // What `infisical agent-vault connect` needs when the agent runs it: the session, the proxy, the CA file to trust
 // it by, and the Infisical the session belongs to. The token already reaches the agent in HTTPS_PROXY, so naming it
-// again exposes nothing new. A domain the operator set is left as it is.
-func withAgentVaultConnectEnv(env []string, proxyAddr, sessionToken, caPath, apiURL string) []string {
+// again exposes nothing new. A domain the operator's environment set is left as it is, unless --domain was passed:
+// then the session is on that Infisical, and an inherited one would send the agent's lookups elsewhere.
+func withAgentVaultConnectEnv(env []string, proxyAddr, sessionToken, caPath, apiURL string, domainFlag bool) []string {
 	set := map[string]string{
 		agentVaultSessionTokenEnv: sessionToken,
 		agentVaultProxyAddressEnv: proxyAddr,
@@ -842,7 +848,11 @@ func withAgentVaultConnectEnv(env []string, proxyAddr, sessionToken, caPath, api
 		}
 		for _, name := range util.DomainEnvNames {
 			if sameKey(key, name) {
-				hasDomain = true
+				if domainFlag && apiURL != "" {
+					replaced = true
+				} else {
+					hasDomain = true
+				}
 			}
 		}
 		if !replaced {

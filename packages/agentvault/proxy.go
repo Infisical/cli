@@ -31,6 +31,9 @@ const (
 	// No server-level Read/WriteTimeout: they would cut CONNECT hijacks and long streaming responses.
 	frontReadHeaderTimeout = 30 * time.Second
 	frontIdleTimeout       = 5 * time.Minute
+	// How long a new connection on the HTTP port has to send its first byte, which says whether it speaks TLS.
+	// Every client speaks first, so this only bounds a connection that says nothing.
+	doorPeekTimeout = 5 * time.Second
 
 	// The write timeouts are absolute deadlines set at request start, so they bound only a response that
 	// has produced nothing yet.
@@ -213,7 +216,7 @@ func classifyGateRefusal(err error) gateRefusal {
 			"agent-vault: refused, Infisical rejected this proxy's token"}
 	}
 	if isSessionGone(err) {
-		return gateRefusal{log.Warn(), decisionBlocked, http.StatusForbidden, "the session is no longer valid, or it belongs to a different Agent Vault project than this proxy",
+		return gateRefusal{log.Warn(), decisionBlocked, http.StatusForbidden, sessionInvalidRefusal,
 			"agent-vault: refused, the session is no longer valid, or it belongs to a different Agent Vault project than this proxy"}
 	}
 	return gateRefusal{log.Error().Err(err), decisionError, http.StatusBadGateway, "failed to resolve the session",
@@ -648,7 +651,7 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, t tun
 	case isProxyTokenRejected(err):
 		decision, status, body = decisionError, http.StatusServiceUnavailable, proxyRevokedBody
 	case isSessionGone(err):
-		decision, status, body = decisionBlocked, http.StatusForbidden, "the session is no longer valid, or it belongs to a different Agent Vault project than this proxy"
+		decision, status, body = decisionBlocked, http.StatusForbidden, sessionInvalidRefusal
 	case errors.Is(err, errSessionResolve):
 		decision, status, body = decisionError, http.StatusBadGateway, "failed to resolve the session"
 	case err != nil:

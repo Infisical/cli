@@ -19,6 +19,9 @@ import (
 
 const (
 	connectDialTimeout = 10 * time.Second
+	// Longer than the proxy's own wait on Infisical (controlPlaneTimeout), so a slow first lookup of a session comes
+	// back as the proxy's answer rather than a timeout here.
+	connectResponseTimeout = 30 * time.Second
 	// The longest a CONNECT host label can be, so a longer service name can never be reached.
 	maxNativeServiceNameLength = 63
 	connectAcceptBackoffMax    = time.Second
@@ -35,6 +38,24 @@ type ProxyRefusedError struct {
 }
 
 func (e *ProxyRefusedError) Error() string { return e.Message }
+
+// The proxy answers a session that ended, or that belongs to another project, with this text and the same 403 it
+// uses for a service refusal, so only the text tells the two apart.
+const sessionInvalidRefusal = "the session is no longer valid, or it belongs to a different Agent Vault project than this proxy"
+
+// SessionInvalid is true when the proxy refused because the session itself can't be used any more.
+func (e *ProxyRefusedError) SessionInvalid() bool {
+	return e.Status == http.StatusForbidden && strings.HasPrefix(e.Message, sessionInvalidRefusal)
+}
+
+// LocalConnError is a failure on this machine's side of a tunnel, such as the local client resetting its
+// connection, as opposed to one between here and the proxy.
+type LocalConnError struct {
+	Err error
+}
+
+func (e *LocalConnError) Error() string { return e.Err.Error() }
+func (e *LocalConnError) Unwrap() error { return e.Err }
 
 // ConnectClient talks to the proxy's TLS door for `infisical agent-vault connect`. RootCAs holds only the proxy's
 // own CA, which the caller has already pinned, so the session token never goes to anything else.
@@ -81,7 +102,7 @@ func (c *ConnectClient) ListNativeServices(ctx context.Context) ([]NativeService
 		return nil, err
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(connectDialTimeout))
+	_ = conn.SetDeadline(time.Now().Add(connectResponseTimeout))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+ProxyTLSServerName+NativeServicesPath, nil)
 	if err != nil {
@@ -97,9 +118,6 @@ func (c *ConnectClient) ListNativeServices(ctx context.Context) ([]NativeService
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, ErrProxyTooOld
-	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, refusalOf(resp)
 	}
@@ -132,7 +150,7 @@ func (c *ConnectClient) connect(ctx context.Context, service string, probe bool)
 	if err != nil {
 		return nil, err
 	}
-	_ = conn.SetDeadline(time.Now().Add(connectDialTimeout))
+	_ = conn.SetDeadline(time.Now().Add(connectResponseTimeout))
 
 	target := net.JoinHostPort(strings.ToLower(service)+NativeServiceSuffix, NativeServicePort)
 	probeHeader := ""
@@ -155,10 +173,6 @@ func (c *ConnectClient) connect(ctx context.Context, service string, probe bool)
 	switch {
 	case probe && resp.StatusCode == http.StatusNoContent:
 		return conn, nil
-	// Only a proxy that predates named services opens a tunnel to a probe.
-	case probe && resp.StatusCode == http.StatusOK:
-		conn.Close()
-		return nil, ErrProxyTooOld
 	case !probe && resp.StatusCode == http.StatusOK:
 		_ = conn.SetDeadline(time.Time{})
 		// The server can speak right behind the 200 (an SSH or MySQL server does), so what was buffered is kept.
@@ -197,7 +211,7 @@ func (c *ConnectClient) ServeLocal(ctx context.Context, ln net.Listener, service
 				return nil
 			}
 			// A full file table and the like pass; give them a moment rather than spinning or giving up.
-			onError(err)
+			onError(&LocalConnError{Err: err})
 			time.Sleep(backoff)
 			backoff = min(2*backoff, connectAcceptBackoffMax)
 			continue
@@ -213,6 +227,10 @@ func (c *ConnectClient) ServeLocal(ctx context.Context, ln net.Listener, service
 }
 
 func (c *ConnectClient) tunnel(ctx context.Context, local net.Conn, service NativeServiceInfo) error {
+	// Set before the first-byte read below, so a client that connects and stays silent is still closed on cancel.
+	stopLocal := context.AfterFunc(ctx, func() { _ = local.Close() })
+	defer stopLocal()
+
 	var first []byte
 	if waitsForClient(service.Type) {
 		buf := make([]byte, 1)
@@ -221,7 +239,7 @@ func (c *ConnectClient) tunnel(ctx context.Context, local net.Conn, service Nati
 			if err == nil || errors.Is(err, io.EOF) {
 				return nil
 			}
-			return err
+			return &LocalConnError{Err: err}
 		}
 		first = buf[:n]
 	}
@@ -238,10 +256,7 @@ func (c *ConnectClient) tunnel(ctx context.Context, local net.Conn, service Nati
 	}
 
 	// Closing either side ends the other, so a client that never closes doesn't keep a dead tunnel open.
-	stop := context.AfterFunc(ctx, func() {
-		_ = local.Close()
-		_ = upstream.Close()
-	})
+	stop := context.AfterFunc(ctx, func() { _ = upstream.Close() })
 	defer stop()
 
 	var wg sync.WaitGroup

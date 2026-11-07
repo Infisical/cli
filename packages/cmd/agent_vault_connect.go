@@ -7,16 +7,21 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/agentvault"
 	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/util"
+	"github.com/posthog/posthog-go"
 	"github.com/spf13/cobra"
 )
 
@@ -31,15 +36,19 @@ var agentVaultConnectCmd = &cobra.Command{
 	Short: "Open local ports to the database and SSH services in a session",
 	Long: `Open local ports to the database and SSH services in an Agent Vault session.
 
-Each service gets its own port on 127.0.0.1, and a ready-to-run command is printed for it. Connect your usual
-client (psql, mysql, ssh) there: each connection is tunnelled to the Agent Vault proxy over TLS, and the proxy
-logs in with the service's account, so no password is needed. The ports stay open until you stop this command.
+Each service gets its own port on 127.0.0.1, and its address and an example command are printed once the port is
+open. Connect your usual client (psql, mysql, ssh) there with any username and no password: each connection is
+tunnelled to the Agent Vault proxy over TLS, and the proxy logs in with the service's account. The ports stay
+open until you stop this command. With one service, --port picks its local port; otherwise the system picks free
+ones. With --all, a service the proxy refuses is skipped and the reason printed.
 
 The session token and proxy address are read from INFISICAL_AGENT_VAULT_SESSION_TOKEN and
-INFISICAL_AGENT_VAULT_PROXY_ADDRESS, which 'agent-vault run' sets for the agent, or from the flags. The proxy's
-certificate authority is trusted from the file 'agent-vault run' wrote, else from the fingerprints Infisical lists
-for the session's proxies, else from --ca-fingerprint.`,
+INFISICAL_AGENT_VAULT_PROXY_ADDRESS, which 'agent-vault run' sets for the agent, or from the flags. When
+--ca-fingerprint is passed, the proxy's certificate authority must match it, whatever else would trust it.
+Otherwise the proxy is trusted from the CA file 'agent-vault run' wrote, else from the fingerprints Infisical
+lists for the session's proxies.`,
 	Example: `  infisical agent-vault connect analytics
+  infisical agent-vault connect analytics --port 5432
   infisical agent-vault connect analytics bastion
   infisical agent-vault connect --all`,
 	Args: func(cmd *cobra.Command, args []string) error {
@@ -59,6 +68,15 @@ for the session's proxies, else from --ca-fingerprint.`,
 
 func runAgentVaultConnect(cmd *cobra.Command, args []string) {
 	connectAll, _ := cmd.Flags().GetBool("all")
+	port, _ := cmd.Flags().GetInt("port")
+	if cmd.Flags().Changed("port") {
+		if connectAll || len(args) != 1 {
+			exitWithError(cmd, errAgentVaultConnectPortNeedsOneService())
+		}
+		if port < 1 || port > 65535 {
+			exitWithError(cmd, errAgentVaultConnectInvalidPort(port))
+		}
+	}
 
 	// Under `agent-vault run` SSL_CERT_FILE holds only the proxy's CA, which on Linux replaces the system roots and
 	// would fail the direct call to Infisical. This command pins the proxy's CA itself, so it never needs that file.
@@ -83,7 +101,11 @@ func runAgentVaultConnect(cmd *cobra.Command, args []string) {
 	if proxyAddr == "" {
 		exitWithError(cmd, errAgentVaultConnectProxyRequired())
 	}
-	if err := validateProxyAddr(proxyAddr); err != nil {
+	proxySource := "--proxy"
+	if !cmd.Flags().Changed("proxy") {
+		proxySource = agentVaultProxyAddressEnv
+	}
+	if err := validateProxyAddrFrom(proxyAddr, proxySource); err != nil {
 		exitWithError(cmd, &util.CLIError{Code: errCodeInvalidFlagValue, Message: err.Error() + "."})
 	}
 
@@ -92,7 +114,7 @@ func runAgentVaultConnect(cmd *cobra.Command, args []string) {
 		exitWithError(cmd, errAgentVaultConnectEmptyFlag("--ca-fingerprint", ""))
 	}
 
-	roots, err := trustAgentVaultProxy(proxyAddr, sessionToken, pinnedFingerprint)
+	roots, trustSource, err := trustAgentVaultProxy(proxyAddr, sessionToken, pinnedFingerprint)
 	if err != nil {
 		exitWithError(cmd, err)
 	}
@@ -111,36 +133,68 @@ func runAgentVaultConnect(cmd *cobra.Command, args []string) {
 	}
 
 	// Every service is checked before any port opens, so a refusal is this command's error, not a failed login later.
+	// Named services are all or nothing; --all opens what it can, since one broken service shouldn't take the rest.
+	var refused []error
+	open := services[:0:0]
 	for _, service := range services {
-		if err := client.Probe(ctx, service.Name); err != nil {
-			exitWithError(cmd, classifyAgentVaultConnectError(err, proxyAddr))
+		err := client.Probe(ctx, service.Name)
+		if err == nil {
+			open = append(open, service)
+			continue
 		}
+		classified := classifyAgentVaultConnectError(err, proxyAddr)
+		if !connectAll || !isAgentVaultServiceRefusal(err) {
+			exitWithError(cmd, classified)
+		}
+		fmt.Fprintf(os.Stderr, "%s: %s\n", service.Name, classified.Error())
+		refused = append(refused, classified)
 	}
+	if len(open) == 0 {
+		if len(refused) == 1 {
+			exitWithError(cmd, refused[0])
+		}
+		exitWithError(cmd, errAgentVaultConnectAllRefused())
+	}
+	services = open
 
 	listeners := make([]net.Listener, len(services))
 	for i, service := range services {
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", fmt.Sprint(port)))
 		if err != nil {
-			util.HandleError(err, fmt.Sprintf("Unable to open a local port for %s", service.Name))
+			exitWithError(cmd, errAgentVaultConnectLocalPort(service.Name, port, err))
 		}
 		listeners[i] = ln
 	}
 
-	width := 0
-	for _, service := range services {
-		width = max(width, len(service.Name))
-	}
+	blocks := make([]string, len(services))
 	for i, service := range services {
-		port := listeners[i].Addr().(*net.TCPAddr).Port
-		fmt.Printf("%-*s  %s\n", width, service.Name, agentVaultConnectCommand(service, port))
+		blocks[i] = agentVaultConnectBlock(service, listeners[i].Addr().(*net.TCPAddr).Port)
 	}
-	fmt.Fprintln(os.Stderr, "\nUse any username and don't pass a password: the proxy logs in with each service's account. Press Ctrl+C to close the ports.")
+	fmt.Print(strings.Join(blocks, "\n"))
+	if silent, _ := cmd.Flags().GetBool("silent"); !silent {
+		fmt.Fprintln(os.Stderr, "\nUse any username and no password: the proxy logs in with each service's account. Press Ctrl+C to close the ports.")
+	}
+
+	Telemetry.CaptureEventAsync("cli-command:agent-vault connect", posthog.NewProperties().
+		Set("version", util.CLI_VERSION).
+		Set("platform", runtime.GOOS).
+		Set("all", connectAll).
+		Set("services", len(services)).
+		Set("refused", len(refused)).
+		Set("serviceTypes", agentVaultConnectServiceTypes(services)).
+		Set("customPort", port != 0).
+		Set("trust", trustSource))
 
 	done := make(chan struct{}, len(services))
 	for i, service := range services {
 		go func() {
 			defer func() { done <- struct{}{} }()
 			onError := func(err error) {
+				var local *agentvault.LocalConnError
+				if errors.As(err, &local) {
+					fmt.Fprintf(os.Stderr, "%s: a local connection failed: %s\n", service.Name, local.Err)
+					return
+				}
 				fmt.Fprintf(os.Stderr, "%s: %s\n", service.Name, classifyAgentVaultConnectError(err, proxyAddr).Error())
 			}
 			_ = client.ServeLocal(ctx, listeners[i], service, onError)
@@ -149,6 +203,26 @@ func runAgentVaultConnect(cmd *cobra.Command, args []string) {
 	for range services {
 		<-done
 	}
+}
+
+// A refusal of one service, which --all can skip. One that ends the session or comes from a proxy that can't
+// reach Infisical would refuse every other service too.
+func isAgentVaultServiceRefusal(err error) bool {
+	var refused *agentvault.ProxyRefusedError
+	return errors.As(err, &refused) && refused.Status == http.StatusForbidden && !refused.SessionInvalid()
+}
+
+func agentVaultConnectServiceTypes(services []agentvault.NativeServiceInfo) []string {
+	seen := map[string]bool{}
+	var types []string
+	for _, service := range services {
+		if !seen[service.Type] {
+			seen[service.Type] = true
+			types = append(types, service.Type)
+		}
+	}
+	sort.Strings(types)
+	return types
 }
 
 func pickAgentVaultConnectServices(available []agentvault.NativeServiceInfo, names []string, all bool) ([]agentvault.NativeServiceInfo, error) {
@@ -181,57 +255,96 @@ func pickAgentVaultConnectServices(available []agentvault.NativeServiceInfo, nam
 	return picked, nil
 }
 
-// The same commands PAM's local access prints. Postgres turns TLS off on the local hop, which the proxy refuses
-// anyway, so an inherited PGSSLMODE=require can't fail the login.
-func agentVaultConnectCommand(service agentvault.NativeServiceInfo, port int) string {
-	switch service.Type {
+var agentVaultConnectTypeLabels = map[string]string{"postgres": "PostgreSQL", "mysql": "MySQL", "ssh": "SSH"}
+
+// The database is left out of the examples: the proxy connects to the service's own database whatever the client
+// asks for, and a name pasted into a shell command could run something else. Postgres turns TLS off on the local
+// hop, which the proxy refuses anyway, so an inherited PGSSLMODE=require can't fail the login.
+func agentVaultConnectBlock(service agentvault.NativeServiceInfo, port int) string {
+	title := service.Name
+	if label, ok := agentVaultConnectTypeLabels[service.Type]; ok {
+		title += " (" + label + ")"
+	}
+	block := fmt.Sprintf("%s\n  Address:  127.0.0.1:%d\n", title, port)
+	if example := agentVaultConnectExample(service.Type, port); example != "" {
+		block += fmt.Sprintf("  Example:  %s\n", example)
+	}
+	return block
+}
+
+func agentVaultConnectExample(serviceType string, port int) string {
+	switch serviceType {
 	case "postgres":
-		return fmt.Sprintf(`psql "postgres://agent@127.0.0.1:%d/%s?sslmode=disable"`, port, service.Database)
+		return fmt.Sprintf(`psql "postgres://agent@127.0.0.1:%d/?sslmode=disable"`, port)
 	case "mysql":
-		return fmt.Sprintf("mysql -h 127.0.0.1 -P %d -u agent %s", port, service.Database)
+		return fmt.Sprintf("mysql -h 127.0.0.1 -P %d -u agent", port)
 	case "ssh":
 		// The proxy presents a new host key on every connection, and the hop is local, so the key isn't checked.
 		return fmt.Sprintf("ssh -p %d -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null agent@127.0.0.1", port)
 	}
-	return fmt.Sprintf("127.0.0.1:%d", port)
+	return ""
 }
 
-// trustAgentVaultProxy returns the pool holding only the proxy's CA, or refuses. It never falls back to an unpinned
-// connection: whoever can block Infisical must not be able to make `connect` trust whatever answers at the address.
-func trustAgentVaultProxy(proxyAddr, sessionToken, pinnedFingerprint string) (*x509.CertPool, error) {
+const (
+	agentVaultTrustPinned    = "pinned"
+	agentVaultTrustRunCa     = "run-ca-file"
+	agentVaultTrustInfisical = "infisical"
+)
+
+// trustAgentVaultProxy returns the pool holding only the proxy's CA and what vouched for it, or refuses. It never
+// falls back to an unpinned connection: whoever can block Infisical must not be able to make `connect` trust
+// whatever answers at the address.
+func trustAgentVaultProxy(proxyAddr, sessionToken, pinnedFingerprint string) (*x509.CertPool, string, error) {
 	caResp, err := fetchAgentVaultProxyCa(proxyAddr)
 	if err != nil {
-		return nil, errAgentVaultConnectProxyUnreachable(proxyAddr, err)
+		return nil, "", errAgentVaultConnectProxyUnreachable(proxyAddr, err)
 	}
 	servedPEM, served, err := agentVaultCaFingerprint(caResp.Certificate)
 	if err != nil {
-		return nil, errAgentVaultConnectProxyUntrusted(proxyAddr, err)
+		return nil, "", errAgentVaultConnectProxyUntrusted(proxyAddr, err)
 	}
 
-	trusted := false
-	if fingerprints, ok := agentVaultRunCaFingerprints(); ok && containsAgentVaultFingerprint(fingerprints, served) {
-		trusted = true
-	}
-	if !trusted {
-		fingerprints, err := fetchAgentVaultSessionProxyCaFingerprints(sessionToken)
-		trusted = err == nil && containsAgentVaultFingerprint(fingerprints, served)
-	}
-	if pinnedFingerprint != "" {
-		// A pin always has the last word: it can make up for Infisical being out of reach, but never be overruled.
+	source := ""
+	switch {
+	// A pin always has the last word: it can make up for Infisical being out of reach, but never be overruled.
+	case pinnedFingerprint != "":
 		if !agentVaultFingerprintsEqual(pinnedFingerprint, served) {
-			return nil, errAgentVaultConnectFingerprintMismatch(proxyAddr, served)
+			return nil, "", errAgentVaultConnectFingerprintMismatch(proxyAddr, served)
 		}
-		trusted = true
-	}
-	if !trusted {
-		return nil, errAgentVaultConnectProxyUntrusted(proxyAddr, nil)
+		source = agentVaultTrustPinned
+	default:
+		if fingerprints, ok := agentVaultRunCaFingerprints(); ok && containsAgentVaultFingerprint(fingerprints, served) {
+			source = agentVaultTrustRunCa
+			break
+		}
+		fingerprints, err := fetchAgentVaultSessionProxyCaFingerprints(sessionToken)
+		if err != nil {
+			return nil, "", classifyAgentVaultFingerprintsError(err, proxyAddr)
+		}
+		if !containsAgentVaultFingerprint(fingerprints, served) {
+			return nil, "", errAgentVaultConnectProxyUntrusted(proxyAddr, nil)
+		}
+		source = agentVaultTrustInfisical
 	}
 
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(servedPEM) {
-		return nil, errAgentVaultConnectProxyUntrusted(proxyAddr, errors.New("the proxy's certificate authority could not be loaded"))
+		return nil, "", errAgentVaultConnectProxyUntrusted(proxyAddr, errors.New("the proxy's certificate authority could not be loaded"))
 	}
-	return pool, nil
+	return pool, source, nil
+}
+
+func classifyAgentVaultFingerprintsError(err error, proxyAddr string) *util.CLIError {
+	var apiErr *api.APIError
+	switch {
+	case errors.As(err, &apiErr) && (apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden):
+		return errAgentVaultConnectSessionInvalid(err)
+	case isInfisicalRouteMissing(err):
+		return errAgentVaultConnectFingerprintsNotListed(proxyAddr, err)
+	case !errors.As(err, &apiErr):
+		return errAgentVaultConnectInfisicalUnreachable(proxyAddr, strings.TrimSuffix(config.INFISICAL_URL, "/api"), err)
+	}
+	return errAgentVaultConnectProxyUntrusted(proxyAddr, err)
 }
 
 // The fingerprints of the certificates in the CA file `agent-vault run` wrote, when this runs under it.
@@ -284,7 +397,8 @@ func containsAgentVaultFingerprint(fingerprints []string, fingerprint string) bo
 func init() {
 	agentVaultConnectCmd.Flags().String("session-token", "", "the session token, or set "+agentVaultSessionTokenEnv)
 	agentVaultConnectCmd.Flags().String("proxy", "", "the proxy's host:port, or set "+agentVaultProxyAddressEnv)
-	agentVaultConnectCmd.Flags().String("ca-fingerprint", "", "trust the proxy only if its certificate authority has this SHA256 fingerprint, shown on the proxy's page in Infisical")
-	agentVaultConnectCmd.Flags().Bool("all", false, "open a port for every database and SSH service in the session")
+	agentVaultConnectCmd.Flags().String("ca-fingerprint", "", "trust the proxy only if its certificate authority has this SHA256 fingerprint, shown in the Certificate Authority column on the Proxies page in Infisical")
+	agentVaultConnectCmd.Flags().Bool("all", false, "open a port for every database and SSH service in the session, skipping any the proxy refuses")
+	agentVaultConnectCmd.Flags().Int("port", 0, "the local port to open, when connecting to one service (default: a free port)")
 	agentVaultCmd.AddCommand(agentVaultConnectCmd)
 }
