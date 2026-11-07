@@ -147,13 +147,18 @@ func (r *sessionLogRecorder) record(g *sessionLogGrant, rec sessionLogRecord) {
 	rec.Seq = spool.nextSeq
 	spool.nextSeq++
 	rec.ProxyID = r.proxyID
-	now := r.now()
 	// Without the monotonic reading, Before and After compare wall time, which is what Ts shows.
-	rec.at = now.Round(0)
+	now := r.now().Round(0)
+	// A caller that writes a row after its activity started (a database or SSH row) stamps it with that start.
+	if rec.at.IsZero() {
+		rec.at = now
+	} else {
+		rec.at = rec.at.Round(0)
+	}
 	rec.Ts = rec.at.UTC().Format(time.RFC3339Nano)
-	// rec.at, not now: idle close must count time asleep, while lastFlushAt stays monotonic so a
+	// Wall time, not monotonic: idle close must count time asleep, while lastFlushAt stays monotonic so a
 	// backward clock step cannot stall the flush interval.
-	spool.lastRecordAt = rec.at
+	spool.lastRecordAt = now
 	rec.size = rec.estimateSize()
 
 	if !r.admitLocked(g, rec.size) {
@@ -410,6 +415,11 @@ func (r *sessionLogRecorder) sealNext(spool *sessionLogSpool, unsealed map[*sess
 	unsealed[spool] -= len(records)
 	r.unsealedRecords -= len(records)
 	dropped := spool.ring.takeUnreportedDrops()
+	if dropped > 0 {
+		// Added at sealing rather than when the rows are dropped: while the ring stays full every new row drops
+		// one, and a note per row would take the place of the rows it reports on.
+		records = append(records, spool.droppedRowsNote(records[len(records)-1], dropped))
+	}
 	r.mu.Unlock()
 	logUnrecordedRequests(spool.sessionID, dropped)
 

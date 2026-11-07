@@ -80,6 +80,16 @@ func (f *fakeShipper) createChunk(_ context.Context, final bool, sessionID strin
 // Opens each upload with the test key and counts the records in it, in upload order.
 func (f *fakeShipper) uploadedRecordCounts(t *testing.T) []int {
 	t.Helper()
+	var counts []int
+	for _, records := range f.uploadedRecords(t) {
+		counts = append(counts, len(records))
+	}
+	return counts
+}
+
+// Opens each upload with the test key, in upload order.
+func (f *fakeShipper) uploadedRecords(t *testing.T) [][]sessionLogRecord {
+	t.Helper()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -91,7 +101,7 @@ func (f *fakeShipper) uploadedRecordCounts(t *testing.T) []int {
 	}
 	block, _ := aes.NewCipher(make([]byte, 32))
 	gcm, _ := cipher.NewGCM(block)
-	var counts []int
+	var uploads [][]sessionLogRecord
 	for _, call := range f.calls {
 		if call.kind != "put" {
 			continue
@@ -108,9 +118,9 @@ func (f *fakeShipper) uploadedRecordCounts(t *testing.T) []int {
 		if post.records != len(records) {
 			t.Fatalf("the chunk uploaded to %s reported %d records but carries %d", call.url, post.records, len(records))
 		}
-		counts = append(counts, len(records))
+		uploads = append(uploads, records)
 	}
-	return counts
+	return uploads
 }
 
 func (f *fakeShipper) putObject(_ context.Context, url string, ciphertext []byte) error {
@@ -370,6 +380,124 @@ func TestTheProxyWideFuseDropsTheNewestAndCountsThem(t *testing.T) {
 	}
 	if want := uint64(sessions*sessionLogSpoolCapacity - sessionLogTotalCapacity); counted != want {
 		t.Fatalf("the fuse counted %d dropped requests, expected %d; nothing else reports them", counted, want)
+	}
+}
+
+func aNativeRecord(output string) sessionLogRecord {
+	kind := serviceKindSSH
+	return sessionLogRecord{Method: "SSH", Host: "10.0.0.5", Port: "22", Decision: decisionBrokered, ServiceType: &kind, Native: &nativeDetail{Output: output}}
+}
+
+func TestTheProxyWideByteCapDropsTheNewestAndCountsThem(t *testing.T) {
+	log, _, _ := newTestLog(&fakeShipper{})
+	output := strings.Repeat("y", nativeLogOutputCap)
+	perSession := sessionLogSpoolBytes/aNativeRecordSize(output) + 3
+
+	sessions := sessionLogTotalBytes/sessionLogSpoolBytes + 2
+	for i := 0; i < sessions; i++ {
+		grant := testGrant(fmt.Sprintf("s%d", i))
+		for j := 0; j < perSession; j++ {
+			log.record(grant, aNativeRecord(output))
+		}
+	}
+
+	if log.unsealedBytes > sessionLogTotalBytes {
+		t.Fatalf("the proxy holds %d bytes, past the %d cap", log.unsealedBytes, sessionLogTotalBytes)
+	}
+	var held int
+	for _, spool := range log.spools {
+		held += spool.ring.bytes
+	}
+	if held != log.unsealedBytes {
+		t.Fatalf("the rings hold %d bytes but the recorder counts %d", held, log.unsealedBytes)
+	}
+	// Past the cap new rows are refused, so the first session keeps its rows and the last one gets none.
+	if first := log.spools["s0"]; first.ring.len() == 0 {
+		t.Fatal("the first session lost its rows to the proxy-wide cap; it must refuse the newest instead")
+	}
+	last := log.spools[fmt.Sprintf("s%d", sessions-1)]
+	if last.ring.len() != 0 || last.ring.unreportedDrops != uint64(perSession) {
+		t.Fatalf("the last session holds %d rows and counted %d drops, want none held and %d counted", last.ring.len(), last.ring.unreportedDrops, perSession)
+	}
+}
+
+func aNativeRecordSize(output string) int {
+	rec := aNativeRecord(output)
+	return rec.estimateSize()
+}
+
+// A few large rows reach the byte trigger long before the row count, and must be sealed without waiting for the tick.
+func TestReachingTheFlushBytesWakesTheLoop(t *testing.T) {
+	shipper := &fakeShipper{}
+	log, _, _ := newTestLog(shipper)
+	grant := testGrant("s1")
+	output := strings.Repeat("y", nativeLogOutputCap)
+	toWake := (sessionLogFlushBytes + aNativeRecordSize(output) - 1) / aNativeRecordSize(output)
+
+	for i := 0; i < toWake-1; i++ {
+		log.record(grant, aNativeRecord(output))
+	}
+	if len(log.wake) != 0 {
+		t.Fatalf("the loop was woken with %d records under the byte trigger", toWake-1)
+	}
+	log.record(grant, aNativeRecord(output))
+	if len(log.wake) != 1 {
+		t.Fatalf("the wake channel holds %d after %d bytes, expected one wake-up", len(log.wake), log.unsealedBytes)
+	}
+
+	log.flush(context.Background(), flushWake)
+	var shipped int
+	for _, count := range shipper.uploadedRecordCounts(t) {
+		shipped += count
+	}
+	if shipped != toWake {
+		t.Fatalf("the wake shipped %d records, want all %d", shipped, toWake)
+	}
+}
+
+// The admin reading the session must see that rows are missing, not only the proxy's own log.
+func TestDroppedRowsAreNotedInTheSession(t *testing.T) {
+	shipper := &fakeShipper{}
+	log, _, _ := newTestLog(shipper)
+	grant := testGrant("s1")
+	output := strings.Repeat("y", nativeLogOutputCap)
+	rows := sessionLogSpoolBytes/aNativeRecordSize(output) + 3
+
+	for i := 0; i < rows; i++ {
+		log.record(grant, aNativeRecord(output))
+	}
+	dropped := log.spools["s1"].ring.unreportedDrops
+	if dropped == 0 {
+		t.Fatal("nothing was dropped, so this test proves nothing")
+	}
+	log.flush(context.Background(), flushFinal)
+
+	uploads := shipper.uploadedRecords(t)
+	lastUpload := uploads[len(uploads)-1]
+	note := lastUpload[len(lastUpload)-1]
+	want := fmt.Sprintf("%d rows were dropped because the session log was full", dropped)
+	if note.Native == nil || note.Native.Note != want {
+		t.Fatalf("the last record is %+v, want a note saying %q", note.Native, want)
+	}
+	var notes int
+	var maxSeq uint64
+	for _, upload := range uploads {
+		for _, rec := range upload {
+			if rec.Native != nil && rec.Native.Note != "" {
+				notes++
+			}
+			maxSeq = max(maxSeq, rec.Seq)
+		}
+	}
+	if notes != 1 || note.Seq != maxSeq || note.Ts != lastUpload[len(lastUpload)-2].Ts {
+		t.Fatalf("%d notes, note seq %d of %d, ts %s, want one note after the rows it sealed with", notes, note.Seq, maxSeq, note.Ts)
+	}
+
+	log.record(grant, aNativeRecord("z"))
+	log.flush(context.Background(), flushFinal)
+	uploads = shipper.uploadedRecords(t)
+	if next := uploads[len(uploads)-1]; len(next) != 1 || next[0].Native.Note != "" {
+		t.Fatalf("the next chunk is %+v, want only its row once the drops were noted", next)
 	}
 }
 
@@ -1651,5 +1779,23 @@ func TestIdleCloseIgnoresTheSleepingClock(t *testing.T) {
 
 	if at := log.spools["s1"].lastRecordAt; at != at.Round(0) {
 		t.Fatal("lastRecordAt carries a monotonic reading, so time asleep would not count toward idle close")
+	}
+}
+
+func TestADrainedRingSlotHoldsNothing(t *testing.T) {
+	ring := newSessionLogRing(4)
+	for i := 0; i < 3; i++ {
+		ring.push(sessionLogRecord{Seq: uint64(i), Native: &nativeDetail{Output: "big output"}})
+	}
+
+	ring.drain(2)
+
+	for i, rec := range ring.buf {
+		if rec.Seq == 2 {
+			continue
+		}
+		if rec.Native != nil || rec.Seq != 0 {
+			t.Fatalf("slot %d still holds a drained record: %+v", i, rec)
+		}
 	}
 }

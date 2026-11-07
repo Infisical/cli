@@ -17,12 +17,15 @@ const (
 	nativeLogInputCap    = 8 << 10
 	nativeLogOutputCap   = 64 << 10
 	nativeLogShellWindow = 60 * time.Second
+	// PAM's SSH handler can still flush a channel's last lines after it has called Close, so those are gathered
+	// into one row for this long instead of a row each.
+	nativeLogLateWindow = 500 * time.Millisecond
 )
 
-const nativeUnrecordedChannelNote = "port forwarding or another channel was opened through this SSH connection; its traffic isn't recorded"
+const nativeUnrecordedChannelNote = "Port forwarding or another channel was opened through this SSH connection; its traffic isn't recorded"
 
-// What a database or SSH connection did. A database row is one statement; an SSH row is one command with its
-// output, one file operation, or a stretch of an interactive shell's screen.
+// What a database or SSH connection did. A database row is one statement; an SSH row is one command, a stretch of
+// what was piped into it and what it printed, one file operation, or a stretch of an interactive shell's screen.
 type nativeDetail struct {
 	Statement string `json:"statement,omitempty"`
 	Command   string `json:"command,omitempty"`
@@ -35,24 +38,37 @@ type nativeDetail struct {
 	Truncated bool   `json:"truncated,omitempty"`
 }
 
+// A row still taking lines, written once its window ends, it fills, or the connection closes.
+type nativeOpenRow struct {
+	detail *nativeDetail
+	since  time.Time
+}
+
 // One per connection, implementing PAM's session.SessionLogger. PAM's SSH handler logs from several goroutines
 // and can log after it has called Close, so every method takes the lock and a late event is still recorded.
 type nativeSessionLogger struct {
 	ps  *proxyServer
 	key string
 	svc *resolvedService
+	now func() time.Time
 
-	mu         sync.Mutex
-	grant      *sessionLogGrant
-	exec       *nativeDetail
-	shell      *nativeDetail
-	shellSince time.Time
-	unrecorded bool
-	closed     bool
+	mu    sync.Mutex
+	grant *sessionLogGrant
+	// The command's own row is written when it starts. What is piped into it and what it prints follow in rows
+	// of their own, so a long command shows up while it runs. Its stdin and output are capped across those rows,
+	// so one large dump can't push the session's earlier rows out of the spool.
+	exec        nativeOpenRow
+	execStdin   int
+	execOutput  int
+	execHasPipe bool
+	shell       nativeOpenRow
+	timer       *time.Timer
+	unrecorded  bool
+	closed      bool
 }
 
 func newNativeSessionLogger(ps *proxyServer, key string, grant *sessionLogGrant, svc *resolvedService) *nativeSessionLogger {
-	return &nativeSessionLogger{ps: ps, key: key, grant: grant, svc: svc}
+	return &nativeSessionLogger{ps: ps, key: key, grant: grant, svc: svc, now: time.Now}
 }
 
 func (l *nativeSessionLogger) LogEntry(entry session.SessionLogEntry) error {
@@ -62,7 +78,12 @@ func (l *nativeSessionLogger) LogEntry(entry session.SessionLogEntry) error {
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.writeLocked(detail)
+	// PAM stamps a statement when it was sent, so a long query still shows when it started.
+	at := entry.Timestamp
+	if at.IsZero() {
+		at = l.now()
+	}
+	l.writeLocked(detail, at)
 	return nil
 }
 
@@ -71,69 +92,138 @@ func (l *nativeSessionLogger) LogSessionEvent(event session.SessionEvent) error 
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	now := l.now()
 
 	switch event.ChannelType {
 	case session.SessionChannelExec:
-		l.logExecLocked(event.EventType, data)
+		l.logExecLocked(event.EventType, data, now)
 	case session.SessionChannelSFTP:
 		if event.EventType == session.SessionEventInput {
 			detail := &nativeDetail{}
 			appendCapped(&detail.File, data, nativeLogInputCap, &detail.Truncated)
-			l.writeLocked(detail)
+			l.writeLocked(detail, now)
 		}
 	case session.SessionChannelShell:
-		l.logShellLocked(data)
+		l.logShellLocked(data, now)
 	case session.SessionChannelRDP:
 	default:
 		// PAM forwards channels it can't read, such as port forwarding, and labels them with no type.
 		if !l.unrecorded {
 			l.unrecorded = true
-			l.writeLocked(&nativeDetail{Note: nativeUnrecordedChannelNote})
+			l.writeLocked(&nativeDetail{Note: nativeUnrecordedChannelNote}, now)
 		}
 	}
-	if l.closed {
-		l.flushLocked()
-	}
+	l.armTimerLocked(now)
 	return nil
 }
 
 // PAM reports an exec channel's command as "$ cmd", then each line of what the client pipes in as more input.
-func (l *nativeSessionLogger) logExecLocked(eventType session.SessionEventType, data string) {
+// Once a command has been piped something, a line starting with "$ " is more of that, or a file of shell
+// examples piped into cat would read as commands the agent ran.
+//
+// TODO: PAM's events carry no channel id, so two exec channels open at once on one connection (an ssh
+// ControlMaster) share these rows and can mix their stdin and output. A real command sent on such a connection
+// after another command's stdin is also kept as that stdin. Both need PAM to name the channel. And a first piped
+// line starting with "$ " still reads as a command: telling them apart needs PAM to mark the command event.
+func (l *nativeSessionLogger) logExecLocked(eventType session.SessionEventType, data string, now time.Time) {
 	if eventType == session.SessionEventInput {
-		if command, ok := strings.CutPrefix(data, "$ "); ok {
-			l.flushExecLocked()
-			l.exec = &nativeDetail{}
-			appendCapped(&l.exec.Command, command, nativeLogInputCap, &l.exec.Truncated)
+		if command, ok := strings.CutPrefix(data, "$ "); ok && !l.execHasPipe {
+			l.flushRowLocked(&l.exec)
+			l.execStdin, l.execOutput = 0, 0
+			detail := &nativeDetail{}
+			appendCapped(&detail.Command, command, nativeLogInputCap, &detail.Truncated)
+			l.writeLocked(detail, now)
 			return
 		}
-		if l.exec == nil {
-			l.exec = &nativeDetail{}
-		}
-		appendLine(&l.exec.Stdin, data, nativeLogInputCap, &l.exec.Truncated)
+		l.execHasPipe = true
+		l.appendExecLocked(&l.execStdin, data, nativeLogInputCap, now, func(d *nativeDetail) *string { return &d.Stdin })
 		return
 	}
-	if l.exec == nil {
-		l.exec = &nativeDetail{}
+	l.appendExecLocked(&l.execOutput, data, nativeLogOutputCap, now, func(d *nativeDetail) *string { return &d.Output })
+}
+
+// Adds a line to the command's open row. used counts what the command has recorded of this stream across all
+// its rows; once that reaches max the row that hit it is written at once, and the rest of the stream is dropped.
+func (l *nativeSessionLogger) appendExecLocked(used *int, line string, max int, now time.Time, field func(*nativeDetail) *string) {
+	if *used >= max {
+		// The stream filled its share exactly, so this line is the first one left out.
+		if l.exec.detail != nil && line != "" && *field(l.exec.detail) != "" {
+			l.exec.detail.Truncated = true
+			l.flushRowLocked(&l.exec)
+		}
+		return
 	}
-	appendLine(&l.exec.Output, data, nativeLogOutputCap, &l.exec.Truncated)
+	l.rollIfStaleLocked(&l.exec, now)
+	if l.exec.detail == nil {
+		l.exec = nativeOpenRow{detail: &nativeDetail{}, since: now}
+	}
+	dst := field(l.exec.detail)
+	before := len(*dst)
+	room := len(*dst) + max - *used
+	appendLine(dst, line, room, &l.exec.detail.Truncated)
+	*used += len(*dst) - before
+	if l.exec.detail.Truncated {
+		*used = max
+		l.flushRowLocked(&l.exec)
+	}
 }
 
 // A shell's input only appears when the shell didn't echo it, so the screen is recorded as it scrolls by, in rows
 // that close at the output cap or after a minute.
-func (l *nativeSessionLogger) logShellLocked(data string) {
-	now := time.Now()
-	if l.shell != nil && now.Sub(l.shellSince) >= nativeLogShellWindow {
-		l.flushShellLocked()
-	}
+func (l *nativeSessionLogger) logShellLocked(data string, now time.Time) {
+	l.rollIfStaleLocked(&l.shell, now)
 	// A row that can't take the next line closes first, so only a single line longer than the cap is cut.
-	if l.shell != nil && len(l.shell.Output)+1+len(data) > nativeLogOutputCap {
-		l.flushShellLocked()
+	if l.shell.detail != nil && len(l.shell.detail.Output)+1+len(data) > nativeLogOutputCap {
+		l.flushRowLocked(&l.shell)
 	}
-	if l.shell == nil {
-		l.shell = &nativeDetail{Shell: true}
-		l.shellSince = now
+	if l.shell.detail == nil {
+		l.shell = nativeOpenRow{detail: &nativeDetail{Shell: true}, since: now}
 	}
-	appendLine(&l.shell.Output, data, nativeLogOutputCap, &l.shell.Truncated)
+	appendLine(&l.shell.detail.Output, data, nativeLogOutputCap, &l.shell.detail.Truncated)
+}
+
+func (l *nativeSessionLogger) rollIfStaleLocked(row *nativeOpenRow, now time.Time) {
+	if row.detail != nil && now.Sub(row.since) >= nativeLogShellWindow {
+		l.flushRowLocked(row)
+	}
+}
+
+// One timer for the connection, armed only while a row is open: for the oldest open row's window, or for the
+// late window once the connection has closed.
+func (l *nativeSessionLogger) armTimerLocked(now time.Time) {
+	if l.timer != nil {
+		return
+	}
+	var wait time.Duration
+	switch {
+	case l.exec.detail == nil && l.shell.detail == nil:
+		return
+	case l.closed:
+		wait = nativeLogLateWindow
+	default:
+		deadline := time.Time{}
+		for _, row := range []nativeOpenRow{l.exec, l.shell} {
+			if row.detail != nil && (deadline.IsZero() || row.since.Before(deadline)) {
+				deadline = row.since
+			}
+		}
+		wait = deadline.Add(nativeLogShellWindow).Sub(now)
+	}
+	l.timer = time.AfterFunc(wait, l.flushDue)
+}
+
+func (l *nativeSessionLogger) flushDue() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.timer = nil
+	now := l.now()
+	if l.closed {
+		l.flushLocked()
+		return
+	}
+	l.rollIfStaleLocked(&l.exec, now)
+	l.rollIfStaleLocked(&l.shell, now)
+	l.armTimerLocked(now)
 }
 
 func (l *nativeSessionLogger) LogHttpEvent(session.HttpEvent) error { return nil }
@@ -142,30 +232,28 @@ func (l *nativeSessionLogger) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.closed = true
+	if l.timer != nil {
+		l.timer.Stop()
+		l.timer = nil
+	}
 	l.flushLocked()
 	return nil
 }
 
 func (l *nativeSessionLogger) flushLocked() {
-	l.flushExecLocked()
-	l.flushShellLocked()
+	l.flushRowLocked(&l.exec)
+	l.flushRowLocked(&l.shell)
 }
 
-func (l *nativeSessionLogger) flushExecLocked() {
-	if l.exec != nil {
-		l.writeLocked(l.exec)
-		l.exec = nil
+func (l *nativeSessionLogger) flushRowLocked(row *nativeOpenRow) {
+	if row.detail != nil {
+		l.writeLocked(row.detail, row.since)
+		*row = nativeOpenRow{}
 	}
 }
 
-func (l *nativeSessionLogger) flushShellLocked() {
-	if l.shell != nil {
-		l.writeLocked(l.shell)
-		l.shell = nil
-	}
-}
-
-func (l *nativeSessionLogger) writeLocked(detail *nativeDetail) {
+// at is when the row's activity started, which is the time it shows, however much later it is written.
+func (l *nativeSessionLogger) writeLocked(detail *nativeDetail, at time.Time) {
 	// The session's current grant, since logs can be switched off or on while a connection stays open. Once its
 	// cache entry is gone the last one known is used, so the final rows of an ended session are still kept.
 	if grant, ok := l.ps.cache.currentGrant(l.key); ok {
@@ -184,6 +272,7 @@ func (l *nativeSessionLogger) writeLocked(detail *nativeDetail) {
 		Service:     &l.svc.name,
 		ServiceType: &kind,
 		Native:      detail,
+		at:          at,
 	}
 	if l.svc.accessBundleName != "" {
 		rec.AccessBundle = &l.svc.accessBundleName
