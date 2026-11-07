@@ -1,11 +1,21 @@
 package cmd
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"io"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -91,7 +101,7 @@ func TestSkillsAreInstalledInTheHomeFolderAndLinkedForClaude(t *testing.T) {
 	}
 	client := fakeSessionSkills(t, http.StatusOK, nil, testSessionSkill("code-review", "---\nname: code-review\n---\n"))
 
-	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{})
+	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{}, false)
 	canonical := filepath.Join(home, ".agents", "skills", "code-review")
 	if _, err := os.Stat(filepath.Join(canonical, "SKILL.md")); err != nil {
 		t.Fatalf("the skill was not written before start: %v", err)
@@ -110,7 +120,7 @@ func TestSkillsDirInstallsThereWithoutLinks(t *testing.T) {
 	client := fakeSessionSkills(t, http.StatusOK, nil, testSessionSkill("code-review", "x"))
 	linked := false
 
-	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{Dir: dir, Symlink: func(string, string) error { linked = true; return nil }})
+	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{Dir: dir, Symlink: func(string, string) error { linked = true; return nil }}, false)
 	if _, err := os.Stat(filepath.Join(dir, "code-review", "SKILL.md")); err != nil {
 		t.Fatalf("the skill was not written: %v", err)
 	}
@@ -141,7 +151,7 @@ func TestTheAgentStartsPlainlyWithoutSkills(t *testing.T) {
 		},
 	}
 	for name, client := range cases {
-		installAgentVaultRunSkills(context.Background(), client(), agentvault.InstallOptions{})
+		installAgentVaultRunSkills(context.Background(), client(), agentvault.InstallOptions{}, false)
 		if exists(filepath.Join(home, ".agents")) {
 			t.Fatalf("%s: a skills folder was created", name)
 		}
@@ -217,9 +227,9 @@ func TestInterruptingTheSkillsStepRevokes(t *testing.T) {
 	ctx, interrupt := context.WithCancel(context.Background())
 	defer interrupt()
 	revoked := 0
-	interrupted := prepareAgentVaultRunSkills(ctx,
+	interrupted := prepareAgentVaultRunStartup(ctx,
 		func(stepCtx context.Context) {
-			installAgentVaultRunSkills(stepCtx, client, agentvault.InstallOptions{})
+			installAgentVaultRunSkills(stepCtx, client, agentvault.InstallOptions{}, false)
 			interrupt()
 		},
 		func() { revoked++ })
@@ -244,9 +254,9 @@ func TestInterruptingAWaitForInfisicalRevokes(t *testing.T) {
 	time.AfterFunc(50*time.Millisecond, interrupt)
 	revoked := false
 	start := time.Now()
-	interrupted := prepareAgentVaultRunSkills(ctx,
+	interrupted := prepareAgentVaultRunStartup(ctx,
 		func(stepCtx context.Context) {
-			installAgentVaultRunSkills(stepCtx, client, agentvault.InstallOptions{})
+			installAgentVaultRunSkills(stepCtx, client, agentvault.InstallOptions{}, false)
 		},
 		func() { revoked = true })
 	if !interrupted || !revoked {
@@ -260,9 +270,9 @@ func TestInterruptingAWaitForInfisicalRevokes(t *testing.T) {
 func TestAnUninterruptedSkillsStepDoesNotRevoke(t *testing.T) {
 	home := isolateSkillsHome(t)
 	client := fakeSessionSkills(t, http.StatusOK, nil, testSessionSkill("code-review", "x"))
-	interrupted := prepareAgentVaultRunSkills(context.Background(),
+	interrupted := prepareAgentVaultRunStartup(context.Background(),
 		func(stepCtx context.Context) {
-			installAgentVaultRunSkills(stepCtx, client, agentvault.InstallOptions{})
+			installAgentVaultRunSkills(stepCtx, client, agentvault.InstallOptions{}, false)
 		},
 		func() { t.Fatal("revoked without an interrupt") })
 	if interrupted || !exists(filepath.Join(home, ".agents", "skills", "code-review", "SKILL.md")) {
@@ -289,7 +299,7 @@ func TestAMissingRouteNamesTheDomain(t *testing.T) {
 			if _, err := client.list(context.Background()); !isInfisicalRouteMissing(err) {
 				t.Fatalf("not read as a missing route: %v", err)
 			}
-			installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{})
+			installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{}, false)
 			want := "Starting without skills: " + strings.TrimSuffix(config.INFISICAL_URL, "/api") + " doesn't provide them. Check --domain."
 			if !strings.Contains(warnings.String(), want) || strings.Contains(warnings.String(), "/api ") {
 				t.Fatalf("warned %q, want %q", warnings.String(), want)
@@ -309,7 +319,7 @@ func TestTheSessionWarningUsesInfisicalsMessage(t *testing.T) {
 		{map[string]any{"statusCode": 401, "error": "UnauthorizedError"}, "Starting without skills: the session is no longer valid."},
 	} {
 		warnings := captureWarnings(t)
-		installAgentVaultRunSkills(context.Background(), fakeSessionSkills(t, http.StatusUnauthorized, tc.body), agentvault.InstallOptions{})
+		installAgentVaultRunSkills(context.Background(), fakeSessionSkills(t, http.StatusUnauthorized, tc.body), agentvault.InstallOptions{}, false)
 		if !strings.Contains(warnings.String(), tc.want) {
 			t.Fatalf("warned %q, want %q", warnings.String(), tc.want)
 		}
@@ -342,7 +352,7 @@ func TestAMintedRunRetriesASessionNotFoundYet(t *testing.T) {
 	client, requests := fakeSessionSkillsAfter401s(t, 2, testSessionSkill("code-review", "x"))
 	client.retryUnauthorized = true
 
-	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{})
+	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{}, false)
 	if requests.Load() != 3 || !exists(filepath.Join(home, ".agents", "skills", "code-review", "SKILL.md")) {
 		t.Fatalf("%d requests, skill installed %v", requests.Load(), exists(filepath.Join(home, ".agents", "skills", "code-review")))
 	}
@@ -362,7 +372,7 @@ func TestASessionTokenRunDoesNotRetry(t *testing.T) {
 	home := isolateSkillsHome(t)
 	client, requests := fakeSessionSkillsAfter401s(t, 1, testSessionSkill("code-review", "x"))
 
-	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{})
+	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{}, false)
 	if requests.Load() != 1 || exists(filepath.Join(home, ".agents")) {
 		t.Fatalf("%d requests", requests.Load())
 	}
@@ -372,7 +382,7 @@ func TestSkillsAreLinkedForClaudeWhenItIsTheAgent(t *testing.T) {
 	home := isolateSkillsHome(t)
 	client := fakeSessionSkills(t, http.StatusOK, nil, testSessionSkill("code-review", "x"))
 
-	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{ForceClaude: agentVaultRunStartsClaude([]string{"/usr/local/bin/claude", "--resume"})})
+	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{ForceClaude: agentVaultRunStartsClaude([]string{"/usr/local/bin/claude", "--resume"})}, false)
 	assertRunLinked(t, filepath.Join(home, ".claude", "skills", "code-review"), filepath.Join(home, ".agents", "skills", "code-review"))
 }
 
@@ -442,18 +452,26 @@ func TestResolveAgentVaultRunSkills(t *testing.T) {
 	}
 }
 
-func TestNoSkillsMakesNoRequest(t *testing.T) {
+// With --no-skills nothing is installed and Infisical isn't asked; the proxy is asked once, for headers only, so the agent
+// still gets the API URL once an answer from inside TLS confirms it.
+func TestNoSkillsOnlyConfirmsTheAPIURL(t *testing.T) {
 	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests.Add(1) }))
 	defer srv.Close()
 	useInfisicalURL(t, srv.URL+"/api")
-	client := &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok"}
+	proxy := newFakeTunnelProxy(t, "forwards", http.StatusOK, skillsBody())
 
-	_, interrupted := runAgentVaultRunSkillsStep(true,
-		func(ctx context.Context) { installAgentVaultRunSkills(ctx, client, agentvault.InstallOptions{}) },
+	var apiURL string
+	_, interrupted := runAgentVaultRunStartupStep(
+		func(ctx context.Context) {
+			apiURL = prepareAgentVaultRunProxy(ctx, proxy.addr, "agv_tok", proxy.caPEM, nil)
+		},
 		func(context.Context) { t.Fatal("revoked") })
-	if interrupted || requests.Load() != 0 {
-		t.Fatalf("interrupted %v, %d requests", interrupted, requests.Load())
+	if interrupted || requests.Load() != 0 || apiURL != testProxyAPIURL {
+		t.Fatalf("interrupted %v, %d requests to Infisical, API URL %q", interrupted, requests.Load(), apiURL)
+	}
+	if proxy.requests.Load() != 1 || proxy.lastRequest.Load() != "HEAD /api/v1/agent-vault/session/services" {
+		t.Fatalf("the proxy saw %d requests, the last %v", proxy.requests.Load(), proxy.lastRequest.Load())
 	}
 }
 
@@ -467,9 +485,14 @@ func TestASkillsStepThatTimesOutStillStartsTheAgent(t *testing.T) {
 	defer srv.Close()
 	useInfisicalURL(t, srv.URL+"/api")
 	client := &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok", retryUnauthorized: true}
+	proxy := newFakeTunnelProxy(t, "old", 0, nil)
 
-	_, interrupted := runAgentVaultRunSkillsStep(false,
-		func(ctx context.Context) { installAgentVaultRunSkills(ctx, client, agentvault.InstallOptions{}) },
+	_, interrupted := runAgentVaultRunStartupStep(
+		func(ctx context.Context) {
+			prepareAgentVaultRunProxy(ctx, proxy.addr, "agv_tok", proxy.caPEM, func(ctx context.Context, _ *agentVaultSkillsTunnel, _ bool) {
+				installAgentVaultRunSkills(ctx, client, agentvault.InstallOptions{}, false)
+			})
+		},
 		func(context.Context) { t.Fatal("revoked after a timeout") })
 	if interrupted {
 		t.Fatal("a timeout was taken for an interrupt")
@@ -485,7 +508,7 @@ func TestAnUnreachableInfisicalNamesTheFlag(t *testing.T) {
 	useInfisicalURL(t, "http://127.0.0.1:1/api")
 	client := &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok"}
 
-	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{})
+	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{}, false)
 	got := strings.TrimSpace(warnings.String())
 	if !strings.Contains(got, "Starting without skills: CallListAgentVaultSessionSkills: ") || !strings.HasSuffix(got, ". Pass --no-skills if this host can't reach Infisical.") {
 		t.Fatalf("warned %q", got)
@@ -495,7 +518,7 @@ func TestAnUnreachableInfisicalNamesTheFlag(t *testing.T) {
 func TestAnInfisicalErrorDoesNotNameTheFlag(t *testing.T) {
 	isolateSkillsHome(t)
 	warnings := captureWarnings(t)
-	installAgentVaultRunSkills(context.Background(), fakeSessionSkills(t, http.StatusInternalServerError, map[string]any{"message": "boom"}), agentvault.InstallOptions{})
+	installAgentVaultRunSkills(context.Background(), fakeSessionSkills(t, http.StatusInternalServerError, map[string]any{"message": "boom"}), agentvault.InstallOptions{}, false)
 	if got := strings.TrimSpace(warnings.String()); !strings.HasSuffix(got, "Starting without skills: Infisical answered 500: boom.") {
 		t.Fatalf("warned %q", got)
 	}
@@ -564,7 +587,7 @@ func TestASecondSignalCutsTheRevokeShortWithItsWarning(t *testing.T) {
 	minted := &api.AgentVaultSession{ID: testRunSkillID}
 
 	start := time.Now()
-	exitCode, interrupted := runAgentVaultRunSkillsStep(false,
+	exitCode, interrupted := runAgentVaultRunStartupStep(
 		func(ctx context.Context) {
 			_ = self.Signal(syscall.SIGINT)
 			<-ctx.Done()
@@ -637,5 +660,469 @@ func TestTheSkillsClientAsksABusyInfisicalAgain(t *testing.T) {
 	listed, err := (&agentVaultSkillsClient{httpClient: httpClient, sessionToken: "agv_tok"}).list(context.Background())
 	if err != nil || len(listed.Skills) != 1 || requests.Load() != 2 {
 		t.Fatalf("err %v, skills %d, requests %d", err, len(listed.Skills), requests.Load())
+	}
+}
+
+// The Infisical the fake proxy names, which tunnels to it reach through the proxy.
+const testProxyAPIURL = "https://infisical.test/api"
+
+// The Infisical the fake proxy names in "http" mode, as for a --domain without TLS.
+const testHTTPProxyAPIURL = "http://infisical.test:8080/api"
+
+// A stand-in for an Agent Vault proxy. "forwards" names its Infisical on every CONNECT and again inside TLS, and answers
+// for the session the way a proxy that forwards to Infisical does, marked; "busy-once" answers its first request the way
+// a proxy with no free slot does, then forwards; "http" forwards for an Infisical whose --domain is http; "rewritten"
+// forwards, but its CONNECT answer reaches the client changed on the way to an http URL; "cut" forwards, but cuts the
+// skills answer short after its headers; "refuses" turns the CONNECT down, and "old" opens it, the way an older proxy
+// does, neither naming an Infisical.
+type fakeTunnelProxy struct {
+	addr           string
+	caPEM          []byte
+	sessionToken   atomic.Value
+	includeBuiltin atomic.Value
+	// The method and path of the last request that reached the proxy through a tunnel.
+	lastRequest atomic.Value
+	// Requests that reached the proxy through a tunnel.
+	requests atomic.Int32
+}
+
+// The URL the fake proxy's CONNECT answer claims and the one it names inside TLS, by mode.
+func fakeTunnelProxyAPIURLs(mode string) (claimed, named string) {
+	switch mode {
+	case "forwards", "busy-once", "cut":
+		return testProxyAPIURL, testProxyAPIURL
+	case "http":
+		return testHTTPProxyAPIURL, testHTTPProxyAPIURL
+	case "rewritten":
+		return "http://infisical.test/api", testProxyAPIURL
+	}
+	return "", ""
+}
+
+func newFakeTunnelProxy(t *testing.T, mode string, status int, body any) *fakeTunnelProxy {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "infisical.test"},
+		DNSNames:              []string{"infisical.test"},
+		NotBefore:             time.Now().Add(-time.Minute),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert := tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+	proxy := &fakeTunnelProxy{caPEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	proxy.addr = listener.Addr().String()
+
+	serve := func(conn net.Conn) {
+		defer conn.Close()
+		connect, err := http.ReadRequest(bufio.NewReader(conn))
+		if err != nil {
+			return
+		}
+		if user, password, ok := (&http.Request{Header: http.Header{"Authorization": connect.Header["Proxy-Authorization"]}}).BasicAuth(); ok && user == agentvault.ProxyAuthUsername {
+			proxy.sessionToken.Store(password)
+		}
+		if mode == "refuses" {
+			_, _ = io.WriteString(conn, "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+			return
+		}
+		claimed, named := fakeTunnelProxyAPIURLs(mode)
+		established := "HTTP/1.1 200 Connection Established\r\n"
+		if claimed != "" {
+			established += agentvault.HeaderAPIURL + ": " + claimed + "\r\n"
+		}
+		_, _ = io.WriteString(conn, established+"\r\n")
+		inner := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{cert}})
+		req, err := http.ReadRequest(bufio.NewReader(inner))
+		if err != nil {
+			return
+		}
+		proxy.includeBuiltin.Store(req.URL.Query().Get("includeBuiltin"))
+		proxy.lastRequest.Store(req.Method + " " + req.URL.Path)
+		seen := proxy.requests.Add(1)
+		rec := httptest.NewRecorder()
+		rec.Header().Set("Connection", "close")
+		if named != "" {
+			rec.Header().Set(agentvault.HeaderAPIURL, named)
+		}
+		decision := agentvault.DecisionSkills
+		if strings.HasSuffix(req.URL.Path, "/session/services") {
+			decision = agentvault.DecisionDiscovery
+		}
+		if mode == "cut" && decision == agentvault.DecisionSkills {
+			_, _ = io.WriteString(inner, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n"+
+				agentvault.HeaderDecision+": skills\r\n"+agentvault.HeaderAPIURL+": "+named+"\r\n\r\n{\"skills\":[")
+			return
+		}
+		if mode == "busy-once" && seen == 1 {
+			rec.Header().Set(agentvault.HeaderDecision, "error")
+			rec.Header().Set("Content-Type", "application/json")
+			rec.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(rec, `{"error":"busy","message":"too many agents are starting through the proxy at once"}`)
+		} else if named != "" {
+			rec.Header().Set(agentvault.HeaderDecision, decision)
+			rec.Header().Set("Content-Type", "application/json")
+			rec.WriteHeader(status)
+			if req.Method != http.MethodHead {
+				_ = json.NewEncoder(rec).Encode(body)
+			}
+		} else {
+			rec.WriteHeader(http.StatusBadGateway)
+			_, _ = io.WriteString(rec, "failed to reach the upstream")
+		}
+		_ = rec.Result().Write(inner)
+	}
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go serve(conn)
+		}
+	}()
+	return proxy
+}
+
+func throughTunnel(t *testing.T, client *agentVaultSkillsClient, proxy *fakeTunnelProxy, askedDirectly *bool) *agentVaultSkillsClient {
+	t.Helper()
+	tunnel, err := newAgentVaultSkillsTunnel(proxy.addr, client.sessionToken, testProxyAPIURL, proxy.caPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.tunnel = tunnel
+	client.includeBuiltin = true
+	client.beforeDirect = func() { *askedDirectly = true }
+	return client
+}
+
+func skillsBody(skills ...api.AgentVaultSessionSkill) api.ListAgentVaultSessionSkillsResponse {
+	return api.ListAgentVaultSessionSkillsResponse{Skills: skills}
+}
+
+func TestRunGetsSkillsThroughTheProxysTunnel(t *testing.T) {
+	home := isolateSkillsHome(t)
+	proxy := newFakeTunnelProxy(t, "forwards", http.StatusOK, skillsBody(testSessionSkill("code-review", "x")))
+	var askedDirectly bool
+	client := throughTunnel(t, &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok"}, proxy, &askedDirectly)
+
+	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{}, true)
+	if askedDirectly {
+		t.Fatal("asked Infisical directly although the proxy forwarded the request")
+	}
+	if got := proxy.sessionToken.Load(); got != "agv_tok" {
+		t.Fatalf("the tunnel carried session token %v", got)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".agents", "skills", "code-review", "SKILL.md")); err != nil {
+		t.Fatalf("the skill from the proxy wasn't installed: %v", err)
+	}
+}
+
+func TestRunAsksTheProxyWhichInfisicalItWorksWith(t *testing.T) {
+	proxy := newFakeTunnelProxy(t, "forwards", http.StatusOK, skillsBody())
+	if got, answered := askAgentVaultProxyAPIURL(context.Background(), proxy.addr, "agv_tok"); got != testProxyAPIURL || !answered {
+		t.Fatalf("the proxy named %q (answered %v), want %q", got, answered, testProxyAPIURL)
+	}
+	if got := proxy.sessionToken.Load(); got != "agv_tok" {
+		t.Fatalf("the CONNECT carried session token %v", got)
+	}
+	if got := proxy.requests.Load(); got != 0 {
+		t.Fatalf("asking sent %d requests through the tunnel", got)
+	}
+}
+
+// An older proxy names no Infisical, so the run asks Infisical directly rather than through the proxy.
+func TestRunAsksInfisicalDirectlyBehindAProxyThatNamesNoInfisical(t *testing.T) {
+	for _, mode := range []string{"refuses", "old"} {
+		t.Run(mode, func(t *testing.T) {
+			home := isolateSkillsHome(t)
+			proxy := newFakeTunnelProxy(t, mode, 0, nil)
+			if got, answered := askAgentVaultProxyAPIURL(context.Background(), proxy.addr, "agv_tok"); got != "" || !answered {
+				t.Fatalf("an older proxy named %q (answered %v)", got, answered)
+			}
+			var askedDirectly bool
+			client := fakeSessionSkills(t, http.StatusOK, nil, testSessionSkill("code-review", "x"))
+			client.proxyTooOld = true
+			client.includeBuiltin = true
+			client.beforeDirect = func() { askedDirectly = true }
+
+			installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{}, true)
+			if !askedDirectly || proxy.requests.Load() != 0 {
+				t.Fatalf("asked directly %v, through the older proxy %d times", askedDirectly, proxy.requests.Load())
+			}
+			if _, err := os.Stat(filepath.Join(home, ".agents", "skills", "code-review", "SKILL.md")); err != nil {
+				t.Fatalf("the skill from Infisical wasn't installed: %v", err)
+			}
+		})
+	}
+}
+
+func TestAnOldProxyAndAnUnreachableInfisicalNameTheProxy(t *testing.T) {
+	isolateSkillsHome(t)
+	warnings := captureWarnings(t)
+	useInfisicalURL(t, "http://127.0.0.1:1/api")
+	var askedDirectly bool
+	client := &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok", proxyTooOld: true,
+		beforeDirect: func() { askedDirectly = true }}
+
+	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{}, true)
+	want := "The proxy is too old to pass skills on, so this host asked Infisical directly. Update the Infisical CLI that runs the proxy, or pass --no-skills."
+	if got := strings.TrimSpace(warnings.String()); !askedDirectly || !strings.Contains(got, "Starting without skills: CallListAgentVaultSessionSkills: ") || !strings.HasSuffix(got, want) {
+		t.Fatalf("warned %q", got)
+	}
+}
+
+func TestTheProxysOwnRefusalIsNotPutOnInfisical(t *testing.T) {
+	isolateSkillsHome(t)
+	warnings := captureWarnings(t)
+	t.Setenv(util.INFISICAL_RETRY_BASE_DELAY_NAME, "10ms")
+	proxy := newFakeTunnelProxy(t, "forwards", http.StatusBadGateway,
+		map[string]any{"error": "infisical_unreachable", "message": "the proxy could not reach Infisical"})
+	var askedDirectly bool
+	client := throughTunnel(t, &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok"}, proxy, &askedDirectly)
+
+	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{}, true)
+	if got := strings.TrimSpace(warnings.String()); askedDirectly || !strings.HasSuffix(got, "Starting without skills: the proxy could not reach Infisical.") {
+		t.Fatalf("warned %q, asked directly %v", got, askedDirectly)
+	}
+}
+
+func TestRunTakesInfisicalsRefusalFromTheProxyAsFinal(t *testing.T) {
+	isolateSkillsHome(t)
+	warnings := captureWarnings(t)
+	proxy := newFakeTunnelProxy(t, "forwards", http.StatusUnauthorized, sessionInvalidBody)
+	var askedDirectly bool
+	client := throughTunnel(t, &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok"}, proxy, &askedDirectly)
+
+	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{}, true)
+	if askedDirectly {
+		t.Fatal("Infisical's own answer, forwarded by the proxy, shouldn't be asked for again")
+	}
+	if !strings.Contains(warnings.String(), "Starting without skills: Invalid session.") {
+		t.Fatalf("warnings: %q", warnings.String())
+	}
+}
+
+func TestTheProxyRefusingTheSessionReadsAsAnInvalidSession(t *testing.T) {
+	isolateSkillsHome(t)
+	warnings := captureWarnings(t)
+	proxy := newFakeTunnelProxy(t, "forwards", http.StatusForbidden, map[string]any{
+		"error": "session_invalid", "message": "the session is no longer valid, or it belongs to a different Agent Vault project than this proxy",
+	})
+	var askedDirectly bool
+	client := throughTunnel(t, &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok"}, proxy, &askedDirectly)
+
+	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{}, true)
+	if got := warnings.String(); askedDirectly || !strings.Contains(got, "Starting without skills: the session is no longer valid, or it belongs to a different Agent Vault project than this proxy.") {
+		t.Fatalf("warned %q, asked directly %v", got, askedDirectly)
+	}
+}
+
+func TestNoAgentVaultSkillAsksForTheSkillsWithoutIt(t *testing.T) {
+	home := isolateSkillsHome(t)
+	proxy := newFakeTunnelProxy(t, "forwards", http.StatusOK,
+		skillsBody(testSessionSkill(agentvault.BuiltinSkillName, "x"), testSessionSkill("code-review", "x")))
+	var askedDirectly bool
+	client := throughTunnel(t, &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok"}, proxy, &askedDirectly)
+	client.includeBuiltin = false
+
+	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{}, false)
+	if got := proxy.includeBuiltin.Load(); got != "false" {
+		t.Fatalf("includeBuiltin = %v, want false", got)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".agents", "skills", agentvault.BuiltinSkillName)); !os.IsNotExist(err) {
+		t.Fatalf("the built-in skill was installed despite --no-agent-vault-skill: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".agents", "skills", "code-review", "SKILL.md")); err != nil {
+		t.Fatalf("the other skills should still be installed: %v", err)
+	}
+}
+
+func TestTheTunnelAsksABusyProxyAgain(t *testing.T) {
+	home := isolateSkillsHome(t)
+	t.Setenv(util.INFISICAL_RETRY_BASE_DELAY_NAME, "10ms")
+	proxy := newFakeTunnelProxy(t, "busy-once", http.StatusOK, skillsBody(testSessionSkill("code-review", "x")))
+	var askedDirectly bool
+	client := throughTunnel(t, &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok"}, proxy, &askedDirectly)
+
+	installAgentVaultRunSkills(context.Background(), client, agentvault.InstallOptions{}, true)
+	if askedDirectly || proxy.requests.Load() != 2 {
+		t.Fatalf("asked the proxy %d times, asked Infisical directly %v", proxy.requests.Load(), askedDirectly)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".agents", "skills", "code-review", "SKILL.md")); err != nil {
+		t.Fatalf("the skill wasn't installed once the proxy had a free slot: %v", err)
+	}
+}
+
+// A minted run asks again after a refusal, for a session the database hasn't caught up on. Through a proxy, the last try
+// has to come after the proxy stops answering the refusal from memory, or every try gets the remembered refusal.
+func TestAMintedRunsRetriesOutlastTheProxysMemoryOfARefusal(t *testing.T) {
+	var waited time.Duration
+	for _, delay := range agentVaultSkillsUnauthorizedRetryDelays {
+		waited += delay
+	}
+	if waited <= agentvault.SessionRefusalTTL {
+		t.Fatalf("the retries wait %s in all, not past the %s a proxy remembers a refusal", waited, agentvault.SessionRefusalTTL)
+	}
+}
+
+// installThrough installs the session's skills with client, through the tunnel prepareAgentVaultRunProxy hands over.
+func installThrough(client *agentVaultSkillsClient) func(context.Context, *agentVaultSkillsTunnel, bool) {
+	return func(ctx context.Context, tunnel *agentVaultSkillsTunnel, proxyTooOld bool) {
+		client.tunnel, client.proxyTooOld, client.includeBuiltin = tunnel, proxyTooOld, true
+		installAgentVaultRunSkills(ctx, client, agentvault.InstallOptions{}, true)
+	}
+}
+
+// silentProxy accepts connections and never answers, like a proxy still waiting on Infisical for the session.
+func silentProxy(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() { _, _ = io.Copy(io.Discard, conn); conn.Close() }()
+		}
+	}()
+	return listener.Addr().String()
+}
+
+func TestTheAgentGetsTheAPIURLOnceAnAnswerInsideTLSConfirmsIt(t *testing.T) {
+	home := isolateSkillsHome(t)
+	proxy := newFakeTunnelProxy(t, "forwards", http.StatusOK, skillsBody(testSessionSkill("code-review", "x")))
+
+	apiURL := prepareAgentVaultRunProxy(context.Background(), proxy.addr, "agv_tok", proxy.caPEM,
+		installThrough(&agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok"}))
+	if apiURL != testProxyAPIURL {
+		t.Fatalf("the agent gets %q, want %q", apiURL, testProxyAPIURL)
+	}
+	if got := proxy.lastRequest.Load(); got != "GET /api/v1/agent-vault/session/skills" {
+		t.Fatalf("the proxy saw %v", got)
+	}
+	if !exists(filepath.Join(home, ".agents", "skills", "code-review", "SKILL.md")) {
+		t.Fatal("the skill from the proxy wasn't installed")
+	}
+}
+
+// The CONNECT answer crosses the network in the clear. Changed on the way to an http URL, it would have the skills come
+// over plain HTTP that anything on the way can forge; the proxy's answer from inside TLS names the URL it really sent.
+func TestAnAPIURLChangedOnTheWayIsNotUsed(t *testing.T) {
+	home := isolateSkillsHome(t)
+	warnings := captureWarnings(t)
+	direct := fakeSessionSkills(t, http.StatusOK, nil, testSessionSkill("from-infisical", "x"))
+	proxy := newFakeTunnelProxy(t, "rewritten", http.StatusOK, skillsBody(testSessionSkill("from-proxy", "x")))
+
+	apiURL := prepareAgentVaultRunProxy(context.Background(), proxy.addr, "agv_tok", proxy.caPEM, installThrough(direct))
+	if apiURL != "" {
+		t.Fatalf("the agent gets the changed URL %q", apiURL)
+	}
+	if exists(filepath.Join(home, ".agents", "skills", "from-proxy")) {
+		t.Fatal("a skill from the unconfirmed tunnel was installed")
+	}
+	if !exists(filepath.Join(home, ".agents", "skills", "from-infisical", "SKILL.md")) {
+		t.Fatal("the skills weren't taken from Infisical directly instead")
+	}
+	if !strings.Contains(warnings.String(), "didn't name the Infisical it named on its CONNECT answer") {
+		t.Fatalf("warned %q", warnings.String())
+	}
+}
+
+// An Infisical without TLS is still asked over TLS through the proxy; the fake proxy only speaks TLS in its tunnels.
+func TestAnHTTPDomainIsStillAskedOverTLS(t *testing.T) {
+	home := isolateSkillsHome(t)
+	proxy := newFakeTunnelProxy(t, "http", http.StatusOK, skillsBody(testSessionSkill("code-review", "x")))
+
+	apiURL := prepareAgentVaultRunProxy(context.Background(), proxy.addr, "agv_tok", proxy.caPEM,
+		installThrough(&agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok"}))
+	if apiURL != testHTTPProxyAPIURL {
+		t.Fatalf("the agent gets %q, want %q", apiURL, testHTTPProxyAPIURL)
+	}
+	if got := proxy.lastRequest.Load(); got != "GET /api/v1/agent-vault/session/skills" {
+		t.Fatalf("the proxy saw %v", got)
+	}
+	if !exists(filepath.Join(home, ".agents", "skills", "code-review", "SKILL.md")) {
+		t.Fatal("the skill from the proxy wasn't installed")
+	}
+}
+
+// A proxy that is still looking the session up hasn't said it is old.
+func TestASlowProxyIsNotTakenForAnOldOne(t *testing.T) {
+	old := agentVaultProxyAPIURLTimeout
+	agentVaultProxyAPIURLTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { agentVaultProxyAPIURLTimeout = old })
+
+	called := false
+	apiURL := prepareAgentVaultRunProxy(context.Background(), silentProxy(t), "agv_tok", nil,
+		func(_ context.Context, tunnel *agentVaultSkillsTunnel, proxyTooOld bool) {
+			called = true
+			if tunnel != nil || proxyTooOld {
+				t.Errorf("tunnel %v, too old %v", tunnel, proxyTooOld)
+			}
+		})
+	if !called || apiURL != "" {
+		t.Fatalf("installed %v, API URL %q", called, apiURL)
+	}
+}
+
+// The question to the proxy comes after a minted session, so an interrupt during it revokes the session.
+func TestAnInterruptWhileAskingTheProxyRevokes(t *testing.T) {
+	addr := silentProxy(t)
+	ctx, interrupt := context.WithCancel(context.Background())
+	time.AfterFunc(50*time.Millisecond, interrupt)
+	revoked := false
+	start := time.Now()
+
+	interrupted := prepareAgentVaultRunStartup(ctx,
+		func(ctx context.Context) { prepareAgentVaultRunProxy(ctx, addr, "agv_tok", nil, nil) },
+		func() { revoked = true })
+	if !interrupted || !revoked {
+		t.Fatalf("interrupted %v, revoked %v", interrupted, revoked)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Fatal("the interrupt did not cut the question short")
+	}
+}
+
+// The skills answer can fail after its headers, such as when it is cut short, and then says nothing about the proxy, so
+// the services list confirms the API URL instead of the agent losing it.
+func TestASkillsAnswerCutShortStillLeavesTheAgentItsAPIURL(t *testing.T) {
+	isolateSkillsHome(t)
+	warnings := captureWarnings(t)
+	proxy := newFakeTunnelProxy(t, "cut", http.StatusOK, skillsBody())
+
+	apiURL := prepareAgentVaultRunProxy(context.Background(), proxy.addr, "agv_tok", proxy.caPEM,
+		installThrough(&agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok"}))
+	if apiURL != testProxyAPIURL {
+		t.Fatalf("the agent gets %q, want %q", apiURL, testProxyAPIURL)
+	}
+	if got := proxy.lastRequest.Load(); got != "HEAD /api/v1/agent-vault/session/services" {
+		t.Fatalf("the proxy last saw %v", got)
+	}
+	if !strings.Contains(warnings.String(), "Starting without skills:") {
+		t.Fatalf("warned %q", warnings.String())
 	}
 }
