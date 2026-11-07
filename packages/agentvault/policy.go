@@ -18,7 +18,7 @@ var errBodyUnreadable = errors.New("could not read the request body")
 func checkServicePolicy(svc *resolvedService, req *http.Request) error {
 	// First, so the refusal names what the agent's owner can fix rather than a method or path rule.
 	if svc.personalValuesMissing {
-		return fmt.Errorf("service %q needs your personal values, which aren't set up yet: %w. Set them up on access bundle %q. It can take a few minutes to apply.", svc.name, errPolicyBlocked, svc.accessBundleName)
+		return fmt.Errorf("service %q needs your own credential or sign-in, which isn't set up yet: %w. Set it up on access bundle %q in Infisical Agent Vault, or for a machine identity, start the session on behalf of a user who has set it up. It can take a few minutes to apply.", svc.name, errPolicyBlocked, svc.accessBundleName)
 	}
 	if !svc.allowsMethod(req.Method) {
 		return fmt.Errorf("service %q does not allow %s: %w", svc.name, truncateLogged(req.Method, maxLoggedMethodLen), errPolicyBlocked)

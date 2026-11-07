@@ -75,6 +75,8 @@ type resolvedService struct {
 	// Set when the session's owner still has to set their personal values. The server sends the
 	// service with no credential, so forwarding it would reach the host unauthenticated.
 	personalValuesMissing bool
+	// Some credential field comes from each member, so a rejection is theirs to fix rather than an admin's.
+	memberProvided bool
 }
 
 // lastSeen and fetchedAt are wall-clock (Round(0)) so time asleep counts toward the grace and idle windows.

@@ -464,6 +464,31 @@ func TestAStaticCredential401OnAnMCPServiceGivesA502WithoutTheChallenge(t *testi
 	}
 }
 
+func TestAMemberProvidedRejectionTellsTheMemberWhatToFix(t *testing.T) {
+	t.Run("static credential", func(t *testing.T) {
+		client, host, _ := newOAuthFixture(t, &oauthResolver{}, func(h string) *resolvedService {
+			svc := mcpService(h)
+			svc.memberProvided = true
+			return svc
+		}, acceptOnly("nothing"))
+
+		resp, body := doWith(t, client, http.MethodPost, fmt.Sprintf("https://%s/mcp", host), "application/json", strings.NewReader(mcpCallBody))
+		assertUpstreamAuthFailed(t, resp, body, `{"error":"upstream_auth_failed","message":"The linear service rejected your credential. Update your personal value on access bundle \"bundle\" in Infisical Agent Vault."}`)
+	})
+
+	t.Run("oauth needs reauthorization", func(t *testing.T) {
+		resolver := &oauthResolver{issue: oauthToken("old-token"), status: oauthStatusNeedsReauthorization}
+		client, host, _ := newOAuthFixture(t, resolver, func(h string) *resolvedService {
+			svc := oauthMCPService(h, "old-token")
+			svc.memberProvided = true
+			return svc
+		}, acceptOnly("nothing"))
+
+		resp, body := doWith(t, client, http.MethodGet, fmt.Sprintf("https://%s/mcp", host), "", nil)
+		assertUpstreamAuthFailed(t, resp, body, `{"error":"upstream_auth_failed","message":"Reconnect your account for the linear service on access bundle \"bundle\" in Infisical Agent Vault."}`)
+	})
+}
+
 func TestAStaticCredentialInsufficientScopeOnAnMCPServiceGivesA502WithoutTheChallenge(t *testing.T) {
 	resolver := &oauthResolver{}
 	client, host, _ := newOAuthFixture(t, resolver, func(h string) *resolvedService {
