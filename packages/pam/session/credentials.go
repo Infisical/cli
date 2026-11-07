@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"encoding/base64"
 	"fmt"
 	"os"
@@ -22,6 +23,14 @@ const AwsIamAuthMethod = "aws-iam"
 const awsIamCredentialTTL = 10 * time.Minute
 
 type PAMCredentials struct {
+	LeaseSeconds  int
+	LeaseDeadline time.Time
+
+	AccountType           string
+	WebConnection         *api.PAMWebConnectionDetails
+	WebPolicy             *api.PAMWebPolicy
+	ExpiresAt             time.Time
+	LeaseUntil            time.Time
 	AuthMethod            string
 	Username              string
 	Password              string
@@ -55,6 +64,7 @@ type PAMCredentials struct {
 }
 
 type PAMRecordingSecrets struct {
+	ResourceType   string
 	SessionKey     []byte // 32 bytes, AES-256 key
 	UploadToken    string // base64-encoded 32 bytes
 	StorageBackend string // "postgres" or "aws-s3"
@@ -187,6 +197,12 @@ func (cm *CredentialsManager) GetPAMSessionCredentials(sessionId string, expiryT
 	}
 
 	credentials := &PAMCredentials{
+		LeaseSeconds: response.LeaseSeconds, LeaseDeadline: time.Now().Add(time.Duration(response.LeaseSeconds) * time.Second),
+		AccountType:           response.AccountType,
+		WebConnection:         response.ConnectionDetails,
+		WebPolicy:             response.WebAppPolicy,
+		ExpiresAt:             response.ExpiresAt,
+		LeaseUntil:            response.LeaseUntil,
 		AuthMethod:            response.Credentials.AuthMethod,
 		Username:              response.Credentials.Username,
 		Password:              response.Credentials.Password,
@@ -220,6 +236,9 @@ func (cm *CredentialsManager) GetPAMSessionCredentials(sessionId string, expiryT
 	}
 
 	cacheExpiry := expiryTime
+	if response.AccountType == ResourceTypeWebApp && credentials.LeaseDeadline.Before(cacheExpiry) {
+		cacheExpiry = credentials.LeaseDeadline
+	}
 	if credentials.AuthMethod == AwsIamAuthMethod {
 		if tokenExpiry := time.Now().Add(awsIamCredentialTTL); tokenExpiry.Before(cacheExpiry) {
 			cacheExpiry = tokenExpiry
@@ -239,6 +258,11 @@ func (cm *CredentialsManager) GetPAMSessionCredentials(sessionId string, expiryT
 			log.Error().Err(decodeErr).Str("sessionId", sessionId).Msg("Failed to decode session recording key")
 		} else {
 			uploadToken := response.Recording.UploadToken
+			if response.AccountType == ResourceTypeWebApp && uploadToken == "" {
+				if existing := cm.GetRecordingSecrets(sessionId); existing == nil || existing.UploadToken == "" {
+					_ = cm.loadWebSecrets(sessionId)
+				}
+			}
 
 			cm.recordingSecretsMu.Lock()
 			if uploadToken == "" {
@@ -246,7 +270,20 @@ func (cm *CredentialsManager) GetPAMSessionCredentials(sessionId string, expiryT
 					uploadToken = existing.UploadToken
 				}
 			}
+			if response.AccountType == ResourceTypeWebApp {
+				if existing := cm.recordingSecrets[sessionId]; existing != nil && !bytes.Equal(existing.SessionKey, decoded) {
+					cm.recordingSecretsMu.Unlock()
+					cm.InvalidateSessionCredentials(sessionId)
+					return nil, fmt.Errorf("recording key changed within a Web App session")
+				}
+				if uploadToken == "" {
+					cm.recordingSecretsMu.Unlock()
+					cm.InvalidateSessionCredentials(sessionId)
+					return nil, fmt.Errorf("Web App recording upload token is unavailable")
+				}
+			}
 			cm.recordingSecrets[sessionId] = &PAMRecordingSecrets{
+				ResourceType:   response.AccountType,
 				SessionKey:     decoded,
 				UploadToken:    uploadToken,
 				StorageBackend: response.Recording.StorageBackend,
@@ -254,6 +291,11 @@ func (cm *CredentialsManager) GetPAMSessionCredentials(sessionId string, expiryT
 				SessionId:      response.Recording.SessionId,
 			}
 			cm.recordingSecretsMu.Unlock()
+			if response.AccountType == ResourceTypeWebApp {
+				if err := cm.persistWebSecrets(sessionId); err != nil {
+					return nil, err
+				}
+			}
 
 			if response.Recording.UploadToken != "" {
 				cm.persistUploadToken(sessionId, response.Recording.UploadToken)

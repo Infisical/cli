@@ -9,11 +9,20 @@ import (
 	"crypto/x509/pkix"
 	"math/big"
 	"net"
+	"slices"
 	"testing"
 	"time"
 )
 
 const directTestHost = "gateway.internal"
+
+func TestWebBrowserAlpnIsAlwaysOffered(t *testing.T) {
+	for _, loaded := range []bool{false, true} {
+		if !slices.Contains(nextProtosForGateway(loaded), "infisical-pam-web-browser") {
+			t.Fatal("Web App ALPN missing from gateway transport")
+		}
+	}
+}
 
 // A CA, a server cert carrying the direct address in its SAN, and a client cert from the same CA:
 // the shape the platform and the gateway actually present to each other on the direct transport.

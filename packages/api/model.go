@@ -1110,9 +1110,16 @@ type PAMPolicyRules struct {
 }
 
 type PAMSessionCredentialsResponse struct {
-	Credentials PAMSessionCredentials `json:"credentials"`
-	PolicyRules *PAMPolicyRules       `json:"policyRules,omitempty"`
-	Recording   *PAMRecordingResponse `json:"recording,omitempty"`
+	LeaseSeconds int `json:"leaseSeconds"`
+
+	AccountType       string                   `json:"accountType"`
+	ConnectionDetails *PAMWebConnectionDetails `json:"connectionDetails,omitempty"`
+	WebAppPolicy      *PAMWebPolicy            `json:"webAppPolicy,omitempty"`
+	ExpiresAt         time.Time                `json:"expiresAt,omitzero"`
+	LeaseUntil        time.Time                `json:"leaseUntil,omitzero"`
+	Credentials       PAMSessionCredentials    `json:"credentials"`
+	PolicyRules       *PAMPolicyRules          `json:"policyRules,omitempty"`
+	Recording         *PAMRecordingResponse    `json:"recording,omitempty"`
 }
 
 type PAMRecordingResponse struct {
@@ -1124,12 +1131,15 @@ type PAMRecordingResponse struct {
 }
 
 type ChunkPresignedPutRequest struct {
-	ChunkIndex      int   `json:"chunkIndex"`
-	CiphertextBytes int64 `json:"ciphertextBytes"`
-	IsKeyframe      bool  `json:"isKeyframe,omitempty"`
+	CiphertextSha256Base64 string `json:"ciphertextSha256Base64,omitempty"`
+	ChunkIndex             int    `json:"chunkIndex"`
+	CiphertextBytes        int64  `json:"ciphertextBytes"`
+	IsKeyframe             bool   `json:"isKeyframe,omitempty"`
 }
 
 type ChunkPresignedPutResponse struct {
+	AlreadyUploaded  bool   `json:"alreadyUploaded,omitzero"`
+	ObjectVersionID  string `json:"objectVersionId,omitempty"`
 	URL              string `json:"url"`
 	ObjectKey        string `json:"objectKey"`
 	Method           string `json:"method"`
@@ -1137,6 +1147,7 @@ type ChunkPresignedPutResponse struct {
 }
 
 type ChunkMetadataRequest struct {
+	ObjectVersionID   string `json:"objectVersionId,omitempty"`
 	ChunkIndex        int    `json:"chunkIndex"`
 	StartElapsedMs    int64  `json:"startElapsedMs"`
 	EndElapsedMs      int64  `json:"endElapsedMs"`

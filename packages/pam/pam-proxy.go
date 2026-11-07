@@ -27,6 +27,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/redis"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/snowflake"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/ssh"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/webapp"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/pam/session/masking"
 	"github.com/Infisical/infisical-merge/packages/util"
@@ -39,6 +40,7 @@ import (
 type MongoProxyGetter func(ctx context.Context, sessionID string, config mongodb.MongoDBProxyConfig) (*mongodb.MongoDBProxy, error)
 
 type GatewayPAMConfig struct {
+	WebApp             *webapp.Binding
 	SessionId          string
 	ResourceType       string
 	ExpiryTime         time.Time
@@ -73,6 +75,9 @@ func GetSupportedResourceTypes() []string {
 	// session at connect time with ErrRdpUnavailable.
 	if rdp.IsSupported() {
 		types = append(types, session.ResourceTypeWindows)
+	}
+	if webapp.Ready() {
+		types = append(types, session.ResourceTypeWebApp)
 	}
 	return types
 }
@@ -209,6 +214,9 @@ func compilePolicyPatterns(patterns []string, sessionID string, ruleType string)
 // the browser RDP flow (RDCleanPath over the inbound stream) when the
 // resource is Windows; ignored for other resource types.
 func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMConfig, httpClient *resty.Client, browserRDP bool) error {
+	if pamConfig.ResourceType == session.ResourceTypeWebApp {
+		return fmt.Errorf("Web App sessions use the web-browser protocol")
+	}
 	credentialExpiryTime := pamConfig.ExpiryTime
 	if pamConfig.ResourceType == session.ResourceTypeGcpServiceAccount ||
 		pamConfig.ResourceType == session.ResourceTypeAzureCli {

@@ -38,12 +38,14 @@ const (
 	ResourceTypeAzureCli          = "azure-cli"
 	ResourceTypeSnowflake         = "snowflake"
 	ResourceTypeClickhouse        = "clickhouse"
+	ResourceTypeWebApp            = "web-app"
 )
 
 var allResourceTypes = []string{
 	ResourceTypeSSH, ResourceTypePostgres, ResourceTypeRedis, ResourceTypeMysql, ResourceTypeMssql,
 	ResourceTypeKubernetes, ResourceTypeMongodb, ResourceTypeOracledb, ResourceTypeWindows,
 	ResourceTypeGcpServiceAccount, ResourceTypeAzureCli, ResourceTypeSnowflake, ResourceTypeClickhouse,
+	ResourceTypeWebApp,
 }
 
 type SessionFileInfo struct {
@@ -500,6 +502,9 @@ func (su *SessionUploader) resumeInProgressSessions() {
 
 	now := time.Now()
 	for _, fileInfo := range allFiles {
+		if fileInfo.ResourceType == ResourceTypeWebApp {
+			continue
+		}
 		if now.After(fileInfo.ExpiresAt) {
 			continue
 		}
@@ -523,6 +528,9 @@ func (su *SessionUploader) uploadExpiredSessionFiles() {
 	}
 
 	for _, fileInfo := range expiredFiles {
+		if fileInfo.ResourceType == ResourceTypeWebApp {
+			continue
+		}
 		log.Info().
 			Str("sessionId", fileInfo.SessionID).
 			Str("filename", fileInfo.Filename).

@@ -1,5 +1,7 @@
 package gatewayv2
 
+const CapabilityWebApp = "webApp"
+
 // Declared at each heartbeat. The platform stores the map verbatim, so an absent key means the gateway is
 // too old to report it, not that the capability is off.
 const CapabilitySessionLogMaskingBuiltInDetection = "sessionLogMaskingBuiltInDetection"

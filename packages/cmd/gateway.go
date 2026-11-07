@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -16,6 +17,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
 	gatewayv2 "github.com/Infisical/infisical-merge/packages/gateway-v2"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/webapp"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
@@ -25,6 +27,49 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
+
+func gatewayBrowserOptions(cmd *cobra.Command) (webapp.Options, error) {
+	o := webapp.DefaultOptions()
+	stringOption := func(name, env string) string {
+		value, _ := cmd.Flags().GetString(name)
+		if !cmd.Flags().Changed(name) {
+			if fromEnv := strings.TrimSpace(os.Getenv(env)); fromEnv != "" {
+				return fromEnv
+			}
+		}
+		return value
+	}
+	o.Image = stringOption("pam-browser-image", "INFISICAL_PAM_BROWSER_IMAGE")
+	o.EgressNetwork = stringOption("pam-browser-egress-network", "INFISICAL_PAM_BROWSER_EGRESS_NETWORK")
+	o.Memory = stringOption("pam-browser-memory", "INFISICAL_PAM_BROWSER_MEMORY")
+	o.CPUs = stringOption("pam-browser-cpus", "INFISICAL_PAM_BROWSER_CPUS")
+	var err error
+	o.SpoolMaxBytes, err = cmd.Flags().GetInt64("pam-browser-spool-max-bytes")
+	if err != nil {
+		return o, err
+	}
+	if !cmd.Flags().Changed("pam-browser-spool-max-bytes") {
+		if value := strings.TrimSpace(os.Getenv("INFISICAL_PAM_BROWSER_SPOOL_MAX_BYTES")); value != "" {
+			o.SpoolMaxBytes, err = strconv.ParseInt(value, 10, 64)
+			if err != nil {
+				return o, fmt.Errorf("invalid browser spool limit: %w", err)
+			}
+		}
+	}
+	o.MaxSessions, err = cmd.Flags().GetInt("pam-browser-max-sessions")
+	if err != nil {
+		return o, err
+	}
+	if !cmd.Flags().Changed("pam-browser-max-sessions") {
+		if value := strings.TrimSpace(os.Getenv("INFISICAL_PAM_BROWSER_MAX_SESSIONS")); value != "" {
+			o.MaxSessions, err = strconv.Atoi(value)
+			if err != nil {
+				return o, fmt.Errorf("invalid browser capacity: %w", err)
+			}
+		}
+	}
+	return o, nil
+}
 
 func getInfisicalSdkInstance(cmd *cobra.Command) (infisicalSdk.InfisicalClientInterface, context.CancelFunc, error) {
 
@@ -435,7 +480,12 @@ var gatewayStartCmd = &cobra.Command{
 		pkcs11ModulePath, _ := util.GetCmdFlagOrEnv(cmd, "pkcs11-module", []string{gatewayv2.INFISICAL_PKCS11_MODULE_ENV_NAME})
 		bindAddress, _ := util.GetCmdFlagOrEnv(cmd, "bind", []string{gatewayv2.BIND_ADDRESS_ENV_NAME})
 
+		browserOptions, err := gatewayBrowserOptions(cmd)
+		if err != nil {
+			util.HandleError(err, "invalid browser options")
+		}
 		gatewayInstance, err := gatewayv2.NewGateway(&gatewayv2.GatewayConfig{
+			BrowserOptions:   browserOptions,
 			Name:             gatewayName,
 			RelayName:        relayName,
 			ReconnectDelay:   10 * time.Second,
@@ -756,6 +806,12 @@ func init() {
 	gatewayStartCmd.Flags().String("service-account-token-path", "", "service account token path for kubernetes auth (defaults to /var/run/secrets/kubernetes.io/serviceaccount/token)")
 	gatewayStartCmd.Flags().String("service-account-key-file-path", "", "service account key file path for GCP IAM auth")
 	gatewayStartCmd.Flags().String("jwt", "", "JWT for jwt-based auth methods [oidc-auth, jwt-auth]")
+	gatewayStartCmd.Flags().String("pam-browser-image", "", "Qualified container image for PAM browsers; requires sandboxed Chromium and a Unix-socket connector. Browser networking is disabled; destination policy is enforced in the connector")
+	gatewayStartCmd.Flags().String("pam-browser-egress-network", "bridge", "Docker network used only by the destination connector")
+	gatewayStartCmd.Flags().String("pam-browser-memory", "1g", "Memory limit for each browser container")
+	gatewayStartCmd.Flags().String("pam-browser-cpus", "1.0", "CPU limit for each browser container")
+	gatewayStartCmd.Flags().Int64("pam-browser-spool-max-bytes", 2<<30, "Maximum encrypted browser recording spool size")
+	gatewayStartCmd.Flags().Int("pam-browser-max-sessions", 4, "Maximum concurrent browser sessions")
 	gatewayStartCmd.Flags().String("pam-session-recording-path", "", "directory path for PAM session recordings (defaults to /var/lib/infisical/session_recordings)")
 	gatewayStartCmd.Flags().String("pkcs11-module", "", "absolute path to a PKCS#11 driver (e.g. /opt/fortanix/pkcs11/fortanix_pkcs11.so). When set, the gateway loads the driver and serves HSM operations through it.")
 	gatewayStartCmd.Flags().String("listen-address", "", "stable host:port advertised for direct gateway connections")

@@ -25,6 +25,7 @@ func NewGenericRequestError(operation string, err error) *GenericRequestError {
 
 // APIError represents an error response from the API
 type APIError struct {
+	ResponseBody      string   `json:"-"`
 	Name              string   `json:"name"`
 	AdditionalContext string   `json:"additionalContext,omitempty"`
 	ExtraMessages     []string `json:"-"`
@@ -91,12 +92,13 @@ func NewAPIErrorWithResponse(operation string, res *resty.Response, additionalCo
 	}
 
 	apiError := &APIError{
-		Operation:  operation,
-		Name:       errorName,
-		Method:     res.Request.Method,
-		URL:        res.Request.URL,
-		StatusCode: res.StatusCode(),
-		ReqId:      reqId,
+		ResponseBody: res.String(),
+		Operation:    operation,
+		Name:         errorName,
+		Method:       res.Request.Method,
+		URL:          res.Request.URL,
+		StatusCode:   res.StatusCode(),
+		ReqId:        reqId,
 	}
 
 	if additionalContext != nil && *additionalContext != "" {

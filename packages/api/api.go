@@ -1552,9 +1552,14 @@ func CallPAMSessionChunkPresignedPut(
 	sessionId, uploadToken string,
 	req ChunkPresignedPutRequest,
 ) (ChunkPresignedPutResponse, error) {
+	return CallPAMSessionChunkPresignedPutContext(context.Background(), httpClient, sessionId, uploadToken, req)
+}
+
+func CallPAMSessionChunkPresignedPutContext(ctx context.Context, httpClient *resty.Client, sessionId, uploadToken string, req ChunkPresignedPutRequest) (ChunkPresignedPutResponse, error) {
 	var resp ChunkPresignedPutResponse
 	httpResp, err := httpClient.
 		R().
+		SetContext(ctx).
 		SetHeader("User-Agent", USER_AGENT).
 		SetHeader("X-Gateway-Upload-Token", uploadToken).
 		SetBody(req).
@@ -1574,8 +1579,13 @@ func CallPAMSessionChunkMetadata(
 	sessionId, uploadToken string,
 	req ChunkMetadataRequest,
 ) error {
+	return CallPAMSessionChunkMetadataContext(context.Background(), httpClient, sessionId, uploadToken, req)
+}
+
+func CallPAMSessionChunkMetadataContext(ctx context.Context, httpClient *resty.Client, sessionId, uploadToken string, req ChunkMetadataRequest) error {
 	httpResp, err := httpClient.
 		R().
+		SetContext(ctx).
 		SetHeader("User-Agent", USER_AGENT).
 		SetHeader("X-Gateway-Upload-Token", uploadToken).
 		SetBody(req).

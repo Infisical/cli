@@ -20,6 +20,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/pam"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/mongodb"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/webapp"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/systemd"
 	"github.com/Infisical/infisical-merge/packages/util"
@@ -38,6 +39,7 @@ const (
 	ForwardModeTCP             ForwardMode = "TCP"
 	ForwardModePAM             ForwardMode = "PAM"
 	ForwardModePAMRDPBrowser   ForwardMode = "PAM_RDP_BROWSER"
+	ForwardModePAMWebBrowser   ForwardMode = "PAM_WEB_BROWSER"
 	ForwardModePAMCancellation ForwardMode = "PAM_CANCELLATION"
 	ForwardModePAMCapabilities ForwardMode = "PAM_CAPABILITIES"
 	ForwardModePing            ForwardMode = "PING"
@@ -94,8 +96,9 @@ type RoutingInfo struct {
 }
 
 type PAMInfo struct {
-	SessionId    string `json:"sessionId"`
-	ResourceType string `json:"resourceType"`
+	WebApp       *webapp.Binding `json:"webApp,omitempty"`
+	SessionId    string          `json:"sessionId"`
+	ResourceType string          `json:"resourceType"`
 }
 
 type ActorDetails struct {
@@ -103,6 +106,7 @@ type ActorDetails struct {
 }
 
 type GatewayConfig struct {
+	BrowserOptions   webapp.Options
 	Name             string
 	RelayName        string
 	IdentityToken    string
@@ -125,7 +129,8 @@ type pamSessionEntry struct {
 }
 
 type Gateway struct {
-	GatewayID string
+	webRegistry *webapp.Registry
+	GatewayID   string
 
 	httpClient *resty.Client
 	config     *GatewayConfig
@@ -278,7 +283,9 @@ func (g *Gateway) evictExistingPAMSessions(sessionID string, timeout time.Durati
 	log.Info().Str("sessionId", sessionID).Int("priorCount", len(prior)).
 		Msg("Evicting existing PAM connections before starting new RDP bridge")
 	for _, e := range prior {
-		_ = e.conn.Close()
+		if e.conn != nil {
+			_ = e.conn.Close()
+		}
 		e.cancel()
 	}
 	deadline := time.After(timeout)
@@ -305,7 +312,9 @@ func (g *Gateway) CancelPAMSession(sessionID string) bool {
 		return false
 	}
 	for _, e := range entries {
-		e.conn.Close()
+		if e.conn != nil {
+			e.conn.Close()
+		}
 		e.cancel()
 		close(e.done)
 	}
@@ -392,6 +401,10 @@ func (g *Gateway) reapIdleSessions() {
 	for sessionID, entries := range g.pamSessions {
 		allIdle := true
 		for _, e := range entries {
+			if e.conn == nil {
+				allIdle = false
+				break
+			}
 			if e.lastActivity.Load() > cutoff {
 				allIdle = false
 				break
@@ -473,6 +486,8 @@ func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 		capabilities[CapabilityClickhouseNativeProtocol] = true
 		capabilities[CapabilityCertificateScan] = true
 		capabilities[CapabilityWindowsCertificateScan] = true
+		capabilities[CapabilityWebApp] = webapp.Ready()
+		capabilities["webAppRuntime"] = webapp.Status()
 		req := api.GatewayHeartbeatRequest{Capabilities: capabilities}
 		if err := api.CallGatewayHeartBeatV2(g.httpClient, req); err != nil {
 			log.Warn().Msgf("Heartbeat failed: %v", err)
@@ -547,6 +562,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 		return fmt.Errorf(
 			"this Infisical instance did not accept --listen-address, so it does not support direct gateway connections. Upgrade the instance, or start the gateway with --target-relay-name instead")
 	}
+	g.startWebRuntime(ctx)
 
 	if g.certs().DirectAddress != "" {
 		if err := g.startDirectListener(ctx, listenerFatal); err != nil {
@@ -646,6 +662,9 @@ func (g *Gateway) SetToken(token string) {
 }
 
 func (g *Gateway) Stop() {
+	if g.webRegistry != nil {
+		g.webRegistry.Stop()
+	}
 	g.cancel()
 
 	g.mu.Lock()
@@ -1181,6 +1200,9 @@ func (g *Gateway) handleGatewayConnection(conn net.Conn, onHandshakeSettled func
 		log.Info().Msgf("Failed to parse forward config from ALPN: %v", err)
 		return
 	}
+	if forwardConfig.PAMConfig.ResourceType == session.ResourceTypeWebApp && forwardConfig.Mode != ForwardModePAMWebBrowser && forwardConfig.Mode != ForwardModePAMCancellation {
+		return
+	}
 
 	if forwardConfig.Mode == ForwardModeHTTP {
 		log.Info().
@@ -1207,6 +1229,11 @@ func (g *Gateway) handleGatewayConnection(conn net.Conn, onHandshakeSettled func
 			log.Info().Msg("TCP proxy handler completed")
 		}
 		return
+	} else if forwardConfig.Mode == ForwardModePAMWebBrowser {
+		if err := g.handlePAMWebBrowser(tlsConn, reader, forwardConfig); err != nil {
+			log.Debug().Err(err).Msg("Web App stream ended")
+		}
+		return
 	} else if forwardConfig.Mode == ForwardModePAM || forwardConfig.Mode == ForwardModePAMRDPBrowser {
 		// RDP only: prior bridge must fully tear down before the new one starts,
 		// else overlapping drains write non-monotonic elapsedMs to the recording.
@@ -1230,6 +1257,12 @@ func (g *Gateway) handleGatewayConnection(conn net.Conn, onHandshakeSettled func
 		}
 		return
 	} else if forwardConfig.Mode == ForwardModePAMCancellation {
+		if forwardConfig.PAMConfig.ResourceType == session.ResourceTypeWebApp {
+			if g.webRegistry != nil {
+				g.webRegistry.Cancel(forwardConfig.PAMConfig.SessionId)
+			}
+			return
+		}
 		if err := pam.HandlePAMCancellation(g.ctx, tlsConn, &forwardConfig.PAMConfig, g.httpClient, g.CancelPAMSession); err != nil {
 			log.Error().Err(err).Msg("PAM cancellation proxy handler ended with error")
 		}
@@ -1289,7 +1322,8 @@ func (g *Gateway) handleGatewayConnection(conn net.Conn, onHandshakeSettled func
 			log.Warn().Msg("Rejecting connection-test request from non-platform actor")
 			return
 		}
-		if err := serveConnectionTestOverTLS(g.ctx, tlsConn, reader, forwardConfig); err != nil {
+		probeCtx := context.WithValue(g.ctx, webAppProbeContextKey{}, g.probeWebApp)
+		if err := serveConnectionTestOverTLS(probeCtx, tlsConn, reader, forwardConfig); err != nil {
 			log.Debug().Err(err).Msg("Connection-test handler ended with error")
 		}
 		return
@@ -1350,6 +1384,9 @@ func (g *Gateway) parseForwardConfigFromALPN(tlsConn *tls.Conn, reader *bufio.Re
 
 	case "infisical-pam-rdp-browser":
 		config.Mode = ForwardModePAMRDPBrowser
+		return config, nil
+	case "infisical-pam-web-browser":
+		config.Mode = ForwardModePAMWebBrowser
 		return config, nil
 
 	case "infisical-pam-session-cancellation":
@@ -1474,6 +1511,7 @@ func (g *Gateway) parseDetailsFromCertificate(tlsConn *tls.Conn, config *Forward
 				return fmt.Errorf("failed to parse PAM info JSON: %v", err)
 			}
 			config.PAMConfig = pam.GatewayPAMConfig{
+				WebApp:             pamInfo.WebApp,
 				SessionId:          pamInfo.SessionId,
 				ResourceType:       pamInfo.ResourceType,
 				ExpiryTime:         clientCert.NotAfter,
@@ -1566,6 +1604,7 @@ func nextProtosForGateway(pkcs11Loaded bool) []string {
 		"infisical-ping",
 		"infisical-pam-proxy",
 		"infisical-pam-rdp-browser",
+		"infisical-pam-web-browser",
 		"infisical-pam-session-cancellation",
 		"infisical-pam-capabilities",
 		"infisical-adcs",

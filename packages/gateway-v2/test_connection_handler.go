@@ -65,6 +65,7 @@ const (
 	testConnModeSnowflake  = "snowflake"
 	testConnModeClickhouse = "clickhouse"
 	testConnModeTCP        = "tcp"
+	testConnModeWebAppTCP  = "web-app-tcp"
 )
 
 // testConnectionEnvelope carries the fields common to every connection test; mode selects which client validates
@@ -823,6 +824,14 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 		}
 	case testConnModeTCP:
 		op = func() error { return doTCPReachabilityTest(ctx, target.host, target.port) }
+	case testConnModeWebAppTCP:
+		probe, _ := r.Context().Value(webAppProbeContextKey{}).(func(context.Context, string, int) error)
+		op = func() error {
+			if probe == nil {
+				return connectFailure(errors.New("browser runtime unavailable"))
+			}
+			return connectFailure(probe(ctx, target.host, target.port))
+		}
 	default:
 		writeRPCError(w, http.StatusBadRequest, fmt.Sprintf("unsupported test-connection mode: %q", env.Mode))
 		return
