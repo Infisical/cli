@@ -36,12 +36,12 @@ func agentVaultClaudeMCPConfig(services []api.AgentVaultSessionService, bypasses
 		// Claude Code expands ${VAR} in its MCP configuration, which would send a variable from this host's
 		// environment, such as the proxy URL with the session token, to the server.
 		if strings.Contains(service.URL, "$") || strings.Contains(service.Credential.Header, "$") || strings.Contains(service.Name, "$") {
-			leftOut = append(leftOut, fmt.Sprintf("%q: its URL or header names an environment variable, which Claude Code would fill in", service.Name))
+			leftOut = append(leftOut, quoted(service.Name, "name")+": its URL or header names an environment variable, which Claude Code would fill in")
 			continue
 		}
 		// Claude Code honors NO_PROXY, and a server it reaches directly gets the placeholder instead of the credential.
 		if bypassesProxy(service.URL) {
-			leftOut = append(leftOut, fmt.Sprintf("%q: NO_PROXY covers its host, so Claude Code would reach it without the proxy's credential", service.Name))
+			leftOut = append(leftOut, quoted(service.Name, "name")+": NO_PROXY covers its host, so Claude Code would reach it without the proxy's credential")
 			continue
 		}
 		server := agentVaultClaudeMCPServer{Type: "http", URL: service.URL}
@@ -124,7 +124,7 @@ func agentVaultRunMCPConfig(ctx context.Context, client *agentVaultSkillsClient,
 		if len(names) == 1 {
 			noun = "server"
 		}
-		fmt.Fprintln(util.GetStderrWriter(), color.HiBlackString(fmt.Sprintf("Added %d MCP %s to Claude Code: %s.", len(names), noun, strings.Join(names, ", "))))
+		fmt.Fprintln(util.GetStderrWriter(), color.HiBlackString(fmt.Sprintf("Added %d MCP %s to Claude Code: %s.", len(names), noun, listOf(names))))
 	}
 	return config
 }

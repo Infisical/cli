@@ -95,7 +95,7 @@ func TestRunGetsClaudeCodesMCPServersThroughTheProxy(t *testing.T) {
 	if apiURL != testProxyAPIURL || proxy.requests.Load() != 1 || proxy.lastRequest.Load() != "GET /api/v1/agent-vault/session/services" {
 		t.Fatalf("API URL %q, %d requests, last %v", apiURL, proxy.requests.Load(), proxy.lastRequest.Load())
 	}
-	if !strings.Contains(warnings.String(), "Added 1 MCP server to Claude Code: linear.") {
+	if !strings.Contains(warnings.String(), `Added 1 MCP server to Claude Code: "linear".`) {
 		t.Fatalf("printed %q", warnings.String())
 	}
 }
@@ -170,6 +170,33 @@ func TestAnMCPServerNOProxyCoversIsLeftOut(t *testing.T) {
 	}, bypasses)
 	if !reflect.DeepEqual(names, []string{"linear"}) || len(leftOut) != 1 || !strings.Contains(leftOut[0], `"internal": NO_PROXY covers its host`) {
 		t.Fatalf("names %v, left out %v", names, leftOut)
+	}
+}
+
+// A service's name comes from the services list, so a credential pasted as one never reaches a message.
+func TestMCPMessagesNeverShowANameThatIsntASafeIdentifier(t *testing.T) {
+	pasted := "ghp_" + strings.Repeat("Xk3vR9mQ2p", 3) + "L7wN4t"
+	_, _, leftOut := agentVaultClaudeMCPConfig([]api.AgentVaultSessionService{
+		mcpService(pasted, "https://mcp.corp.example.com/mcp", "streamable-http", "ready", bearerByProxy),
+		mcpService(pasted+"-${HOME}", "https://mcp.example.com/mcp", "streamable-http", "ready", bearerByProxy),
+	}, agentVaultBypassesProxy(".corp.example.com"))
+	if len(leftOut) != 2 || strings.Contains(strings.Join(leftOut, "\n"), "ghp_") ||
+		!strings.HasPrefix(leftOut[0], "<name>: NO_PROXY covers its host") ||
+		!strings.HasPrefix(leftOut[1], "<name>: its URL or header names an environment variable") {
+		t.Fatalf("left out %q", leftOut)
+	}
+
+	printed := captureWarnings(t)
+	proxy := newFakeTunnelProxy(t, "forwards", http.StatusOK, api.ListAgentVaultSessionServicesResponse{
+		Services: []api.AgentVaultSessionService{
+			mcpService(pasted, "https://mcp.example.com/mcp", "streamable-http", "ready", bearerByProxy),
+			mcpService("linear", "https://mcp.linear.app/mcp", "streamable-http", "ready", bearerByProxy),
+		},
+	})
+	var config string
+	prepareAgentVaultRunProxy(context.Background(), proxy.addr, "agv_tok", proxy.caPEM, nil, listMCPServersThrough(&config))
+	if !strings.Contains(printed.String(), `Added 2 MCP servers to Claude Code: <name>, "linear".`) || strings.Contains(printed.String(), "ghp_") {
+		t.Fatalf("printed %q", printed.String())
 	}
 }
 
