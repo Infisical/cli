@@ -1838,13 +1838,11 @@ func (tm *AgentManager) ManageTokenLifecycle() {
 			}
 		}
 
-		// Refresh again at 2/3 of the TTL
 		nextRefreshTime := tm.accessTokenRefreshedTime.Add(tm.accessTokenTTL * 2 / 3)
 		accessTokenMaxTTLExpiresInTime = tm.accessTokenFetchedTime.Add(tm.accessTokenMaxTTL - (5 * time.Second))
 
 		if nextRefreshTime.After(accessTokenMaxTTLExpiresInTime) {
 			// case: Refreshed so close that the next refresh would occur beyond max ttl
-			// Wake at 2/3 of the remaining time to max TTL
 			now = tokenNow()
 			nextRefreshTime = now.Add(accessTokenMaxTTLExpiresInTime.Sub(now) * 2 / 3)
 		}
