@@ -1455,6 +1455,8 @@ func (tm *AgentManager) FetchNewAccessToken() error {
 	}
 
 	log.Debug().Msg("FetchNewAccessToken: calling auth strategy")
+	// The token's life starts before its response arrives, so a suspend in between cannot make it look fresh.
+	requestedAt := tokenNow()
 	credential, err := authStrategies[tm.authStrategy]()
 
 	if err != nil {
@@ -1470,7 +1472,9 @@ func (tm *AgentManager) FetchNewAccessToken() error {
 		util.PrintErrorMessageAndExit("At this time, agent does not support refresh of tokens with 30 seconds or less ttl. Please increase access token ttl and try again")
 	}
 
-	tm.accessTokenFetchedTime = time.Now()
+	tm.accessTokenFetchedTime = requestedAt
+	// A login issues a fresh token, so the refresh schedule starts over from it.
+	tm.accessTokenRefreshedTime = requestedAt
 
 	log.Debug().Msg("FetchNewAccessToken: setting token")
 	tm.SetToken(credential.AccessToken, accessTokenTTL, accessTokenMaxTTL)
@@ -1722,6 +1726,8 @@ func (tm *AgentManager) RefreshAccessToken(accessToken string) error {
 		return err
 	}
 
+	// The token's life starts before its response arrives, so a suspend in between cannot make it look fresh.
+	requestedAt := tokenNow()
 	response, err := api.CallMachineIdentityRefreshAccessToken(httpClient, api.UniversalAuthRefreshRequest{AccessToken: accessToken})
 	if err != nil {
 		return err
@@ -1729,11 +1735,35 @@ func (tm *AgentManager) RefreshAccessToken(accessToken string) error {
 
 	accessTokenTTL := time.Duration(response.AccessTokenTTL * int(time.Second))
 	accessTokenMaxTTL := time.Duration(response.AccessTokenMaxTTL * int(time.Second))
-	tm.accessTokenRefreshedTime = time.Now()
+	tm.accessTokenRefreshedTime = requestedAt
 
 	tm.SetToken(response.AccessToken, accessTokenTTL, accessTokenMaxTTL)
 
 	return nil
+}
+
+// tokenLifecycleTick bounds each sleep of ManageTokenLifecycle. Go's timers and monotonic clock pause while
+// the machine sleeps, so one long time.Sleep ends late by the time asleep, after the token has expired.
+// Short sleeps against a wall-clock deadline end at most one tick after resume.
+const tokenLifecycleTick = 30 * time.Second
+
+// tokenNow and tokenSleep are the clock of ManageTokenLifecycle; tests replace them. Round(0) drops the
+// monotonic reading, so the deadlines built from tokenNow count time asleep, as the server does.
+var (
+	tokenNow   = func() time.Time { return time.Now().Round(0) }
+	tokenSleep = time.Sleep
+)
+
+// sleepUntil returns once the wall clock reaches deadline, or once it has slept the wait it started with,
+// whichever comes first. Sleeps run on the monotonic clock, so a correction that sets the wall clock back
+// cannot delay the wake.
+func sleepUntil(deadline time.Time) {
+	wait := deadline.Sub(tokenNow())
+	for wait > 0 {
+		step := min(wait, tokenLifecycleTick)
+		tokenSleep(step)
+		wait = min(wait-step, deadline.Sub(tokenNow()))
+	}
 }
 
 func (tm *AgentManager) ManageTokenLifecycle() {
@@ -1743,14 +1773,11 @@ func (tm *AgentManager) ManageTokenLifecycle() {
 			return
 		}
 
+		now := tokenNow()
 		accessTokenMaxTTLExpiresInTime := tm.accessTokenFetchedTime.Add(tm.accessTokenMaxTTL - (5 * time.Second))
-		accessTokenRefreshedTime := tm.accessTokenRefreshedTime
+		accessTokenExpiresInTime := tm.accessTokenRefreshedTime.Add(tm.accessTokenTTL - (5 * time.Second))
 
-		if accessTokenRefreshedTime.IsZero() {
-			accessTokenRefreshedTime = tm.accessTokenFetchedTime
-		}
-
-		if tm.accessTokenFetchedTime.IsZero() && tm.accessTokenRefreshedTime.IsZero() {
+		if tm.accessTokenFetchedTime.IsZero() {
 			// try to fetch token from sink files first
 			// if token is found, refresh the token right away and continue from there
 			isSavedTokenValid := false
@@ -1763,7 +1790,7 @@ func (tm *AgentManager) ManageTokenLifecycle() {
 
 				if isSavedTokenValid {
 					log.Info().Msg("token refreshed successfully from saved file")
-					tm.accessTokenFetchedTime = time.Now()
+					tm.accessTokenFetchedTime = tm.accessTokenRefreshedTime
 				} else {
 					log.Error().Msg("unable to refresh token from saved file")
 				}
@@ -1777,56 +1804,50 @@ func (tm *AgentManager) ManageTokenLifecycle() {
 					log.Error().Msgf("unable to authenticate because %v. Will retry in 30 seconds", err)
 
 					// wait a bit before trying again
-					time.Sleep((30 * time.Second))
+					tokenSleep(30 * time.Second)
 					continue
 				}
 				log.Debug().Msgf("authentication successful, starting token lifecycle management with TTL: %s, Max TTL: %s", tm.accessTokenTTL, tm.accessTokenMaxTTL)
 			}
-		} else if time.Now().After(accessTokenMaxTTLExpiresInTime) {
-			// case: token has reached max ttl and we should re-authenticate entirely (cannot refresh)
-			log.Info().Msgf("token has reached max ttl, attempting to re authenticate...")
+		} else if maxTTLReached := now.After(accessTokenMaxTTLExpiresInTime); maxTTLReached || now.After(accessTokenExpiresInTime) {
+			// case: token has reached max ttl, or its ttl ran out before the refresh, such as while the machine
+			// slept, and we should re-authenticate entirely (cannot refresh)
+			if maxTTLReached {
+				log.Info().Msgf("token has reached max ttl, attempting to re authenticate...")
+			} else {
+				log.Info().Msgf("token has expired before it was refreshed, attempting to re authenticate...")
+			}
 			err := tm.FetchNewAccessToken()
 			if err != nil {
 				log.Error().Msgf("unable to authenticate because %v. Will retry in 30 seconds", err)
 
 				// wait a bit before trying again
-				time.Sleep((30 * time.Second))
+				tokenSleep(30 * time.Second)
 				continue
 			}
 		} else {
-			// case: token ttl has expired, but the token is still within max ttl, so we can refresh
+			// case: token is at 2/3 of its ttl and still within max ttl, so we can refresh
 			log.Info().Msgf("attempting to refresh existing token...")
 			err := tm.RefreshAccessToken(tm.GetToken())
 			if err != nil {
 				log.Error().Msgf("unable to refresh token because %v. Will retry in 30 seconds", err)
 
 				// wait a bit before trying again
-				time.Sleep((30 * time.Second))
+				tokenSleep(30 * time.Second)
 				continue
 			}
 		}
 
-		if accessTokenRefreshedTime.IsZero() {
-			accessTokenRefreshedTime = tm.accessTokenFetchedTime
-		} else {
-			accessTokenRefreshedTime = tm.accessTokenRefreshedTime
-		}
-
-		// Recalculate next expiry time at 2/3 of the TTL
-		nextAccessTokenExpiresInTime := accessTokenRefreshedTime.Add(tm.accessTokenTTL * 2 / 3)
+		nextRefreshTime := tm.accessTokenRefreshedTime.Add(tm.accessTokenTTL * 2 / 3)
 		accessTokenMaxTTLExpiresInTime = tm.accessTokenFetchedTime.Add(tm.accessTokenMaxTTL - (5 * time.Second))
 
-		if nextAccessTokenExpiresInTime.After(accessTokenMaxTTLExpiresInTime) {
+		if nextRefreshTime.After(accessTokenMaxTTLExpiresInTime) {
 			// case: Refreshed so close that the next refresh would occur beyond max ttl
-			// Sleep until we're at 2/3 of the remaining time to max TTL
-			remainingTime := time.Until(accessTokenMaxTTLExpiresInTime)
-			time.Sleep(remainingTime * 2 / 3)
-		} else {
-			// Sleep until we're at 2/3 of the TTL
-			sleepDuration := tm.accessTokenTTL * 2 / 3
-			log.Debug().Msgf("sleeping for %s (2/3 of TTL %s) before next token refresh", sleepDuration, tm.accessTokenTTL)
-			time.Sleep(sleepDuration)
+			now = tokenNow()
+			nextRefreshTime = now.Add(accessTokenMaxTTLExpiresInTime.Sub(now) * 2 / 3)
 		}
+		log.Debug().Msgf("sleeping until %s (2/3 of TTL %s) before next token refresh", nextRefreshTime, tm.accessTokenTTL)
+		sleepUntil(nextRefreshTime)
 	}
 }
 
