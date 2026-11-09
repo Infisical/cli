@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -149,27 +150,37 @@ func (ps *proxyServer) handleNativeConnect(w http.ResponseWriter, r *http.Reques
 		ps.refuseNative(w, sessionToken, serviceName, fmt.Sprintf("this session has no database or SSH service named %q", serviceName))
 		return
 	}
+	// A probe only checks the service for `connect`, which says why it was refused, so only a real connection is
+	// recorded.
+	isProbe := r.Header.Get(NativeProbeHeader) != ""
+	refuse := func(body string) {
+		if isProbe {
+			ps.refuseNative(w, sessionToken, serviceName, body)
+			return
+		}
+		ps.refuseNativeService(w, sessionToken, grant, svc, body)
+	}
 	if svc.personalValuesMissing {
-		ps.refuseNative(w, sessionToken, serviceName, errPersonalValuesMissing(svc).Error())
+		refuse(errPersonalValuesMissing(svc).Error())
 		return
 	}
 	if err := checkSSHKey(svc); err != nil {
-		ps.refuseNative(w, sessionToken, serviceName, err.Error())
+		refuse(err.Error())
 		return
 	}
 	tlsConfig, err := nativeTLSConfig(*svc.native)
 	if err != nil {
-		ps.refuseNative(w, sessionToken, serviceName, fmt.Sprintf("the certificate authority stored on service %q can't be used: %s. Ask an admin to update the service", svc.name, err))
+		refuse(fmt.Sprintf("the certificate authority stored on service %q can't be used: %s. Ask an admin to update the service", svc.name, err))
 		return
 	}
-	if r.Header.Get(NativeProbeHeader) != "" {
+	if isProbe {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
 	conn, err := ps.cache.registerNative(sessionToken, svc)
 	if err != nil {
-		ps.refuseNative(w, sessionToken, serviceName, err.Error())
+		refuse(err.Error())
 		return
 	}
 	defer ps.cache.releaseNative(conn)
@@ -201,17 +212,35 @@ func (ps *proxyServer) handleNativeConnect(w http.ResponseWriter, r *http.Reques
 
 	log.Info().Str("service", svc.name).Str("kind", svc.kind).Str("sessionKey", conn.key).
 		Msg("agent-vault: native connection opened")
-	if err := serveNative(conn.ctx, clientConn, svc, tlsConfig, logger); err != nil && conn.ctx.Err() == nil {
+	// TODO: when PAM's handler can't log in to the server (a wrong password, a certificate it doesn't trust, a host it
+	// can't reach), the agent's client only sees the connection close. The reason reaches this log and the session
+	// log. Fix in PAM's handlers by sending the client an error in its own protocol before closing.
+	err = serveNative(conn.ctx, clientConn, svc, tlsConfig, logger)
+	if err != nil && conn.ctx.Err() == nil && !isClientHangUp(err) {
 		log.Warn().Err(err).Str("service", svc.name).Str("sessionKey", conn.key).Msg("agent-vault: native connection ended with an error")
+		logger.recordOutcome(decisionError, "The proxy couldn't connect to the service: "+err.Error())
 		return
 	}
 	log.Info().Str("service", svc.name).Str("sessionKey", conn.key).Msg("agent-vault: native connection closed")
+}
+
+// PAM's handlers return a bare EOF when the client hangs up, which is how every connection ends. A failure to reach or
+// log in to the server comes back wrapped with what failed.
+func isClientHangUp(err error) bool {
+	return err == io.EOF || err == io.ErrUnexpectedEOF
 }
 
 func (ps *proxyServer) refuseNative(w http.ResponseWriter, sessionToken, serviceName, body string) {
 	log.Warn().Str("service", serviceName).Str("sessionKey", sessionKey(sessionToken)).Str("reason", body).
 		Msg("agent-vault: refused a database or SSH connection")
 	http.Error(w, body, http.StatusForbidden)
+}
+
+// refuseNativeService refuses a connection to a service the session has, and records it so the session log shows
+// the attempt.
+func (ps *proxyServer) refuseNativeService(w http.ResponseWriter, sessionToken string, grant *sessionLogGrant, svc *resolvedService, body string) {
+	newNativeSessionLogger(ps, sessionKey(sessionToken), grant, svc).recordOutcome(decisionBlocked, body)
+	ps.refuseNative(w, sessionToken, svc.name, body)
 }
 
 func nativeTLSConfig(target nativeTarget) (*tls.Config, error) {
@@ -239,6 +268,8 @@ func serveNative(ctx context.Context, conn net.Conn, svc *resolvedService, tlsCo
 		// TODO: PAM's Postgres handler builds its pgproto3 Backend and Frontend without SetMaxBodyLen, so a session
 		// holder can declare a huge message in a 5-byte header and make the proxy allocate it before any body arrives.
 		// Fix in PAM's handler by calling SetMaxBodyLen on both sides.
+		// It also dials the server with no timeout, so a host or port that drops packets keeps the agent waiting until
+		// the operating system gives up, about 75 seconds. Fix by dialing with a timeout, as its SSH handler does (10s).
 		// It also never removes a prepared statement on Close, so a long-lived connection keeps the SQL of every
 		// named statement it has prepared. Fix by handling Close and capping the map.
 		// It pairs replies with requests through an unordered map and drops a Query's request at its first reply, so

@@ -208,7 +208,7 @@ func errAgentVaultConnectServiceNotFound(name string, available []agentvault.Nat
 		names[i] = service.Name
 	}
 	return &util.CLIError{Code: errCodeServiceNotFound,
-		Message: fmt.Sprintf("This session has no database or SSH service named %s: its services are %s.", quoted(name, "service"), strings.Join(names, ", "))}
+		Message: fmt.Sprintf("This session has no database or SSH service named %s: its services are %s. If you just added it, try again in a minute.", quoted(name, "service"), strings.Join(names, ", "))}
 }
 
 // The proxy's refusals are written for the person reading them, so they are passed on as they are.

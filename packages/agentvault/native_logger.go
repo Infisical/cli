@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
@@ -338,8 +339,25 @@ func (l *nativeSessionLogger) loggingOnLocked() bool {
 	return l.grant != nil && l.ps.sessionLogs != nil
 }
 
+// recordOutcome writes a row for a connection that never reached the service, with the reason as its note.
+func (l *nativeSessionLogger) recordOutcome(decision, reason string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	// The reasons are error text, which starts lowercase; a log row reads as a sentence.
+	if r, size := utf8.DecodeRuneInString(reason); size > 0 {
+		reason = string(unicode.ToUpper(r)) + reason[size:]
+	}
+	detail := &nativeDetail{}
+	appendCapped(&detail.Note, reason, nativeLogInputCap, &detail.Truncated)
+	l.writeDecisionLocked(decision, detail, l.now())
+}
+
 // at is when the row's activity started, which is the time it shows, however much later it is written.
 func (l *nativeSessionLogger) writeLocked(detail *nativeDetail, at time.Time) {
+	l.writeDecisionLocked(decisionBrokered, detail, at)
+}
+
+func (l *nativeSessionLogger) writeDecisionLocked(decision string, detail *nativeDetail, at time.Time) {
 	if !l.loggingOnLocked() {
 		return
 	}
@@ -349,7 +367,7 @@ func (l *nativeSessionLogger) writeLocked(detail *nativeDetail, at time.Time) {
 		Method:      strings.ToUpper(kind),
 		Host:        l.svc.native.host,
 		Port:        strconv.Itoa(l.svc.native.port),
-		Decision:    decisionBrokered,
+		Decision:    decision,
 		Service:     &l.svc.name,
 		ServiceType: &kind,
 		Native:      detail,

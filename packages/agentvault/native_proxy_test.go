@@ -11,6 +11,7 @@ import (
 	"crypto/x509"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -154,7 +155,7 @@ func TestNativeRefusalsHappenBeforeTheTunnel(t *testing.T) {
 
 	for _, tc := range []struct{ service, want string }{
 		{"nope", `no database or SSH service named "nope"`},
-		{"members", "needs your own credential or sign-in"},
+		{"members", "needs your own username or password"},
 		{"bastion", `the SSH key stored on service "bastion" can't be used`},
 	} {
 		err := client.Probe(context.Background(), tc.service)
@@ -162,6 +163,60 @@ func TestNativeRefusalsHappenBeforeTheTunnel(t *testing.T) {
 		if !errors.As(err, &refused) || refused.Status != http.StatusForbidden || !strings.Contains(refused.Message, tc.want) {
 			t.Errorf("probe %s: %v, want a 403 containing %q", tc.service, err, tc.want)
 		}
+	}
+}
+
+func TestARefusedConnectionIsRecordedButAProbeIsNot(t *testing.T) {
+	missingValues := nativeServiceAt(serviceKindPostgres, "members", "127.0.0.1:1")
+	missingValues.personalValuesMissing = true
+	ps, client, _ := newNativeProxy(t, []*resolvedService{missingValues})
+
+	_ = client.Probe(context.Background(), "members")
+	if records := nativeRecords(t, ps, 0); len(records) != 0 {
+		t.Fatalf("a probe was recorded: %+v", records)
+	}
+
+	_, err := client.OpenTunnel(context.Background(), "members")
+	var refused *ProxyRefusedError
+	if !errors.As(err, &refused) {
+		t.Fatalf("open: %v, want a refusal", err)
+	}
+	records := nativeRecords(t, ps, 1)
+	if len(records) != 1 || records[0].Decision != decisionBlocked || records[0].Native == nil ||
+		!strings.HasPrefix(records[0].Native.Note, `Service "members" needs your own username or password`) {
+		t.Fatalf("records = %+v, want one blocked row with the reason", records)
+	}
+}
+
+func TestAFailedLoginIsRecordedAsAnErrorWithTheReason(t *testing.T) {
+	upstream := startFakePostgres(t, "agent", "the-real-password")
+	ps, client, _ := newNativeProxy(t, []*resolvedService{nativeServiceAt(serviceKindPostgres, "db", upstream)})
+
+	tunnel, err := client.OpenTunnel(context.Background(), "db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tunnel.Close()
+	_ = tunnel.SetDeadline(time.Now().Add(5 * time.Second))
+	frontend := pgproto3.NewFrontend(tunnel, tunnel)
+	frontend.Send(&pgproto3.StartupMessage{ProtocolVersion: pgproto3.ProtocolVersionNumber, Parameters: map[string]string{"user": "whoever"}})
+	_ = frontend.Flush()
+
+	records := nativeRecords(t, ps, 1)
+	if len(records) != 1 || records[0].Decision != decisionError || records[0].Native == nil ||
+		!strings.HasPrefix(records[0].Native.Note, "The proxy couldn't connect to the service: ") {
+		t.Fatalf("records = %+v, want one error row with the reason", records)
+	}
+}
+
+func TestAClientHangingUpIsNotAnError(t *testing.T) {
+	for _, err := range []error{io.EOF, io.ErrUnexpectedEOF} {
+		if !isClientHangUp(err) {
+			t.Errorf("%v read as a failure", err)
+		}
+	}
+	if isClientHangUp(fmt.Errorf("startup failed: %w", io.ErrUnexpectedEOF)) {
+		t.Error("a wrapped startup failure read as the client hanging up")
 	}
 }
 
