@@ -428,6 +428,34 @@ func TestSSHTextFromWhileLogsWereOffIsNotWrittenOnceTheyAreOn(t *testing.T) {
 	}
 }
 
+func TestAnOpenSSHRowIsDroppedWhenLogsAreTurnedOff(t *testing.T) {
+	logger, ps := newLoggerUnderTest(t)
+	grant := logger.grant
+	setSessionLog := func(grant *sessionLogGrant) {
+		ps.cache.mu.Lock()
+		ps.cache.entries[logger.key].sessionLog = grant
+		ps.cache.mu.Unlock()
+	}
+	shellOut(logger, "typed while logs were on")
+	execIn(logger, "$ cat notes.txt")
+	execOut(logger, "read while logs were on")
+	setSessionLog(nil)
+	shellOut(logger, "typed while logs were off")
+	execOut(logger, "read while logs were off")
+	setSessionLog(grant)
+	shellOut(logger, "typed once logs were back on")
+	_ = logger.Close()
+
+	var got []string
+	for _, row := range loggedRows(ps) {
+		got = append(got, row.Command+row.Output)
+	}
+	want := []string{"cat notes.txt", "typed once logs were back on"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("rows = %q, want %q", got, want)
+	}
+}
+
 func TestASecondCloseTakesTheLoggerOffTheLateList(t *testing.T) {
 	logger, ps := newLoggerUnderTest(t)
 	execIn(logger, "$ printf done")

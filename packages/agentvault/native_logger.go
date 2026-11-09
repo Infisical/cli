@@ -149,6 +149,10 @@ func (l *nativeSessionLogger) logExecLocked(eventType session.SessionEventType, 
 // its rows; once that reaches max the row that hit it is written at once, and the rest of the stream is dropped.
 // If that row was already written when the next line comes, a marker row says the stream was cut instead.
 func (l *nativeSessionLogger) appendExecLocked(used *int, cut *bool, note string, line string, max int, now time.Time, field func(*nativeDetail) *string) {
+	if !l.loggingOnLocked() {
+		l.exec = nativeOpenRow{}
+		return
+	}
 	if *used >= max {
 		// The stream filled its share exactly, so this line is the first one left out.
 		if line == "" || *cut {
@@ -165,9 +169,6 @@ func (l *nativeSessionLogger) appendExecLocked(used *int, cut *bool, note string
 	}
 	l.rollIfStaleLocked(&l.exec, now)
 	if l.exec.detail == nil {
-		if !l.loggingOnLocked() {
-			return
-		}
 		l.exec = nativeOpenRow{detail: &nativeDetail{}, since: now}
 	}
 	dst := field(l.exec.detail)
@@ -185,15 +186,16 @@ func (l *nativeSessionLogger) appendExecLocked(used *int, cut *bool, note string
 // A shell's input only appears when the shell didn't echo it, so the screen is recorded as it scrolls by, in rows
 // that close at the output cap or after a minute.
 func (l *nativeSessionLogger) logShellLocked(data string, now time.Time) {
+	if !l.loggingOnLocked() {
+		l.shell = nativeOpenRow{}
+		return
+	}
 	l.rollIfStaleLocked(&l.shell, now)
 	// A row that can't take the next line closes first, so only a single line longer than the cap is cut.
 	if l.shell.detail != nil && len(l.shell.detail.Output)+1+len(data) > nativeLogOutputCap {
 		l.flushRowLocked(&l.shell)
 	}
 	if l.shell.detail == nil {
-		if !l.loggingOnLocked() {
-			return
-		}
 		l.shell = nativeOpenRow{detail: &nativeDetail{Shell: true}, since: now}
 	}
 	appendLine(&l.shell.detail.Output, data, nativeLogOutputCap, &l.shell.detail.Truncated)
@@ -326,8 +328,9 @@ func (l *nativeSessionLogger) flushRowLocked(row *nativeOpenRow) {
 }
 
 // The session's current grant, since logs can be switched off or on while a connection stays open. Once its cache
-// entry is gone the last one known is used, so the final rows of an ended session are still kept. Checked when a row
-// opens too, so text that arrived while logs were off isn't written once they are turned on.
+// entry is gone the last one known is used, so the final rows of an ended session are still kept. Checked on every
+// SSH line too, and a row still open while logs are off is dropped, so nothing from that time is written once they
+// are turned back on.
 func (l *nativeSessionLogger) loggingOnLocked() bool {
 	if grant, ok := l.ps.cache.currentGrant(l.key); ok {
 		l.grant = grant

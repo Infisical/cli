@@ -295,6 +295,9 @@ func serveNative(ctx context.Context, conn net.Conn, svc *resolvedService, tlsCo
 		// TODO: PAM's SSH handler closes an exec channel about 6 seconds after the client's stdin ends (proxy.go waits
 		// 3s for output, then 3s for exit-status), so `ssh -n host 'long command'`, the usual way agents run
 		// commands, is cut off with exit 255. The fix belongs in PAM's handler and must keep scp working.
+		// TODO: PAM's SSH handler writes every exec command to the proxy's own log at info, and its Postgres handler
+		// every query at debug, whether or not session logs are on, so a secret in a command line reaches that log.
+		// The fix belongs in PAM's handlers: leave the command and query out of those lines.
 		return pamssh.NewSSHProxy(config).HandleConnection(ctx, conn)
 	}
 	return fmt.Errorf("service kind %q has no native handler", svc.kind)
