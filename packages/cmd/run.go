@@ -435,9 +435,14 @@ func executeCommandWithWatchMode(commandFlag string, args []string, watchModeInt
 }
 
 func fetchSecrets(request models.GetMultiPathSecretsParameters, projectConfigDir string, secretOverriding bool, token *models.TokenDetails) ([]models.SingleEnvironmentVariable, error) {
+	paths := request.SecretsPaths
+	if len(paths) == 0 {
+		paths = []string{"/"}
+	}
+
 	var allSecrets []models.SingleEnvironmentVariable
 
-	for _, path := range request.SecretsPaths {
+	for _, path := range paths {
 		params := models.GetAllSecretsParameters{
 			Environment:              request.Environment,
 			WorkspaceId:              request.WorkspaceId,
@@ -466,7 +471,37 @@ func fetchSecrets(request models.GetMultiPathSecretsParameters, projectConfigDir
 	return allSecrets, nil
 }
 
-func formatSecretsForShell(secrets []models.SingleEnvironmentVariable) models.InjectableEnvironmentResult {
+func resolveProjectIDForInjection(request models.GetMultiPathSecretsParameters, secrets []models.SingleEnvironmentVariable, projectConfigDir string, token *models.TokenDetails) string {
+	if request.WorkspaceId != "" {
+		return request.WorkspaceId
+	}
+
+	for _, s := range secrets {
+		if s.WorkspaceId != "" {
+			return s.WorkspaceId
+		}
+	}
+
+	// Service tokens carry their own workspace scope rather than reading workspace files on disk.
+	if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER {
+		return ""
+	}
+
+	if projectConfigDir != "" {
+		if workspaceConfig, err := util.GetWorkSpaceFromFilePath(projectConfigDir); err == nil {
+			return workspaceConfig.WorkspaceId
+		}
+		return ""
+	}
+
+	if workspaceConfig, err := util.GetWorkSpaceFromFile(); err == nil {
+		return workspaceConfig.WorkspaceId
+	}
+
+	return ""
+}
+
+func formatSecretsForShell(secrets []models.SingleEnvironmentVariable, resolvedProjectID string) models.InjectableEnvironmentResult {
 	secretsByKey := getSecretsByKeys(secrets)
 	environmentVariables := make(map[string]string)
 
@@ -484,6 +519,11 @@ func formatSecretsForShell(secrets []models.SingleEnvironmentVariable) models.In
 	// now add infisical secrets
 	for k, v := range secretsByKey {
 		environmentVariables[k] = v.Value
+	}
+
+	// expose the project ID after secrets so it cannot be overwritten by user secrets
+	if resolvedProjectID != "" {
+		environmentVariables[util.INFISICAL_PROJECT_ID_NAME] = resolvedProjectID
 	}
 
 	env := make([]string, 0, len(environmentVariables))
@@ -504,5 +544,6 @@ func fetchAndFormatSecretsForShell(request models.GetMultiPathSecretsParameters,
 		return models.InjectableEnvironmentResult{}, err
 	}
 
-	return formatSecretsForShell(secrets), nil
+	resolvedProjectID := resolveProjectIDForInjection(request, secrets, projectConfigDir, token)
+	return formatSecretsForShell(secrets, resolvedProjectID), nil
 }
