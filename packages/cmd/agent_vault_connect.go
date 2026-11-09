@@ -146,7 +146,7 @@ func runAgentVaultConnect(cmd *cobra.Command, args []string) {
 		if !connectAll || !isAgentVaultServiceRefusal(err) {
 			exitWithError(cmd, classified)
 		}
-		fmt.Fprintf(os.Stderr, "%s: %s\n", service.Name, classified.Error())
+		warnAgentVaultConnect(service.Name, classified.Error())
 		refused = append(refused, classified)
 	}
 	if len(open) == 0 {
@@ -192,10 +192,10 @@ func runAgentVaultConnect(cmd *cobra.Command, args []string) {
 			onError := func(err error) {
 				var local *agentvault.LocalConnError
 				if errors.As(err, &local) {
-					fmt.Fprintf(os.Stderr, "%s: a local connection failed: %s\n", service.Name, local.Err)
+					warnAgentVaultConnect(service.Name, fmt.Sprintf("a local connection failed: %s", local.Err))
 					return
 				}
-				fmt.Fprintf(os.Stderr, "%s: %s\n", service.Name, classifyAgentVaultConnectError(err, proxyAddr).Error())
+				warnAgentVaultConnect(service.Name, classifyAgentVaultConnectError(err, proxyAddr).Error())
 			}
 			_ = client.ServeLocal(ctx, listeners[i], service, onError)
 		}()
@@ -210,6 +210,12 @@ func runAgentVaultConnect(cmd *cobra.Command, args []string) {
 func isAgentVaultServiceRefusal(err error) bool {
 	var refused *agentvault.ProxyRefusedError
 	return errors.As(err, &refused) && refused.Status == http.StatusForbidden && !refused.SessionInvalid()
+}
+
+// A warning that doesn't end the command. The message can carry the proxy's free-form refusal text, so it gets the
+// same cleaning as the errors exitWithError prints.
+func warnAgentVaultConnect(name, msg string) {
+	fmt.Fprintf(util.GetStderrWriter(), "%s: %s\n", util.SanitizeDisplay(name), util.RedactCredentials(util.SanitizeDisplay(msg)))
 }
 
 func agentVaultConnectServiceTypes(services []agentvault.NativeServiceInfo) []string {

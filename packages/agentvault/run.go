@@ -511,6 +511,7 @@ func serve(opts Options, s startup) error {
 
 	// Its own budget: in-flight requests can spend all of the shutdown's, and this is the last minute of session logs.
 	closeSessionLogs := func() {
+		ps.flushLateNativeLogs()
 		ctx, cancel := context.WithTimeout(context.Background(), sessionLogCloseTimeout)
 		defer cancel()
 		ps.sessionLogs.close(ctx)

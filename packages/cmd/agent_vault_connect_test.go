@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -338,5 +339,26 @@ func TestConnectTrustsTheProxyOnlyWhenSomethingVouchesForIt(t *testing.T) {
 				t.Error("the session token reached the proxy before it was trusted")
 			}
 		})
+	}
+}
+
+func TestAConnectWarningIsCleanedBeforeItPrints(t *testing.T) {
+	var buf strings.Builder
+	old := util.GetStderrWriter
+	util.GetStderrWriter = func() io.Writer { return &buf }
+	t.Cleanup(func() { util.GetStderrWriter = old })
+
+	token := "agv_" + strings.Repeat("a", 43)
+	warnAgentVaultConnect("orders\x1b[2J", "refused \x1b[31mred\x1b[0m with "+token)
+
+	got := buf.String()
+	if strings.Contains(got, "\x1b") {
+		t.Fatalf("warning %q kept an escape byte", got)
+	}
+	if strings.Contains(got, token) || !strings.Contains(got, "<redacted>") {
+		t.Fatalf("warning %q, want the token redacted", got)
+	}
+	if !strings.HasPrefix(got, "orders") {
+		t.Fatalf("warning %q, want it to start with the service name", got)
 	}
 }

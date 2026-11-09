@@ -108,6 +108,8 @@ type proxyServer struct {
 	saturationOnce sync.Once
 
 	sseStreams sseStreamRegistry
+
+	lateNativeLogs lateNativeLogs
 }
 
 func (ps *proxyServer) currentConfig() ProxyConfig {

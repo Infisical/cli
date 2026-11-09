@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 )
@@ -259,6 +260,169 @@ func TestALongStatementIsCutAndMarked(t *testing.T) {
 	rows := loggedRows(ps)
 	if len(rows) != 1 || len(rows[0].Statement) > nativeLogInputCap || !rows[0].Truncated || !strings.HasSuffix(rows[0].Statement, "é") {
 		t.Fatalf("statement of %d bytes, truncated=%v, want at most %d cut on a character", len(rows[0].Statement), rows[0].Truncated, nativeLogInputCap)
+	}
+}
+
+// A kept prefix must not hold the whole statement in memory, while the spool counts only the prefix.
+func TestACutStatementDoesNotHoldTheOriginal(t *testing.T) {
+	logger, ps := newLoggerUnderTest(t)
+	input := strings.Repeat("x", 1<<20)
+	_ = logger.LogEntry(session.SessionLogEntry{Input: input})
+
+	rows := loggedRows(ps)
+	if len(rows) != 1 || len(rows[0].Statement) != nativeLogInputCap {
+		t.Fatalf("rows = %d, want one statement cut at %d", len(rows), nativeLogInputCap)
+	}
+	if unsafe.StringData(rows[0].Statement) == unsafe.StringData(input) {
+		t.Fatal("the cut statement shares memory with the original")
+	}
+}
+
+func execIn(logger *nativeSessionLogger, data string) {
+	_ = logger.LogSessionEvent(event(session.SessionChannelExec, session.SessionEventInput, data))
+}
+
+func execOut(logger *nativeSessionLogger, data string) {
+	_ = logger.LogSessionEvent(event(session.SessionChannelExec, session.SessionEventOutput, data))
+}
+
+// Lines that fill a stream to exactly max bytes, so nothing is cut yet.
+func fillExactly(send func(string), max int) {
+	send(strings.Repeat("a", 1024))
+	for used := 1024; used < max; used += 1024 {
+		send(strings.Repeat("b", 1023))
+	}
+}
+
+const (
+	outputMarker = "Output past 64 KiB wasn't recorded"
+	inputMarker  = "Input past 8 KiB wasn't recorded"
+)
+
+func markers(rows []*nativeDetail, note string) int {
+	n := 0
+	for _, row := range rows {
+		if row.Note == note && row.Truncated {
+			n++
+		}
+	}
+	return n
+}
+
+func anyTruncated(rows []*nativeDetail) bool {
+	for _, row := range rows {
+		if row.Truncated {
+			return true
+		}
+	}
+	return false
+}
+
+// A stream that filled its share exactly, in a row already written, says so in a row of its own when more comes.
+func TestOutputDroppedAfterAFullRowIsMarked(t *testing.T) {
+	for name, between := range map[string]func(*nativeSessionLogger, func(time.Duration)){
+		"timer": func(logger *nativeSessionLogger, advance func(time.Duration)) {
+			advance(nativeLogShellWindow)
+			logger.flushDue()
+		},
+		"close": func(logger *nativeSessionLogger, _ func(time.Duration)) {
+			_ = logger.Close()
+		},
+		"stdin rolls the row": func(logger *nativeSessionLogger, advance func(time.Duration)) {
+			advance(nativeLogShellWindow)
+			execIn(logger, "SELECT 2;")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			logger, ps := newLoggerUnderTest(t)
+			_, advance := fakeLoggerClock(logger)
+			execIn(logger, "$ tail -f app.log")
+			fillExactly(func(line string) { execOut(logger, line) }, nativeLogOutputCap)
+			between(logger, advance)
+			execOut(logger, "lost 1")
+			execOut(logger, "lost 2")
+			_ = logger.Close()
+
+			rows := loggedRows(ps)
+			if got := markers(rows, outputMarker); got != 1 {
+				t.Fatalf("rows = %+v, want one output marker, got %d", rows, got)
+			}
+		})
+	}
+}
+
+func TestStdinDroppedAfterAFullRowIsMarked(t *testing.T) {
+	logger, ps := newLoggerUnderTest(t)
+	_, advance := fakeLoggerClock(logger)
+	execIn(logger, "$ psql")
+	fillExactly(func(line string) { execIn(logger, line) }, nativeLogInputCap)
+	advance(nativeLogShellWindow)
+	logger.flushDue()
+	execIn(logger, "lost")
+	_ = logger.Close()
+
+	rows := loggedRows(ps)
+	if got := markers(rows, inputMarker); got != 1 {
+		t.Fatalf("rows = %+v, want one input marker, got %d", rows, got)
+	}
+}
+
+// Exactly the cap and nothing after it lost nothing, so nothing says it was cut.
+func TestAStreamExactlyAtTheCapIsNotMarked(t *testing.T) {
+	logger, ps := newLoggerUnderTest(t)
+	execIn(logger, "$ cat")
+	fillExactly(func(line string) { execOut(logger, line) }, nativeLogOutputCap)
+	_ = logger.Close()
+
+	if rows := loggedRows(ps); anyTruncated(rows) {
+		t.Fatalf("rows = %+v, want none marked", rows)
+	}
+}
+
+// A marker per stream per command, and a new command starts its streams afresh.
+func TestEachStreamIsMarkedOncePerCommand(t *testing.T) {
+	logger, ps := newLoggerUnderTest(t)
+	_, advance := fakeLoggerClock(logger)
+	for _, command := range []string{"$ one", "$ two"} {
+		execIn(logger, command)
+		fillExactly(func(line string) { execOut(logger, line) }, nativeLogOutputCap)
+		advance(nativeLogShellWindow)
+		logger.flushDue()
+		for i := 0; i < 3; i++ {
+			execOut(logger, "lost")
+		}
+	}
+	_ = logger.Close()
+
+	rows := loggedRows(ps)
+	if got := markers(rows, outputMarker); got != 2 {
+		t.Fatalf("rows = %+v, want one output marker for each command, got %d", rows, got)
+	}
+}
+
+// At shutdown, lines that came after Close must be written before the session logs close, not when the late
+// window ends.
+func TestShutdownWritesLateLinesAtOnce(t *testing.T) {
+	logger, ps := newLoggerUnderTest(t)
+	execIn(logger, "$ printf done")
+	_ = logger.Close()
+	execOut(logger, "done")
+
+	ps.flushLateNativeLogs()
+	rows := loggedRows(ps)
+	if len(rows) != 2 || rows[1].Output != "done" {
+		t.Fatalf("rows = %+v, want the command and the late line", rows)
+	}
+	if logger.timer != nil {
+		t.Fatal("the late timer is still armed")
+	}
+
+	execOut(logger, "later")
+	if rows := loggedRows(ps); len(rows) != 1 || rows[0].Output != "later" {
+		t.Fatalf("rows = %+v, want a line after shutdown written at once", rows)
+	}
+	if logger.timer != nil {
+		t.Fatal("a line after shutdown armed the late timer")
 	}
 }
 

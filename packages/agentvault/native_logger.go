@@ -57,14 +57,16 @@ type nativeSessionLogger struct {
 	// The command's own row is written when it starts. What is piped into it and what it prints follow in rows
 	// of their own, so a long command shows up while it runs. Its stdin and output are capped across those rows,
 	// so one large dump can't push the session's earlier rows out of the spool.
-	exec        nativeOpenRow
-	execStdin   int
-	execOutput  int
-	execHasPipe bool
-	shell       nativeOpenRow
-	timer       *time.Timer
-	unrecorded  bool
-	closed      bool
+	exec          nativeOpenRow
+	execStdin     int
+	execOutput    int
+	execHasPipe   bool
+	execStdinCut  bool
+	execOutputCut bool
+	shell         nativeOpenRow
+	timer         *time.Timer
+	unrecorded    bool
+	closed        bool
 }
 
 func newNativeSessionLogger(ps *proxyServer, key string, grant *sessionLogGrant, svc *resolvedService) *nativeSessionLogger {
@@ -130,27 +132,35 @@ func (l *nativeSessionLogger) logExecLocked(eventType session.SessionEventType, 
 		if command, ok := strings.CutPrefix(data, "$ "); ok && !l.execHasPipe {
 			l.flushRowLocked(&l.exec)
 			l.execStdin, l.execOutput = 0, 0
+			l.execStdinCut, l.execOutputCut = false, false
 			detail := &nativeDetail{}
 			appendCapped(&detail.Command, command, nativeLogInputCap, &detail.Truncated)
 			l.writeLocked(detail, now)
 			return
 		}
 		l.execHasPipe = true
-		l.appendExecLocked(&l.execStdin, data, nativeLogInputCap, now, func(d *nativeDetail) *string { return &d.Stdin })
+		l.appendExecLocked(&l.execStdin, &l.execStdinCut, "Input past 8 KiB wasn't recorded", data, nativeLogInputCap, now, func(d *nativeDetail) *string { return &d.Stdin })
 		return
 	}
-	l.appendExecLocked(&l.execOutput, data, nativeLogOutputCap, now, func(d *nativeDetail) *string { return &d.Output })
+	l.appendExecLocked(&l.execOutput, &l.execOutputCut, "Output past 64 KiB wasn't recorded", data, nativeLogOutputCap, now, func(d *nativeDetail) *string { return &d.Output })
 }
 
 // Adds a line to the command's open row. used counts what the command has recorded of this stream across all
 // its rows; once that reaches max the row that hit it is written at once, and the rest of the stream is dropped.
-func (l *nativeSessionLogger) appendExecLocked(used *int, line string, max int, now time.Time, field func(*nativeDetail) *string) {
+// If that row was already written when the next line comes, a marker row says the stream was cut instead.
+func (l *nativeSessionLogger) appendExecLocked(used *int, cut *bool, note string, line string, max int, now time.Time, field func(*nativeDetail) *string) {
 	if *used >= max {
 		// The stream filled its share exactly, so this line is the first one left out.
-		if l.exec.detail != nil && line != "" && *field(l.exec.detail) != "" {
+		if line == "" || *cut {
+			return
+		}
+		*cut = true
+		if l.exec.detail != nil && *field(l.exec.detail) != "" {
 			l.exec.detail.Truncated = true
 			l.flushRowLocked(&l.exec)
+			return
 		}
+		l.writeLocked(&nativeDetail{Note: note, Truncated: true}, now)
 		return
 	}
 	l.rollIfStaleLocked(&l.exec, now)
@@ -164,6 +174,7 @@ func (l *nativeSessionLogger) appendExecLocked(used *int, line string, max int, 
 	*used += len(*dst) - before
 	if l.exec.detail.Truncated {
 		*used = max
+		*cut = true
 		l.flushRowLocked(&l.exec)
 	}
 }
@@ -199,6 +210,10 @@ func (l *nativeSessionLogger) armTimerLocked(now time.Time) {
 	case l.exec.detail == nil && l.shell.detail == nil:
 		return
 	case l.closed:
+		if !l.ps.lateNativeLogs.add(l) {
+			l.flushLocked()
+			return
+		}
 		wait = nativeLogLateWindow
 	default:
 		deadline := time.Time{}
@@ -218,12 +233,62 @@ func (l *nativeSessionLogger) flushDue() {
 	l.timer = nil
 	now := l.now()
 	if l.closed {
+		l.ps.lateNativeLogs.remove(l)
 		l.flushLocked()
 		return
 	}
 	l.rollIfStaleLocked(&l.exec, now)
 	l.rollIfStaleLocked(&l.shell, now)
 	l.armTimerLocked(now)
+}
+
+// Loggers holding late lines on their late window. Shutdown writes them before the session logs close, or the
+// window would end after the recorder stopped taking rows and a connection's last lines would be lost. Take a
+// logger's lock before mu, never the other way.
+type lateNativeLogs struct {
+	mu       sync.Mutex
+	loggers  map[*nativeSessionLogger]struct{}
+	shutDown bool
+}
+
+// Reports false once shutdown has flushed, so the caller writes its rows at once instead of waiting.
+func (r *lateNativeLogs) add(l *nativeSessionLogger) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.shutDown {
+		return false
+	}
+	if r.loggers == nil {
+		r.loggers = map[*nativeSessionLogger]struct{}{}
+	}
+	r.loggers[l] = struct{}{}
+	return true
+}
+
+func (r *lateNativeLogs) remove(l *nativeSessionLogger) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.loggers, l)
+}
+
+// Called once the connections are closed and before the session logs close.
+func (ps *proxyServer) flushLateNativeLogs() {
+	r := &ps.lateNativeLogs
+	r.mu.Lock()
+	r.shutDown = true
+	pending := r.loggers
+	r.loggers = nil
+	r.mu.Unlock()
+
+	for l := range pending {
+		l.mu.Lock()
+		if l.timer != nil {
+			l.timer.Stop()
+			l.timer = nil
+		}
+		l.flushLocked()
+		l.mu.Unlock()
+	}
 }
 
 func (l *nativeSessionLogger) LogHttpEvent(session.HttpEvent) error { return nil }
@@ -293,7 +358,8 @@ func appendCapped(dst *string, s string, max int, truncated *bool) {
 		for room > 0 && !utf8.RuneStart(s[room]) {
 			room--
 		}
-		s = s[:room]
+		// A copy, or the kept prefix would hold the whole original in memory while the spool counts only the prefix.
+		s = strings.Clone(s[:room])
 		*truncated = true
 	}
 	*dst += s
