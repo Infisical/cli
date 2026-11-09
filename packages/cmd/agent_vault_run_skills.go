@@ -178,11 +178,27 @@ func (c *agentVaultSkillsClient) services(ctx context.Context) (api.ListAgentVau
 // there through the proxy, whatever domain this command uses. The answer is only a claim until a tunnel confirms it.
 // answered is false when the proxy didn't answer in time, which says nothing about its age; a proxy that answered
 // without naming one is too old.
-func askAgentVaultProxyAPIURL(ctx context.Context, proxyAddr, sessionToken string) (claimed string, answered bool) {
+func askAgentVaultProxyAPIURL(ctx context.Context, proxyAddr, sessionToken string, minted bool) (claimed string, answered bool) {
 	ctx, cancel := context.WithTimeout(ctx, agentVaultProxyAPIURLTimeout)
 	defer cancel()
-	// A proxy that refused the session answered, but its age is unknown, as when it didn't answer at all.
 	claimed, err := agentvault.AskProxyAPIURL(ctx, proxyAddr, sessionToken, agentVaultProxyAPIURLTarget())
+	// The proxy names its Infisical only to a session it accepts, and remembers a refusal for a few seconds, such as one
+	// from a database replica that hadn't seen a session this run just minted. So a minted session asks again until the
+	// proxy accepts it, for as long as the skills step would.
+	if minted {
+		for _, delay := range agentVaultSkillsUnauthorizedRetryDelays {
+			if !errors.Is(err, agentvault.ErrProxyRefusedSession) {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return "", false
+			case <-time.After(delay):
+			}
+			claimed, err = agentvault.AskProxyAPIURL(ctx, proxyAddr, sessionToken, agentVaultProxyAPIURLTarget())
+		}
+	}
+	// A proxy that refused the session answered, but its age is unknown, as when it didn't answer at all.
 	return claimed, err == nil
 }
 
@@ -294,8 +310,8 @@ type agentVaultRunProxyStep func(ctx context.Context, tunnel *agentVaultSkillsTu
 // prepareAgentVaultRunProxy asks the proxy which Infisical it works with, then runs steps, a nil one skipped, within
 // one budget. It returns the API URL the agent's INFISICAL_AGENT_VAULT_URL comes from, or "" unless an answer from
 // inside TLS confirmed it.
-func prepareAgentVaultRunProxy(ctx context.Context, proxyAddr, sessionToken string, caPEM []byte, steps ...agentVaultRunProxyStep) string {
-	claimed, answered := askAgentVaultProxyAPIURL(ctx, proxyAddr, sessionToken)
+func prepareAgentVaultRunProxy(ctx context.Context, proxyAddr, sessionToken string, caPEM []byte, minted bool, steps ...agentVaultRunProxyStep) string {
+	claimed, answered := askAgentVaultProxyAPIURL(ctx, proxyAddr, sessionToken, minted)
 	var tunnel *agentVaultSkillsTunnel
 	if claimed != "" {
 		tunnel, _ = newAgentVaultSkillsTunnel(proxyAddr, sessionToken, claimed, caPEM)

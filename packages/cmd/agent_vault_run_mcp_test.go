@@ -104,7 +104,7 @@ func TestRunGetsClaudeCodesMCPServersThroughTheProxy(t *testing.T) {
 	})
 
 	var config string
-	apiURL := prepareAgentVaultRunProxy(context.Background(), proxy.addr, "agv_tok", proxy.caPEM, nil, listMCPServersThrough(&config))
+	apiURL := prepareAgentVaultRunProxy(context.Background(), proxy.addr, "agv_tok", proxy.caPEM, false, nil, listMCPServersThrough(&config))
 	if !strings.Contains(config, `"linear":{"type":"http","url":"https://mcp.linear.app/mcp","headers":{"Authorization":"Bearer agent-vault"}}`) {
 		t.Fatalf("config %q", config)
 	}
@@ -123,7 +123,7 @@ func TestAServicesListThatCantBeReadStartsClaudeCodeWithoutThem(t *testing.T) {
 		map[string]any{"error": "infisical_unreachable", "message": "the proxy could not reach Infisical"})
 
 	var config string
-	prepareAgentVaultRunProxy(context.Background(), proxy.addr, "agv_tok", proxy.caPEM, nil, listMCPServersThrough(&config))
+	prepareAgentVaultRunProxy(context.Background(), proxy.addr, "agv_tok", proxy.caPEM, false, nil, listMCPServersThrough(&config))
 	if config != "" || !strings.Contains(warnings.String(), "Starting Claude Code without the session's MCP servers: the proxy could not reach Infisical.") {
 		t.Fatalf("config %q, warned %q", config, warnings.String())
 	}
@@ -147,7 +147,7 @@ func TestAnOldProxysSessionGetsItsMCPServersFromInfisical(t *testing.T) {
 	proxy := newFakeTunnelProxy(t, "old", 0, nil)
 
 	var config string
-	prepareAgentVaultRunProxy(context.Background(), proxy.addr, "agv_tok", proxy.caPEM, nil, listMCPServersThrough(&config))
+	prepareAgentVaultRunProxy(context.Background(), proxy.addr, "agv_tok", proxy.caPEM, false, nil, listMCPServersThrough(&config))
 	if !strings.Contains(config, `"notion":{"type":"http","url":"https://mcp.notion.com/mcp"`) || proxy.requests.Load() != 0 {
 		t.Fatalf("config %q, %d requests through the old proxy", config, proxy.requests.Load())
 	}
@@ -211,7 +211,7 @@ func TestMCPMessagesNeverShowANameThatIsntASafeIdentifier(t *testing.T) {
 		},
 	})
 	var config string
-	prepareAgentVaultRunProxy(context.Background(), proxy.addr, "agv_tok", proxy.caPEM, nil, listMCPServersThrough(&config))
+	prepareAgentVaultRunProxy(context.Background(), proxy.addr, "agv_tok", proxy.caPEM, false, nil, listMCPServersThrough(&config))
 	if !strings.Contains(printed.String(), `Added 2 MCP servers to Claude Code: <name>, "linear".`) || strings.Contains(printed.String(), "ghp_") {
 		t.Fatalf("printed %q", printed.String())
 	}
@@ -223,7 +223,7 @@ func TestSilentLeavesOutTheLineNamingTheMCPServers(t *testing.T) {
 		Services: []api.AgentVaultSessionService{mcpService("linear", "https://mcp.linear.app/mcp", "streamable-http", "ready", bearerByProxy)},
 	})
 	var config string
-	prepareAgentVaultRunProxy(context.Background(), proxy.addr, "agv_tok", proxy.caPEM, nil,
+	prepareAgentVaultRunProxy(context.Background(), proxy.addr, "agv_tok", proxy.caPEM, false, nil,
 		func(ctx context.Context, tunnel *agentVaultSkillsTunnel, proxyTooOld bool) {
 			config = mcpConfigWritten(ctx, &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok", tunnel: tunnel}, true)
 		})

@@ -510,7 +510,7 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	var agentAPIURL string
 	if exitCode, interrupted := runAgentVaultRunStartupStep(
 		func(ctx context.Context) {
-			agentAPIURL = prepareAgentVaultRunProxy(ctx, proxyAddr, sessionToken, caPEM, installSkills, listMCPServers)
+			agentAPIURL = prepareAgentVaultRunProxy(ctx, proxyAddr, sessionToken, caPEM, minted != nil, installSkills, listMCPServers)
 		},
 		func(ctx context.Context) {
 			revokeAgentVaultRunSession(ctx, cmd, minted, keepSession, "The run was interrupted", true)

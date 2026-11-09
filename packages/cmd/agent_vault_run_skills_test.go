@@ -465,7 +465,7 @@ func TestNoSkillsOnlyConfirmsTheAPIURL(t *testing.T) {
 	var apiURL string
 	_, interrupted := runAgentVaultRunStartupStep(
 		func(ctx context.Context) {
-			apiURL = prepareAgentVaultRunProxy(ctx, proxy.addr, "agv_tok", proxy.caPEM, nil)
+			apiURL = prepareAgentVaultRunProxy(ctx, proxy.addr, "agv_tok", proxy.caPEM, false, nil)
 		},
 		func(context.Context) { t.Fatal("revoked") })
 	if interrupted || requests.Load() != 0 || apiURL != testProxyAPIURL {
@@ -490,7 +490,7 @@ func TestASkillsStepThatTimesOutStillStartsTheAgent(t *testing.T) {
 
 	_, interrupted := runAgentVaultRunStartupStep(
 		func(ctx context.Context) {
-			prepareAgentVaultRunProxy(ctx, proxy.addr, "agv_tok", proxy.caPEM, func(ctx context.Context, _ *agentVaultSkillsTunnel, _ bool) {
+			prepareAgentVaultRunProxy(ctx, proxy.addr, "agv_tok", proxy.caPEM, false, func(ctx context.Context, _ *agentVaultSkillsTunnel, _ bool) {
 				installAgentVaultRunSkills(ctx, client, agentvault.InstallOptions{}, false)
 			})
 		},
@@ -844,7 +844,7 @@ func TestRunGetsSkillsThroughTheProxysTunnel(t *testing.T) {
 
 func TestRunAsksTheProxyWhichInfisicalItWorksWith(t *testing.T) {
 	proxy := newFakeTunnelProxy(t, "forwards", http.StatusOK, skillsBody())
-	if got, answered := askAgentVaultProxyAPIURL(context.Background(), proxy.addr, "agv_tok"); got != testProxyAPIURL || !answered {
+	if got, answered := askAgentVaultProxyAPIURL(context.Background(), proxy.addr, "agv_tok", false); got != testProxyAPIURL || !answered {
 		t.Fatalf("the proxy named %q (answered %v), want %q", got, answered, testProxyAPIURL)
 	}
 	if got := proxy.sessionToken.Load(); got != "agv_tok" {
@@ -861,7 +861,7 @@ func TestRunAsksInfisicalDirectlyBehindAProxyThatNamesNoInfisical(t *testing.T) 
 		t.Run(mode, func(t *testing.T) {
 			home := isolateSkillsHome(t)
 			proxy := newFakeTunnelProxy(t, mode, 0, nil)
-			if got, answered := askAgentVaultProxyAPIURL(context.Background(), proxy.addr, "agv_tok"); got != "" || !answered {
+			if got, answered := askAgentVaultProxyAPIURL(context.Background(), proxy.addr, "agv_tok", false); got != "" || !answered {
 				t.Fatalf("an older proxy named %q (answered %v)", got, answered)
 			}
 			var askedDirectly bool
@@ -1022,7 +1022,7 @@ func TestTheAgentGetsTheAPIURLOnceAnAnswerInsideTLSConfirmsIt(t *testing.T) {
 	home := isolateSkillsHome(t)
 	proxy := newFakeTunnelProxy(t, "forwards", http.StatusOK, skillsBody(testSessionSkill("code-review", "x")))
 
-	apiURL := prepareAgentVaultRunProxy(context.Background(), proxy.addr, "agv_tok", proxy.caPEM,
+	apiURL := prepareAgentVaultRunProxy(context.Background(), proxy.addr, "agv_tok", proxy.caPEM, false,
 		installThrough(&agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok"}))
 	if apiURL != testProxyAPIURL {
 		t.Fatalf("the agent gets %q, want %q", apiURL, testProxyAPIURL)
@@ -1043,7 +1043,7 @@ func TestAnAPIURLChangedOnTheWayIsNotUsed(t *testing.T) {
 	direct := fakeSessionSkills(t, http.StatusOK, nil, testSessionSkill("from-infisical", "x"))
 	proxy := newFakeTunnelProxy(t, "rewritten", http.StatusOK, skillsBody(testSessionSkill("from-proxy", "x")))
 
-	apiURL := prepareAgentVaultRunProxy(context.Background(), proxy.addr, "agv_tok", proxy.caPEM, installThrough(direct))
+	apiURL := prepareAgentVaultRunProxy(context.Background(), proxy.addr, "agv_tok", proxy.caPEM, false, installThrough(direct))
 	if apiURL != "" {
 		t.Fatalf("the agent gets the changed URL %q", apiURL)
 	}
@@ -1063,7 +1063,7 @@ func TestAnHTTPDomainIsStillAskedOverTLS(t *testing.T) {
 	home := isolateSkillsHome(t)
 	proxy := newFakeTunnelProxy(t, "http", http.StatusOK, skillsBody(testSessionSkill("code-review", "x")))
 
-	apiURL := prepareAgentVaultRunProxy(context.Background(), proxy.addr, "agv_tok", proxy.caPEM,
+	apiURL := prepareAgentVaultRunProxy(context.Background(), proxy.addr, "agv_tok", proxy.caPEM, false,
 		installThrough(&agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok"}))
 	if apiURL != testHTTPProxyAPIURL {
 		t.Fatalf("the agent gets %q, want %q", apiURL, testHTTPProxyAPIURL)
@@ -1083,7 +1083,7 @@ func TestASlowProxyIsNotTakenForAnOldOne(t *testing.T) {
 	t.Cleanup(func() { agentVaultProxyAPIURLTimeout = old })
 
 	called := false
-	apiURL := prepareAgentVaultRunProxy(context.Background(), silentProxy(t), "agv_tok", nil,
+	apiURL := prepareAgentVaultRunProxy(context.Background(), silentProxy(t), "agv_tok", nil, false,
 		func(_ context.Context, tunnel *agentVaultSkillsTunnel, proxyTooOld bool) {
 			called = true
 			if tunnel != nil || proxyTooOld {
@@ -1104,7 +1104,7 @@ func TestAnInterruptWhileAskingTheProxyRevokes(t *testing.T) {
 	start := time.Now()
 
 	interrupted := prepareAgentVaultRunStartup(ctx,
-		func(ctx context.Context) { prepareAgentVaultRunProxy(ctx, addr, "agv_tok", nil, nil) },
+		func(ctx context.Context) { prepareAgentVaultRunProxy(ctx, addr, "agv_tok", nil, false, nil) },
 		func() { revoked = true })
 	if !interrupted || !revoked {
 		t.Fatalf("interrupted %v, revoked %v", interrupted, revoked)
@@ -1121,7 +1121,7 @@ func TestASkillsAnswerCutShortStillLeavesTheAgentItsAPIURL(t *testing.T) {
 	warnings := captureWarnings(t)
 	proxy := newFakeTunnelProxy(t, "cut", http.StatusOK, skillsBody())
 
-	apiURL := prepareAgentVaultRunProxy(context.Background(), proxy.addr, "agv_tok", proxy.caPEM,
+	apiURL := prepareAgentVaultRunProxy(context.Background(), proxy.addr, "agv_tok", proxy.caPEM, false,
 		installThrough(&agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok"}))
 	if apiURL != testProxyAPIURL {
 		t.Fatalf("the agent gets %q, want %q", apiURL, testProxyAPIURL)
@@ -1189,5 +1189,54 @@ func TestTunneledRequestsCarryNoSessionToken(t *testing.T) {
 	}
 	if proxy.requests.Load() != 2 || proxy.authorizations.Load() != nil || proxy.sessionToken.Load() != "agv_tok" {
 		t.Fatalf("%d requests, Authorization %v, tunnel session %v", proxy.requests.Load(), proxy.authorizations.Load(), proxy.sessionToken.Load())
+	}
+}
+
+// A proxy that names its Infisical only once it accepts the session, refusing it the first times it's asked.
+func refusingThenNamingProxy(t *testing.T, refusals int32) (addr string, asked *atomic.Int32) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	asked = &atomic.Int32{}
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				if _, err := http.ReadRequest(bufio.NewReader(conn)); err != nil {
+					return
+				}
+				answer := agentvault.HeaderAPIURL + ": " + testProxyAPIURL
+				if asked.Add(1) <= refusals {
+					answer = agentvault.HeaderDecision + ": blocked"
+				}
+				_, _ = io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n"+answer+"\r\n\r\n")
+			}()
+		}
+	}()
+	return listener.Addr().String(), asked
+}
+
+// The proxy remembers a refusal for a few seconds, so a session this run just minted asks again until the proxy accepts
+// it, and doesn't start the agent without discovery. A session from elsewhere asks once.
+func TestAMintedSessionAsksAgainUntilTheProxyNamesItsInfisical(t *testing.T) {
+	old := agentVaultSkillsUnauthorizedRetryDelays
+	agentVaultSkillsUnauthorizedRetryDelays = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+	t.Cleanup(func() { agentVaultSkillsUnauthorizedRetryDelays = old })
+
+	addr, asked := refusingThenNamingProxy(t, 2)
+	if got, answered := askAgentVaultProxyAPIURL(context.Background(), addr, "agv_tok", true); got != testProxyAPIURL || !answered || asked.Load() != 3 {
+		t.Fatalf("minted: named %q, answered %v, asked %d times", got, answered, asked.Load())
+	}
+
+	addr, asked = refusingThenNamingProxy(t, 2)
+	if got, answered := askAgentVaultProxyAPIURL(context.Background(), addr, "agv_tok", false); got != "" || answered || asked.Load() != 1 {
+		t.Fatalf("not minted: named %q, answered %v, asked %d times", got, answered, asked.Load())
 	}
 }
