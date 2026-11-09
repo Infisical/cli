@@ -253,6 +253,11 @@ func newAgentVaultSkillsTunnel(proxyAddr, sessionToken, claimedAPIURL string, ca
 	policy := util.DefaultRetryPolicy()
 	policy.StatusOnly = true
 	tunnel.httpClient = util.GetRestyClientWithoutCustomHeaders(policy)
+	// A redirect is never followed, since its target could be outside TLS, where anyone on the way can write the answer.
+	// The redirect itself is the answer check sees, and only the proxy's own session endpoints confirm the claim.
+	tunnel.httpClient.SetRedirectPolicy(resty.RedirectPolicyFunc(func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}))
 	// An answer the proxy didn't mark didn't come from the proxy's own Infisical, which asking again won't change, so
 	// only a marked one is asked again.
 	retryConditions := tunnel.httpClient.RetryConditions

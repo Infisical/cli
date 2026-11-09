@@ -699,6 +699,8 @@ func fakeTunnelProxyAPIURLs(mode string) (claimed, named string) {
 		return testHTTPProxyAPIURL, testHTTPProxyAPIURL
 	case "rewritten":
 		return "http://infisical.test/api", testProxyAPIURL
+	case "redirects":
+		return testProxyAPIURL, ""
 	}
 	return "", ""
 }
@@ -778,7 +780,20 @@ func newFakeTunnelProxy(t *testing.T, mode string, status int, body any) *fakeTu
 				agentvault.HeaderDecision+": skills\r\n"+agentvault.HeaderAPIURL+": "+named+"\r\n\r\n{\"skills\":[")
 			return
 		}
-		if mode == "busy-once" && seen == 1 {
+		if mode == "redirects" {
+			// A host's redirect, passed on as passthrough, and forged headers for whatever the redirect leads to.
+			if seen == 1 {
+				rec.Header().Set(agentvault.HeaderDecision, "passthrough")
+				rec.Header().Set("Location", testProxyAPIURL+"/v1/agent-vault/session/skills?followed=1")
+				rec.WriteHeader(http.StatusFound)
+			} else {
+				rec.Header().Set(agentvault.HeaderAPIURL, testProxyAPIURL)
+				rec.Header().Set(agentvault.HeaderDecision, decision)
+				rec.Header().Set("Content-Type", "application/json")
+				rec.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(rec).Encode(body)
+			}
+		} else if mode == "busy-once" && seen == 1 {
 			rec.Header().Set(agentvault.HeaderDecision, "error")
 			rec.Header().Set("Content-Type", "application/json")
 			rec.WriteHeader(http.StatusServiceUnavailable)
@@ -1238,5 +1253,20 @@ func TestAMintedSessionAsksAgainUntilTheProxyNamesItsInfisical(t *testing.T) {
 	addr, asked = refusingThenNamingProxy(t, 2)
 	if got, answered := askAgentVaultProxyAPIURL(context.Background(), addr, "agv_tok", false); got != "" || answered || asked.Load() != 1 {
 		t.Fatalf("not minted: named %q, answered %v, asked %d times", got, answered, asked.Load())
+	}
+}
+
+// A redirect's target could be outside TLS, where anyone between run and the proxy can write the answer, so run never
+// follows one: the redirect itself is the answer, and a host's answer passed on contradicts the claim.
+func TestARedirectIsNeverFollowedOutOfTheTunnel(t *testing.T) {
+	proxy := newFakeTunnelProxy(t, "redirects", http.StatusOK, api.ListAgentVaultSessionSkillsResponse{})
+	tunnel, err := newAgentVaultSkillsTunnel(proxy.addr, "agv_tok", testProxyAPIURL, proxy.caPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = api.CallListAgentVaultSessionSkillsThroughProxy(context.Background(), tunnel.httpClient, tunnel.tlsAPIURL, true,
+		func(res *resty.Response) error { return tunnel.check(res, agentvault.DecisionSkills) })
+	if !errors.Is(err, errAgentVaultProxyAnswerUnconfirmed) || proxy.requests.Load() != 1 || tunnel.confirmed || !tunnel.contradicted {
+		t.Fatalf("err %v, %d requests, confirmed %v, contradicted %v", err, proxy.requests.Load(), tunnel.confirmed, tunnel.contradicted)
 	}
 }
