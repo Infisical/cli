@@ -154,7 +154,7 @@ func TestNativeRefusalsHappenBeforeTheTunnel(t *testing.T) {
 
 	for _, tc := range []struct{ service, want string }{
 		{"nope", `no database or SSH service named "nope"`},
-		{"members", "needs your personal values"},
+		{"members", "needs your own credential or sign-in"},
 		{"bastion", `the SSH key stored on service "bastion" can't be used`},
 	} {
 		err := client.Probe(context.Background(), tc.service)

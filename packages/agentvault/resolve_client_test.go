@@ -96,12 +96,12 @@ func TestAResolveAsksForTheKeyUntilItHoldsOne(t *testing.T) {
 	}
 }
 
-func TestAResolveCarriesWhichServicesLackPersonalValues(t *testing.T) {
+func TestAResolveCarriesPersonalValuesMissingAndMemberProvided(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		// An older server leaves the field out, which has to read as set up.
+		// An older server leaves both fields out, which has to read as set up and shared.
 		_, _ = w.Write([]byte(`{"sessionId":"s1","services":[
-			{"id":"a","name":"github","accessBundleName":"b","hostPattern":"api.github.com","credential":{"type":"passthrough"},"personalValuesMissing":true},
+			{"id":"a","name":"github","accessBundleName":"b","hostPattern":"api.github.com","credential":{"type":"passthrough"},"personalValuesMissing":true,"memberProvided":true},
 			{"id":"b","name":"slack","accessBundleName":"b","hostPattern":"slack.com","credential":{"type":"passthrough"}}
 		],"sessionLogs":{"enabled":false}}`))
 	}))
@@ -120,14 +120,22 @@ func TestAResolveCarriesWhichServicesLackPersonalValues(t *testing.T) {
 	}
 
 	missing := map[string]bool{}
+	memberProvided := map[string]bool{}
 	for _, svc := range result.Services {
 		missing[svc.name] = svc.personalValuesMissing
+		memberProvided[svc.name] = svc.memberProvided
 	}
 	if !missing["github"] {
 		t.Fatal("personalValuesMissing: true on the wire did not reach the resolved service")
 	}
 	if missing["slack"] {
 		t.Fatal("a service without the field resolved as missing its personal values")
+	}
+	if !memberProvided["github"] {
+		t.Fatal("memberProvided: true on the wire did not reach the resolved service")
+	}
+	if memberProvided["slack"] {
+		t.Fatal("a service without the field resolved as member provided")
 	}
 }
 

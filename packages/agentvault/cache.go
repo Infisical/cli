@@ -80,6 +80,8 @@ type resolvedService struct {
 	personalValuesMissing bool
 	// Set for a database or SSH service, which is reached by name over its own protocol rather than by host.
 	native *nativeTarget
+	// Some credential field comes from each member, so a rejection is theirs to fix rather than an admin's.
+	memberProvided bool
 }
 
 // lastSeen and fetchedAt are wall-clock (Round(0)) so time asleep counts toward the grace and idle windows.

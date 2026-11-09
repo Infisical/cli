@@ -119,6 +119,8 @@ type AgentVaultService struct {
 	// The service takes part of its credential from each member and the session's owner has not set their personal values.
 	// Older servers never send it, which decodes to false.
 	PersonalValuesMissing bool `json:"personalValuesMissing"`
+	// Any credential field is left to each member. Older servers never send it, which decodes to false.
+	MemberProvided bool `json:"memberProvided"`
 }
 
 type AgentVaultNativeTLS struct {

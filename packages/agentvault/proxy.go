@@ -928,7 +928,7 @@ func (ps *proxyServer) forward(req *http.Request, t tunnel) (*http.Response, *re
 		_ = resp.Body.Close()
 		log.Warn().Str("service", matched.name).Str("serviceId", matched.id).
 			Msg("agent-vault: the MCP server rejected the service's credential")
-		return upstreamAuthFailed(req, staticCredentialRejectedBody(matched.name)), matched, outcome, nil
+		return upstreamAuthFailed(req, staticCredentialRejectedBody(matched)), matched, outcome, nil
 	}
 	if sent != nil {
 		resp, err = ps.handleUpstreamAuth(upstream, req, resp, matched, sessionToken, sent, replay, replayable)
