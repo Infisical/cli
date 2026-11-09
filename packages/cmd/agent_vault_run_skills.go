@@ -181,6 +181,7 @@ func (c *agentVaultSkillsClient) services(ctx context.Context) (api.ListAgentVau
 func askAgentVaultProxyAPIURL(ctx context.Context, proxyAddr, sessionToken string) (claimed string, answered bool) {
 	ctx, cancel := context.WithTimeout(ctx, agentVaultProxyAPIURLTimeout)
 	defer cancel()
+	// A proxy that refused the session answered, but its age is unknown, as when it didn't answer at all.
 	claimed, err := agentvault.AskProxyAPIURL(ctx, proxyAddr, sessionToken, agentVaultProxyAPIURLTarget())
 	return claimed, err == nil
 }
@@ -212,6 +213,8 @@ type agentVaultSkillsTunnel struct {
 }
 
 var errAgentVaultProxyAnswerUnconfirmed = errors.New("the answer through the proxy's tunnel did not come from the proxy's own Infisical")
+
+var errAgentVaultProxyRefusedSession = errors.New("the proxy refused the session")
 
 func newAgentVaultSkillsTunnel(proxyAddr, sessionToken, claimedAPIURL string, caPEM []byte) (*agentVaultSkillsTunnel, error) {
 	pool := x509.NewCertPool()
@@ -257,11 +260,16 @@ func newAgentVaultSkillsTunnel(proxyAddr, sessionToken, claimedAPIURL string, ca
 }
 
 // check passes an answer from the proxy's own session endpoint for decision. Inside TLS, which only the proxy can speak
-// for this host, the proxy names its API URL again: the same URL confirms the CONNECT answer's claim, and a successful
-// answer must also carry the decision only that endpoint sets.
+// for this host, the proxy names its API URL again: the same URL confirms the CONNECT answer's claim. Whatever the
+// status, the answer must carry that endpoint's decision or a refusal the proxy wrote, never one it passed on from a host.
 func (t *agentVaultSkillsTunnel) check(res *resty.Response, decision string) error {
-	if agentvault.APIURLFromHeader(res.Header().Get(agentvault.HeaderAPIURL)) != t.claimedAPIURL ||
-		(res.IsSuccess() && res.Header().Get(agentvault.HeaderDecision) != decision) {
+	answered := res.Header().Get(agentvault.HeaderDecision)
+	apiURL := agentvault.APIURLFromHeader(res.Header().Get(agentvault.HeaderAPIURL))
+	// The proxy names no Infisical to a session it has since refused, which neither confirms nor contradicts the claim.
+	if apiURL == "" && agentvault.IsProxyRefusal(answered) {
+		return errAgentVaultProxyRefusedSession
+	}
+	if apiURL != t.claimedAPIURL || (answered != decision && !agentvault.IsProxyRefusal(answered)) {
 		t.contradicted = true
 		return errAgentVaultProxyAnswerUnconfirmed
 	}

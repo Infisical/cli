@@ -247,12 +247,16 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Resolve before the leaf minting further down, so an unauthenticated caller cannot make the proxy work
-	// on their behalf. The proxy's own Infisical checks the session inside the tunnel instead.
+	// on their behalf. The proxy's own Infisical checks the session inside the tunnel instead, so a refused session
+	// still gets a tunnel there, but not the Infisical's URL.
+	var sessionErr error
 	if !infisicalHostDefersGate(hostname, port, sessionToken) {
 		if _, err := ps.cache.get(sessionToken); err != nil {
 			ps.denyAtGate(w, sessionToken, hostname, port, err)
 			return
 		}
+	} else {
+		_, sessionErr = ps.cache.get(sessionToken)
 	}
 
 	// Private and link-local addresses are reachable, deliberately: an internal API inside the operator's
@@ -275,9 +279,12 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	defer clientConn.Close()
 
-	// Names the proxy's Infisical, so agent-vault run can tell the agent where its session's endpoints are.
+	// Names the proxy's Infisical, so agent-vault run can tell the agent where its session's endpoints are. A refused
+	// session gets the refusal's decision instead, so run doesn't take this proxy for one too old to name it.
 	established := "HTTP/1.1 200 Connection Established\r\n"
-	if apiURL := proxyAPIURL(); apiURL != "" {
+	if sessionErr != nil {
+		established += HeaderDecision + ": " + classifyGateRefusal(sessionErr).decision + "\r\n"
+	} else if apiURL := proxyAPIURL(); apiURL != "" {
 		established += HeaderAPIURL + ": " + apiURL + "\r\n"
 	}
 	if _, err := clientConn.Write([]byte(established + "\r\n")); err != nil {
@@ -757,7 +764,9 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, t tun
 			dst.Add(name, v)
 		}
 	}
-	// After the upstream's headers, so an upstream cannot claim a decision the proxy did not make.
+	// After the upstream's headers, so an upstream cannot claim a decision the proxy did not make, or name an Infisical
+	// for agent-vault run to trust.
+	dst.Del(HeaderAPIURL)
 	dst.Set(HeaderDecision, decision)
 	if matched != nil {
 		dst.Set(HeaderService, matched.name)

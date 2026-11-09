@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -19,8 +20,9 @@ import (
 // proxy. agent-vault run leaves it out when told to.
 const BuiltinSkillName = "infisical-agent-vault"
 
-// HeaderAPIURL names the Infisical API this proxy works with. The proxy sends it on its answer to every CONNECT and on
-// its own refusals, so agent-vault run can point the agent at its session's endpoints there, through the proxy.
+// HeaderAPIURL names the Infisical API this proxy works with. The proxy sends it only to a session it accepts, on its
+// CONNECT answer, its own refusals and the session endpoints' answers, so agent-vault run can point the agent at those
+// endpoints, through the proxy. It never passes on a host's own.
 const HeaderAPIURL = "X-Agent-Vault-Api-Url"
 
 // URLEnv holds the URL of the proxy's Infisical in the agent's environment, such as https://app.infisical.com, the
@@ -81,6 +83,10 @@ func publishableAPIURL(parsed *url.URL) string {
 	return apiURL
 }
 
+// ErrProxyRefusedSession is AskProxyAPIURL's answer from a proxy that refused the session, or couldn't check it, and so
+// named no Infisical. Unlike an answer without any Agent Vault header, it doesn't mean the proxy is too old.
+var ErrProxyRefusedSession = errors.New("the proxy refused the session, so it named no Infisical")
+
 // AskProxyAPIURL asks the proxy at proxyAddr which Infisical it works with. It opens a CONNECT for target with the
 // session's token, reads the proxy's answer, and closes the connection without sending anything through it. A proxy too
 // old to say answers without the header, and "" comes back.
@@ -110,7 +116,11 @@ func AskProxyAPIURL(ctx context.Context, proxyAddr, sessionToken, target string)
 		return "", err
 	}
 
-	return APIURLFromHeader(resp.Header.Get(HeaderAPIURL)), nil
+	claimed := APIURLFromHeader(resp.Header.Get(HeaderAPIURL))
+	if claimed == "" && IsProxyRefusal(resp.Header.Get(HeaderDecision)) {
+		return "", ErrProxyRefusedSession
+	}
+	return claimed, nil
 }
 
 // APIURLFromHeader is the API URL a proxy named in HeaderAPIURL, or "" if it isn't one an agent may be given.
@@ -172,10 +182,21 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 // text the proxy always sent; the code and hint are for an agent deciding what to do next.
 func writeProxyError(w http.ResponseWriter, status int, decision, code, message string) {
 	w.Header().Set(HeaderDecision, decision)
-	if apiURL := proxyAPIURL(); apiURL != "" {
+	// A caller whose session the proxy refused, or couldn't check, learns nothing about where its Infisical is.
+	if apiURL := proxyAPIURL(); apiURL != "" && !refusesSession(code) {
 		w.Header().Set(HeaderAPIURL, apiURL)
 	}
 	writeJSON(w, status, proxyErrorBody{Error: code, Message: message, Hint: proxyErrorHint(code)})
+}
+
+// refusesSession reports whether a refusal with code is about the session itself, which no check has shown valid.
+func refusesSession(code string) bool {
+	return code == errorCodeSessionInvalid || code == errorCodeSessionUnresolvable || code == errorCodeProxyRevoked
+}
+
+// IsProxyRefusal reports whether decision marks an answer the proxy wrote itself rather than one it passed on.
+func IsProxyRefusal(decision string) bool {
+	return decision == decisionBlocked || decision == decisionError
 }
 
 // Stands for the URL of the session's services list, which only the running proxy knows.

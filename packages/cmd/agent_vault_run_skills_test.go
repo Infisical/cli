@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"math/big"
 	"net"
@@ -1124,5 +1125,42 @@ func TestASkillsAnswerCutShortStillLeavesTheAgentItsAPIURL(t *testing.T) {
 	}
 	if !strings.Contains(warnings.String(), "Starting without skills:") {
 		t.Fatalf("warned %q", warnings.String())
+	}
+}
+
+// Inside TLS only the proxy can speak, but it passes hosts' answers on, so only an answer it wrote confirms the claim:
+// the session endpoint's, or the proxy's own refusal. A host's answer that names the claimed URL is the attack this check
+// exists for.
+func TestOnlyAnAnswerTheProxyWroteConfirmsTheClaim(t *testing.T) {
+	const claimed = "https://infisical.example.com/api"
+	answer := func(status int, decision, apiURL string) *resty.Response {
+		header := http.Header{}
+		if decision != "" {
+			header.Set(agentvault.HeaderDecision, decision)
+		}
+		if apiURL != "" {
+			header.Set(agentvault.HeaderAPIURL, apiURL)
+		}
+		return &resty.Response{RawResponse: &http.Response{StatusCode: status, Header: header}}
+	}
+	for _, tc := range []struct {
+		name                    string
+		res                     *resty.Response
+		err                     error
+		confirmed, contradicted bool
+	}{
+		{"the endpoint's answer", answer(http.StatusOK, agentvault.DecisionSkills, claimed), nil, true, false},
+		{"Infisical's refusal, passed on by the endpoint", answer(http.StatusUnauthorized, agentvault.DecisionSkills, claimed), nil, true, false},
+		{"the proxy's own refusal", answer(http.StatusServiceUnavailable, "error", claimed), nil, true, false},
+		{"a host's refusal naming the claim", answer(http.StatusUnauthorized, "passthrough", claimed), errAgentVaultProxyAnswerUnconfirmed, false, true},
+		{"a host's answer naming the claim", answer(http.StatusOK, "brokered", claimed), errAgentVaultProxyAnswerUnconfirmed, false, true},
+		{"another Infisical", answer(http.StatusOK, agentvault.DecisionSkills, "https://evil.example/api"), errAgentVaultProxyAnswerUnconfirmed, false, true},
+		{"a session the proxy has since refused", answer(http.StatusForbidden, "blocked", ""), errAgentVaultProxyRefusedSession, false, false},
+	} {
+		tunnel := &agentVaultSkillsTunnel{claimedAPIURL: claimed}
+		err := tunnel.check(tc.res, agentvault.DecisionSkills)
+		if !errors.Is(err, tc.err) && err != tc.err || tunnel.confirmed != tc.confirmed || tunnel.contradicted != tc.contradicted {
+			t.Errorf("%s: err %v, confirmed %v, contradicted %v", tc.name, err, tunnel.confirmed, tunnel.contradicted)
+		}
 	}
 }

@@ -490,7 +490,8 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	}
 	// Claude Code loads MCP servers only when it starts, so the session's are handed to it rather than left for the agent
 	// to find.
-	var mcpConfig string
+	var mcpConfigPath string
+	removeMCPConfig := func() {}
 	var listMCPServers agentVaultRunProxyStep
 	if !noMCPServers && agentVaultRunStartsClaude(args) {
 		silent, _ := cmd.Flags().GetBool("silent")
@@ -501,7 +502,9 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 				util.PrintWarning(fmt.Sprintf("Starting Claude Code without the session's MCP servers: %v.", clientErr))
 				return
 			}
-			mcpConfig = agentVaultRunMCPConfig(ctx, servicesClient, bypassesProxy, silent)
+			if path, remove := agentVaultRunMCPConfig(ctx, servicesClient, bypassesProxy, silent, args[0]); path != "" {
+				mcpConfigPath, removeMCPConfig = path, remove
+			}
 		}
 	}
 	var agentAPIURL string
@@ -512,14 +515,16 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		func(ctx context.Context) {
 			revokeAgentVaultRunSession(ctx, cmd, minted, keepSession, "The run was interrupted", true)
 		}); interrupted {
+		removeMCPConfig()
 		os.Exit(exitCode)
 	}
 
 	env := buildAgentVaultRunEnv(os.Environ(), proxyAddr, sessionToken, caPath, extraNoProxy, agentAPIURL)
-	if mcpConfig != "" {
-		args = withAgentVaultMCPConfig(args, mcpConfig)
+	if mcpConfigPath != "" {
+		args = withAgentVaultMCPConfig(args, mcpConfigPath)
 	}
 	exitCode := runAgentVaultChild(args, env)
+	removeMCPConfig()
 
 	revokeAgentVaultRunSession(context.Background(), cmd, minted, keepSession, "The agent exited", false)
 	os.Exit(exitCode)

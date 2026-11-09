@@ -3,8 +3,14 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"runtime"
 	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/api"
@@ -30,7 +36,11 @@ func agentVaultClaudeMCPConfig(services []api.AgentVaultSessionService, bypasses
 	servers := map[string]agentVaultClaudeMCPServer{}
 	for _, service := range services {
 		parsed, err := url.Parse(service.URL)
-		if service.Type != "mcp" || service.Status != "ready" || err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
+		if service.Type != "mcp" || err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
+			continue
+		}
+		if service.Status != "ready" {
+			leftOut = append(leftOut, quoted(service.Name, "name")+": set up your personal values for it in Agent Vault first")
 			continue
 		}
 		// Claude Code expands ${VAR} in its MCP configuration, which would send a variable from this host's
@@ -93,19 +103,55 @@ func agentVaultBypassesProxy(noProxy string) func(rawURL string) bool {
 	}
 }
 
-// withAgentVaultMCPConfig puts --mcp-config=<config> right after Claude Code's command. The = form matters: the flag
+// withAgentVaultMCPConfig puts --mcp-config=<path> right after Claude Code's command. The = form matters: the flag
 // takes several values, so a separate value would also swallow a prompt passed as the first argument. Claude Code loads
 // it on top of any --mcp-config the user passes.
-func withAgentVaultMCPConfig(args []string, config string) []string {
+func withAgentVaultMCPConfig(args []string, path string) []string {
 	out := make([]string, 0, len(args)+1)
-	out = append(out, args[0], "--mcp-config="+config)
+	out = append(out, args[0], "--mcp-config="+path)
 	return append(out, args[1:]...)
 }
 
-// agentVaultRunMCPConfig gets the session's services and returns Claude Code's --mcp-config for its MCP servers, or ""
-// when there are none or the list can't be read, which a warning says. quiet (--silent) leaves out the line naming the
-// servers added, but not the warnings.
-func agentVaultRunMCPConfig(ctx context.Context, client *agentVaultSkillsClient, bypassesProxy func(rawURL string) bool, quiet bool) string {
+// What cmd.exe leaves alone in an argument. On Windows, npm installs Claude Code as claude.cmd, which runs through
+// cmd.exe, and cmd.exe reads |, &, ^ and %NAME% in its arguments even inside quotes.
+var agentVaultCmdExeSafePath = regexp.MustCompile(`^[A-Za-z0-9_.:\\/~ -]+$`)
+
+// agentVaultIsBatchFile reports whether a command resolved to path on goos runs through cmd.exe.
+func agentVaultIsBatchFile(goos, path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	return goos == "windows" && (ext == ".cmd" || ext == ".bat")
+}
+
+// writeAgentVaultMCPConfig writes Claude Code's --mcp-config to a file only this user can read, and returns its path and
+// a function that removes it. The JSON goes in a file, never on the command line, where cmd.exe would read an admin's
+// server URL or header name as part of a command; the file's path has to be safe for cmd.exe too.
+func writeAgentVaultMCPConfig(command, config string) (string, func(), error) {
+	file, err := os.CreateTemp("", "agent-vault-mcp-*.json")
+	if err != nil {
+		return "", nil, fmt.Errorf("their configuration couldn't be written: %w", err)
+	}
+	path := file.Name()
+	remove := func() { _ = os.Remove(path) }
+	_, err = file.WriteString(config)
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		remove()
+		return "", nil, fmt.Errorf("their configuration couldn't be written: %w", err)
+	}
+	if resolved, lookErr := exec.LookPath(command); lookErr == nil && agentVaultIsBatchFile(runtime.GOOS, resolved) && !agentVaultCmdExeSafePath.MatchString(path) {
+		remove()
+		return "", nil, errors.New("the temporary folder's path has characters that cmd.exe, which runs Claude Code here, would read as part of a command")
+	}
+	return path, remove, nil
+}
+
+// agentVaultRunMCPConfig gets the session's services and writes Claude Code's --mcp-config for its MCP servers to a file
+// for command, returning its path and a function that removes it. The path is "" when there are none, or when the list
+// can't be read or the file written, which a warning says. quiet (--silent) leaves out the line naming the servers
+// added, but not the warnings.
+func agentVaultRunMCPConfig(ctx context.Context, client *agentVaultSkillsClient, bypassesProxy func(rawURL string) bool, quiet bool, command string) (string, func()) {
 	listed, err := client.services(ctx)
 	if err != nil {
 		reason := agentVaultSkillsFailureReason(err)
@@ -113,18 +159,26 @@ func agentVaultRunMCPConfig(ctx context.Context, client *agentVaultSkillsClient,
 			reason = "the session is no longer valid"
 		}
 		util.PrintWarning(fmt.Sprintf("Starting Claude Code without the session's MCP servers: %s.", reason))
-		return ""
+		return "", nil
 	}
 	config, names, leftOut := agentVaultClaudeMCPConfig(listed.Services, bypassesProxy)
 	for _, why := range leftOut {
 		util.PrintWarning("Left out the MCP server " + why + ".")
 	}
-	if len(names) > 0 && !quiet {
+	if config == "" {
+		return "", nil
+	}
+	path, remove, err := writeAgentVaultMCPConfig(command, config)
+	if err != nil {
+		util.PrintWarning(fmt.Sprintf("Starting Claude Code without the session's MCP servers: %v.", err))
+		return "", nil
+	}
+	if !quiet {
 		noun := "servers"
 		if len(names) == 1 {
 			noun = "server"
 		}
 		fmt.Fprintln(util.GetStderrWriter(), color.HiBlackString(fmt.Sprintf("Added %d MCP %s to Claude Code: %s.", len(names), noun, listOf(names))))
 	}
-	return config
+	return path, remove
 }

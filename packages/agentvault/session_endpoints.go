@@ -161,6 +161,10 @@ func (ps *proxyServer) forwardSessionRequest(w http.ResponseWriter, r *http.Requ
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// A busy Infisical says when to ask again, which agent-vault run's retries wait for.
+	if retryAfter := resp.Header().Get("Retry-After"); retryAfter != "" {
+		w.Header().Set("Retry-After", retryAfter)
+	}
 	// Passed on so a client can also tell an answer that stopped short from a whole one.
 	if length := resp.RawResponse.ContentLength; length >= 0 && length <= sessionForwardMaxBytes {
 		w.Header().Set("Content-Length", strconv.FormatInt(length, 10))

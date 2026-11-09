@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -445,6 +446,8 @@ func TestResponsesCarryTheProxysDecisionNotTheUpstreams(t *testing.T) {
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(HeaderDecision, "brokered")
 		w.Header().Set(HeaderService, "forged")
+		// agent-vault run trusts an Infisical only an answer the proxy wrote names.
+		w.Header().Set(HeaderAPIURL, "https://evil.example/api")
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	t.Cleanup(upstream.Close)
@@ -470,8 +473,10 @@ func TestResponsesCarryTheProxysDecisionNotTheUpstreams(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if resp.Header.Get(HeaderDecision) != decisionPassthrough || resp.Header.Get(HeaderService) != "" {
-		t.Fatalf("the upstream's own headers must not survive: decision=%q service=%q", resp.Header.Get(HeaderDecision), resp.Header.Get(HeaderService))
+	if resp.Header.Get(HeaderDecision) != decisionPassthrough || resp.Header.Get(HeaderService) != "" ||
+		resp.Header.Get(HeaderAPIURL) != "" {
+		t.Fatalf("the upstream's own headers must not survive: decision=%q service=%q api url=%q",
+			resp.Header.Get(HeaderDecision), resp.Header.Get(HeaderService), resp.Header.Get(HeaderAPIURL))
 	}
 }
 
@@ -641,5 +646,48 @@ func TestTheAgentGetsInfisicalsURLWithoutAPI(t *testing.T) {
 		if got := InfisicalURL(apiURL); got != want {
 			t.Errorf("InfisicalURL(%q) = %q, want %q", apiURL, got, want)
 		}
+	}
+}
+
+// A made-up or dead token learns nothing about where the proxy's Infisical is: not from a CONNECT answer, not from a
+// refusal at the door, and not from the refusal inside the tunnel. The CONNECT answer is still marked, so
+// agent-vault run doesn't take the proxy for one too old to name its Infisical.
+func TestARefusedSessionLearnsNothingAboutTheProxysInfisical(t *testing.T) {
+	infisical := newFakeInfisical(t, http.StatusOK, `{}`)
+	_, base := newTLSProxy(t, noUpstream(t), goneResolver{})
+	proxyURL, err := base.Transport.(*http.Transport).Proxy(&http.Request{URL: &url.URL{Scheme: "https", Host: testInfisicalHost}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for _, target := range []string{testInfisicalHost + ":443", "api.github.com:443"} {
+		if got, err := AskProxyAPIURL(ctx, proxyURL.Host, testSocks5Token, target); got != "" || !errors.Is(err, ErrProxyRefusedSession) {
+			t.Fatalf("CONNECT %s for a gone session named %q (%v)", target, got, err)
+		}
+	}
+
+	resp, body := getThrough(t, withSessionToken(t, base, testSocks5Token), infisical.servicesURL(), nil)
+	if resp.StatusCode != http.StatusForbidden || resp.Header.Get(HeaderAPIURL) != "" || strings.Contains(body, testInfisicalHost) {
+		t.Fatalf("got %d, api url %q: %s", resp.StatusCode, resp.Header.Get(HeaderAPIURL), body)
+	}
+}
+
+// Before the proxy answered the session's endpoints, agent-vault run asked Infisical directly and waited as long as a
+// busy Infisical asked.
+func TestInfisicalsRetryAfterReachesTheCaller(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "7")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, `{"statusCode":429,"message":"Too many requests"}`)
+	}))
+	t.Cleanup(server.Close)
+	apiURL := useInfisicalServer(t, "https", server)
+	_, client := newTLSProxy(t, noUpstream(t), fixedResolver{})
+
+	resp, _ := getThrough(t, client, apiURL+sessionServicesPath, nil)
+	if resp.StatusCode != http.StatusTooManyRequests || resp.Header.Get("Retry-After") != "7" {
+		t.Fatalf("got %d with Retry-After %q", resp.StatusCode, resp.Header.Get("Retry-After"))
 	}
 }

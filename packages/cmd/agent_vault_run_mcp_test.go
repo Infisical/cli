@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -35,7 +37,8 @@ func TestTheSessionsReadyMCPServersBecomeClaudeCodesConfig(t *testing.T) {
 		mcpService("local-file", "file:///etc/passwd", "streamable-http", "ready", bearerByProxy),
 	}
 	config, names, leftOut := agentVaultClaudeMCPConfig(services, neverBypassed)
-	if want := []string{"linear", "legacy", "keyed", "open", "linear-2"}; !reflect.DeepEqual(names, want) || leftOut != nil {
+	if want := []string{"linear", "legacy", "keyed", "open", "linear-2"}; !reflect.DeepEqual(names, want) ||
+		!reflect.DeepEqual(leftOut, []string{`"waiting": set up your personal values for it in Agent Vault first`}) {
 		t.Fatalf("names %v, want %v (left out %v)", names, want, leftOut)
 	}
 	var parsed struct {
@@ -67,16 +70,30 @@ func TestASessionWithoutMCPServersAddsNoConfig(t *testing.T) {
 
 // The flag takes several values, so a separate value would also take a prompt passed as the first argument.
 func TestTheMCPConfigGoesInWithoutTakingThePrompt(t *testing.T) {
-	got := withAgentVaultMCPConfig([]string{"claude", "fix the bug", "--model", "opus"}, `{"mcpServers":{}}`)
-	want := []string{"claude", `--mcp-config={"mcpServers":{}}`, "fix the bug", "--model", "opus"}
+	got := withAgentVaultMCPConfig([]string{"claude", "fix the bug", "--model", "opus"}, "/tmp/agent-vault-mcp-1.json")
+	want := []string{"claude", "--mcp-config=/tmp/agent-vault-mcp-1.json", "fix the bug", "--model", "opus"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("args %q, want %q", got, want)
 	}
 }
 
+// mcpConfigWritten runs the MCP step and returns the configuration it wrote for Claude Code, removing the file.
+func mcpConfigWritten(ctx context.Context, client *agentVaultSkillsClient, quiet bool) string {
+	path, remove := agentVaultRunMCPConfig(ctx, client, neverBypassed, quiet, "claude")
+	if path == "" {
+		return ""
+	}
+	defer remove()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
 func listMCPServersThrough(config *string) agentVaultRunProxyStep {
 	return func(ctx context.Context, tunnel *agentVaultSkillsTunnel, proxyTooOld bool) {
-		*config = agentVaultRunMCPConfig(ctx, &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok", tunnel: tunnel, proxyTooOld: proxyTooOld}, neverBypassed, false)
+		*config = mcpConfigWritten(ctx, &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok", tunnel: tunnel, proxyTooOld: proxyTooOld}, false)
 	}
 }
 
@@ -208,7 +225,7 @@ func TestSilentLeavesOutTheLineNamingTheMCPServers(t *testing.T) {
 	var config string
 	prepareAgentVaultRunProxy(context.Background(), proxy.addr, "agv_tok", proxy.caPEM, nil,
 		func(ctx context.Context, tunnel *agentVaultSkillsTunnel, proxyTooOld bool) {
-			config = agentVaultRunMCPConfig(ctx, &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok", tunnel: tunnel}, neverBypassed, true)
+			config = mcpConfigWritten(ctx, &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok", tunnel: tunnel}, true)
 		})
 	if config == "" || strings.Contains(printed.String(), "Added") {
 		t.Fatalf("config %q, printed %q", config, printed.String())
@@ -221,5 +238,68 @@ func TestASessionClientErrorNeverRepeatsCustomHeaders(t *testing.T) {
 	_, err := newAgentVaultSessionHTTPClient()
 	if err == nil || strings.Contains(err.Error(), "s3cret-value") || !strings.Contains(err.Error(), "INFISICAL_CUSTOM_HEADERS") {
 		t.Fatalf("err %v", err)
+	}
+}
+
+// A member who starts run hears why a server is missing, and can fix it.
+func TestAnMCPServerWaitingForPersonalValuesIsLeftOutWithAReason(t *testing.T) {
+	_, names, leftOut := agentVaultClaudeMCPConfig([]api.AgentVaultSessionService{
+		mcpService("linear", "https://mcp.linear.app/mcp", "streamable-http", "needs-personal-values",
+			api.AgentVaultSessionServiceCredential{Type: "none"}),
+		mcpService("notion", "https://mcp.notion.com/mcp", "streamable-http", "ready", bearerByProxy),
+	}, neverBypassed)
+	if !reflect.DeepEqual(names, []string{"notion"}) || len(leftOut) != 1 ||
+		leftOut[0] != `"linear": set up your personal values for it in Agent Vault first` {
+		t.Fatalf("names %v, left out %q", names, leftOut)
+	}
+}
+
+// The configuration goes to Claude Code in a file only this user can read, never on the command line.
+func TestTheMCPConfigIsWrittenToAFileOnlyTheUserCanRead(t *testing.T) {
+	path, remove, err := writeAgentVaultMCPConfig("claude", `{"mcpServers":{}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, readErr := os.ReadFile(path)
+	info, statErr := os.Stat(path)
+	if readErr != nil || statErr != nil || string(data) != `{"mcpServers":{}}` {
+		t.Fatalf("read %q (%v, %v)", data, readErr, statErr)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %v", info.Mode().Perm())
+	}
+	remove()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("the file is still there: %v", err)
+	}
+}
+
+// cmd.exe runs claude.cmd and reads |, &, ^ and %NAME% in its arguments, so only a plain path goes to it.
+func TestOnlyAPlainPathGoesThroughCmdExe(t *testing.T) {
+	for path, want := range map[string]bool{
+		`C:\Users\alice\AppData\Local\Temp\agent-vault-mcp-123.json`:  true,
+		`C:\Users\JOHNDO~1\AppData\Local\Temp\agent-vault-mcp-1.json`: true,
+		`C:\Users\Jane Doe\AppData\Local\Temp\agent-vault-mcp-1.json`: true,
+		`C:\Users\R&D\AppData\Local\Temp\agent-vault-mcp-1.json`:      false,
+		`C:\Users\100%TEMP%\agent-vault-mcp-1.json`:                   false,
+		`C:\Users\a^b\agent-vault-mcp-1.json`:                         false,
+		`C:\Users\a|calc|\agent-vault-mcp-1.json`:                     false,
+	} {
+		if got := agentVaultCmdExeSafePath.MatchString(path); got != want {
+			t.Errorf("safe(%q) = %v, want %v", path, got, want)
+		}
+	}
+	for _, tc := range []struct {
+		goos, path string
+		want       bool
+	}{
+		{"windows", `C:\npm\claude.cmd`, true},
+		{"windows", `C:\npm\CLAUDE.BAT`, true},
+		{"windows", `C:\Users\alice\.local\bin\claude.exe`, false},
+		{"darwin", "/usr/local/bin/claude.cmd", false},
+	} {
+		if got := agentVaultIsBatchFile(tc.goos, tc.path); got != tc.want {
+			t.Errorf("batch(%s, %q) = %v, want %v", tc.goos, tc.path, got, tc.want)
+		}
 	}
 }
