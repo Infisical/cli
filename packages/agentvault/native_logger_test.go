@@ -402,6 +402,24 @@ func TestEachStreamIsMarkedOncePerCommand(t *testing.T) {
 
 // At shutdown, lines that came after Close must be written before the session logs close, not when the late
 // window ends.
+func TestASecondCloseTakesTheLoggerOffTheLateList(t *testing.T) {
+	logger, ps := newLoggerUnderTest(t)
+	execIn(logger, "$ printf done")
+	_ = logger.Close()
+	execOut(logger, "done")
+	_ = logger.Close()
+
+	ps.lateNativeLogs.mu.Lock()
+	_, listed := ps.lateNativeLogs.loggers[logger]
+	ps.lateNativeLogs.mu.Unlock()
+	if listed {
+		t.Fatal("a closed logger stayed on the late list")
+	}
+	if rows := loggedRows(ps); len(rows) != 2 || rows[1].Output != "done" {
+		t.Fatalf("rows = %+v, want the command and the late line", rows)
+	}
+}
+
 func TestShutdownWritesLateLinesAtOnce(t *testing.T) {
 	logger, ps := newLoggerUnderTest(t)
 	execIn(logger, "$ printf done")

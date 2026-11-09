@@ -301,6 +301,8 @@ func (l *nativeSessionLogger) Close() error {
 		l.timer.Stop()
 		l.timer = nil
 	}
+	// PAM closes the logger and so do we, and a late line between the two puts it on the late list.
+	l.ps.lateNativeLogs.remove(l)
 	l.flushLocked()
 	return nil
 }
