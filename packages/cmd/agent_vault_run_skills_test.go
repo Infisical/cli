@@ -1176,7 +1176,6 @@ func TestOnlyAnAnswerTheProxyWroteConfirmsTheClaim(t *testing.T) {
 		{"a host's refusal naming the claim", answer(http.StatusUnauthorized, "passthrough", claimed), errAgentVaultProxyAnswerUnconfirmed, false, true},
 		{"a host's answer naming the claim", answer(http.StatusOK, "brokered", claimed), errAgentVaultProxyAnswerUnconfirmed, false, true},
 		{"another Infisical", answer(http.StatusOK, agentvault.DecisionSkills, "https://evil.example/api"), errAgentVaultProxyAnswerUnconfirmed, false, true},
-		{"a session the proxy has since refused", answer(http.StatusForbidden, "blocked", ""), errAgentVaultProxyRefusedSession, false, false},
 	} {
 		tunnel := &agentVaultSkillsTunnel{claimedAPIURL: claimed}
 		err := tunnel.check(tc.res, agentvault.DecisionSkills)
@@ -1268,5 +1267,28 @@ func TestARedirectIsNeverFollowedOutOfTheTunnel(t *testing.T) {
 		func(res *resty.Response) error { return tunnel.check(res, agentvault.DecisionSkills) })
 	if !errors.Is(err, errAgentVaultProxyAnswerUnconfirmed) || proxy.requests.Load() != 1 || tunnel.confirmed || !tunnel.contradicted {
 		t.Fatalf("err %v, %d requests, confirmed %v, contradicted %v", err, proxy.requests.Load(), tunnel.confirmed, tunnel.contradicted)
+	}
+}
+
+// A refusal from the proxy after the CONNECT names no Infisical, so it neither confirms nor contradicts the claim, but
+// its reason reaches the warning, such as a proxy whose token was revoked.
+func TestARefusalAfterTheConnectKeepsItsReason(t *testing.T) {
+	res := &resty.Response{
+		Request: &resty.Request{Method: http.MethodGet, URL: testProxyAPIURL + "/v1/agent-vault/session/skills"},
+		RawResponse: &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{
+			agentvault.HeaderDecision: []string{"error"},
+			"Content-Type":            []string{"application/json"},
+		}},
+	}
+	res.SetBody([]byte(`{"error":"proxy_revoked","message":"this proxy's access has been revoked","hint":"rotate its token"}`))
+	tunnel := &agentVaultSkillsTunnel{claimedAPIURL: testProxyAPIURL}
+
+	err := tunnel.check(res, agentvault.DecisionSkills)
+	var apiErr *api.APIError
+	if !errors.As(err, &apiErr) || apiErr.Name != "proxy_revoked" || tunnel.confirmed || tunnel.contradicted {
+		t.Fatalf("err %v, confirmed %v, contradicted %v", err, tunnel.confirmed, tunnel.contradicted)
+	}
+	if reason := agentVaultSkillsFailureReason(err); reason != "this proxy's access has been revoked" {
+		t.Fatalf("reason %q", reason)
 	}
 }

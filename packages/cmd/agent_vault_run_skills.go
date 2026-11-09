@@ -230,8 +230,6 @@ type agentVaultSkillsTunnel struct {
 
 var errAgentVaultProxyAnswerUnconfirmed = errors.New("the answer through the proxy's tunnel did not come from the proxy's own Infisical")
 
-var errAgentVaultProxyRefusedSession = errors.New("the proxy refused the session")
-
 func newAgentVaultSkillsTunnel(proxyAddr, sessionToken, claimedAPIURL string, caPEM []byte) (*agentVaultSkillsTunnel, error) {
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(caPEM) {
@@ -287,8 +285,9 @@ func (t *agentVaultSkillsTunnel) check(res *resty.Response, decision string) err
 	answered := res.Header().Get(agentvault.HeaderDecision)
 	apiURL := agentvault.APIURLFromHeader(res.Header().Get(agentvault.HeaderAPIURL))
 	// The proxy names no Infisical to a session it has since refused, which neither confirms nor contradicts the claim.
+	// The refusal's own code and message still say what to fix, such as a proxy whose token was revoked.
 	if apiURL == "" && agentvault.IsProxyRefusal(answered) {
-		return errAgentVaultProxyRefusedSession
+		return api.NewAPIErrorWithResponse("CallAgentVaultSessionEndpointThroughProxy", res, nil)
 	}
 	if apiURL != t.claimedAPIURL || (answered != decision && !agentvault.IsProxyRefusal(answered)) {
 		t.contradicted = true

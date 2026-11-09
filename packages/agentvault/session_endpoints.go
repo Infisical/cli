@@ -35,7 +35,8 @@ const (
 // IsInfisicalForwardRefusal reports whether an error code from a session endpoint is the proxy's own answer rather than
 // Infisical's answer passed on, so the CLI doesn't put it on Infisical.
 func IsInfisicalForwardRefusal(code string) bool {
-	return code == errorCodeBusy || code == errorCodeInfisicalUnreachable
+	return code == errorCodeBusy || code == errorCodeInfisicalUnreachable ||
+		code == errorCodeProxyRevoked || code == errorCodeSessionUnresolvable
 }
 
 // IsSessionRefusal reports whether an error code is the proxy refusing the session itself, which only a new session fixes.

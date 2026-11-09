@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
@@ -301,5 +302,18 @@ func TestOnlyAPlainPathGoesThroughCmdExe(t *testing.T) {
 		if got := agentVaultIsBatchFile(tc.goos, tc.path); got != tc.want {
 			t.Errorf("batch(%s, %q) = %v, want %v", tc.goos, tc.path, got, tc.want)
 		}
+	}
+}
+
+// The temporary folder comes from the environment, so a failure to write there never repeats its path.
+func TestAnUnwritableTemporaryFolderIsNotNamed(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("TMPDIR sets the temporary folder on Unix only")
+	}
+	pasted := "ghp_" + strings.Repeat("Xk3vR9mQ2p", 3) + "L7wN4t"
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), pasted, "missing"))
+	_, _, err := writeAgentVaultMCPConfig("claude", `{"mcpServers":{}}`)
+	if err == nil || strings.Contains(err.Error(), pasted) || strings.Contains(err.Error(), "/") {
+		t.Fatalf("err %v", err)
 	}
 }

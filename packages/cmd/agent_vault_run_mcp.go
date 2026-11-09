@@ -122,13 +122,16 @@ func agentVaultIsBatchFile(goos, path string) bool {
 	return goos == "windows" && (ext == ".cmd" || ext == ".bat")
 }
 
+// Names no path: the temporary folder comes from the environment, which the CLI never repeats in a message.
+var errAgentVaultMCPConfigUnwritable = errors.New("their configuration couldn't be written to the temporary folder")
+
 // writeAgentVaultMCPConfig writes Claude Code's --mcp-config to a file only this user can read, and returns its path and
 // a function that removes it. The JSON goes in a file, never on the command line, where cmd.exe would read an admin's
 // server URL or header name as part of a command; the file's path has to be safe for cmd.exe too.
 func writeAgentVaultMCPConfig(command, config string) (string, func(), error) {
 	file, err := os.CreateTemp("", "agent-vault-mcp-*.json")
 	if err != nil {
-		return "", nil, fmt.Errorf("their configuration couldn't be written: %w", err)
+		return "", nil, errAgentVaultMCPConfigUnwritable
 	}
 	path := file.Name()
 	remove := func() { _ = os.Remove(path) }
@@ -138,7 +141,7 @@ func writeAgentVaultMCPConfig(command, config string) (string, func(), error) {
 	}
 	if err != nil {
 		remove()
-		return "", nil, fmt.Errorf("their configuration couldn't be written: %w", err)
+		return "", nil, errAgentVaultMCPConfigUnwritable
 	}
 	if resolved, lookErr := exec.LookPath(command); lookErr == nil && agentVaultIsBatchFile(runtime.GOOS, resolved) && !agentVaultCmdExeSafePath.MatchString(path) {
 		remove()
