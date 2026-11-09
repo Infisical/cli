@@ -165,6 +165,9 @@ func (l *nativeSessionLogger) appendExecLocked(used *int, cut *bool, note string
 	}
 	l.rollIfStaleLocked(&l.exec, now)
 	if l.exec.detail == nil {
+		if !l.loggingOnLocked() {
+			return
+		}
 		l.exec = nativeOpenRow{detail: &nativeDetail{}, since: now}
 	}
 	dst := field(l.exec.detail)
@@ -188,6 +191,9 @@ func (l *nativeSessionLogger) logShellLocked(data string, now time.Time) {
 		l.flushRowLocked(&l.shell)
 	}
 	if l.shell.detail == nil {
+		if !l.loggingOnLocked() {
+			return
+		}
 		l.shell = nativeOpenRow{detail: &nativeDetail{Shell: true}, since: now}
 	}
 	appendLine(&l.shell.detail.Output, data, nativeLogOutputCap, &l.shell.detail.Truncated)
@@ -319,14 +325,19 @@ func (l *nativeSessionLogger) flushRowLocked(row *nativeOpenRow) {
 	}
 }
 
-// at is when the row's activity started, which is the time it shows, however much later it is written.
-func (l *nativeSessionLogger) writeLocked(detail *nativeDetail, at time.Time) {
-	// The session's current grant, since logs can be switched off or on while a connection stays open. Once its
-	// cache entry is gone the last one known is used, so the final rows of an ended session are still kept.
+// The session's current grant, since logs can be switched off or on while a connection stays open. Once its cache
+// entry is gone the last one known is used, so the final rows of an ended session are still kept. Checked when a row
+// opens too, so text that arrived while logs were off isn't written once they are turned on.
+func (l *nativeSessionLogger) loggingOnLocked() bool {
 	if grant, ok := l.ps.cache.currentGrant(l.key); ok {
 		l.grant = grant
 	}
-	if l.grant == nil || l.ps.sessionLogs == nil {
+	return l.grant != nil && l.ps.sessionLogs != nil
+}
+
+// at is when the row's activity started, which is the time it shows, however much later it is written.
+func (l *nativeSessionLogger) writeLocked(detail *nativeDetail, at time.Time) {
+	if !l.loggingOnLocked() {
 		return
 	}
 

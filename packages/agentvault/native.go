@@ -239,6 +239,11 @@ func serveNative(ctx context.Context, conn net.Conn, svc *resolvedService, tlsCo
 		// TODO: PAM's Postgres handler builds its pgproto3 Backend and Frontend without SetMaxBodyLen, so a session
 		// holder can declare a huge message in a 5-byte header and make the proxy allocate it before any body arrives.
 		// Fix in PAM's handler by calling SetMaxBodyLen on both sides.
+		// It also never removes a prepared statement on Close, so a long-lived connection keeps the SQL of every
+		// named statement it has prepared. Fix by handling Close and capping the map.
+		// It pairs replies with requests through an unordered map and drops a Query's request at its first reply, so
+		// a multi-statement Query or pipelined requests can log the wrong result or lose an error. Fix by pairing
+		// replies in the order the requests were sent.
 		return pamhandlers.NewPostgresProxy(pamhandlers.PostgresProxyConfig{
 			TargetAddr:     target.addr(),
 			InjectUsername: cred.username,

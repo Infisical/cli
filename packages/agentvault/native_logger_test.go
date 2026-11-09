@@ -286,6 +286,10 @@ func execOut(logger *nativeSessionLogger, data string) {
 	_ = logger.LogSessionEvent(event(session.SessionChannelExec, session.SessionEventOutput, data))
 }
 
+func shellOut(logger *nativeSessionLogger, data string) {
+	_ = logger.LogSessionEvent(event(session.SessionChannelShell, session.SessionEventOutput, data))
+}
+
 // Lines that fill a stream to exactly max bytes, so nothing is cut yet.
 func fillExactly(send func(string), max int) {
 	send(strings.Repeat("a", 1024))
@@ -402,6 +406,28 @@ func TestEachStreamIsMarkedOncePerCommand(t *testing.T) {
 
 // At shutdown, lines that came after Close must be written before the session logs close, not when the late
 // window ends.
+func TestSSHTextFromWhileLogsWereOffIsNotWrittenOnceTheyAreOn(t *testing.T) {
+	logger, ps := newLoggerUnderTest(t)
+	setSessionLog := func(grant *sessionLogGrant) {
+		ps.cache.mu.Lock()
+		ps.cache.entries[logger.key].sessionLog = grant
+		ps.cache.mu.Unlock()
+	}
+	grant := logger.grant
+	setSessionLog(nil)
+	shellOut(logger, "typed while logs were off")
+	execIn(logger, "$ cat notes.txt")
+	execOut(logger, "read while logs were off")
+	setSessionLog(grant)
+	shellOut(logger, "typed once logs were on")
+	_ = logger.Close()
+
+	rows := loggedRows(ps)
+	if len(rows) != 1 || rows[0].Output != "typed once logs were on" {
+		t.Fatalf("rows = %+v, want only the text from after logs were turned on", rows)
+	}
+}
+
 func TestASecondCloseTakesTheLoggerOffTheLateList(t *testing.T) {
 	logger, ps := newLoggerUnderTest(t)
 	execIn(logger, "$ printf done")
