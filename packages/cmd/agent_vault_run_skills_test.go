@@ -683,6 +683,9 @@ type fakeTunnelProxy struct {
 	includeBuiltin atomic.Value
 	// The method and path of the last request that reached the proxy through a tunnel.
 	lastRequest atomic.Value
+	// The Authorization header of every request that reached the proxy through a tunnel, which must be empty: the proxy
+	// adds the session's token itself.
+	authorizations atomic.Value
 	// Requests that reached the proxy through a tunnel.
 	requests atomic.Int32
 }
@@ -757,6 +760,9 @@ func newFakeTunnelProxy(t *testing.T, mode string, status int, body any) *fakeTu
 		}
 		proxy.includeBuiltin.Store(req.URL.Query().Get("includeBuiltin"))
 		proxy.lastRequest.Store(req.Method + " " + req.URL.Path)
+		if authorization := req.Header.Get("Authorization"); authorization != "" {
+			proxy.authorizations.Store(authorization)
+		}
 		seen := proxy.requests.Add(1)
 		rec := httptest.NewRecorder()
 		rec.Header().Set("Connection", "close")
@@ -1162,5 +1168,26 @@ func TestOnlyAnAnswerTheProxyWroteConfirmsTheClaim(t *testing.T) {
 		if !errors.Is(err, tc.err) && err != tc.err || tunnel.confirmed != tc.confirmed || tunnel.contradicted != tc.contradicted {
 			t.Errorf("%s: err %v, confirmed %v, contradicted %v", tc.name, err, tunnel.confirmed, tunnel.contradicted)
 		}
+	}
+}
+
+// Until an answer confirms it, the claimed URL could name another host the traffic policy lets through, so neither
+// request through the tunnel carries the session's token: the proxy authenticates the session from the tunnel and adds
+// the token itself.
+func TestTunneledRequestsCarryNoSessionToken(t *testing.T) {
+	proxy := newFakeTunnelProxy(t, "forwards", http.StatusOK, api.ListAgentVaultSessionServicesResponse{})
+	tunnel, err := newAgentVaultSkillsTunnel(proxy.addr, "agv_tok", testProxyAPIURL, proxy.caPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &agentVaultSkillsClient{httpClient: resty.New(), sessionToken: "agv_tok", tunnel: tunnel, includeBuiltin: true}
+	if _, err := client.list(context.Background()); err != nil {
+		t.Fatalf("skills: %v", err)
+	}
+	if _, err := client.services(context.Background()); err != nil {
+		t.Fatalf("services: %v", err)
+	}
+	if proxy.requests.Load() != 2 || proxy.authorizations.Load() != nil || proxy.sessionToken.Load() != "agv_tok" {
+		t.Fatalf("%d requests, Authorization %v, tunnel session %v", proxy.requests.Load(), proxy.authorizations.Load(), proxy.sessionToken.Load())
 	}
 }

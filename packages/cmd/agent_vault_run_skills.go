@@ -130,7 +130,7 @@ type agentVaultSkillsClient struct {
 func (c *agentVaultSkillsClient) list(ctx context.Context) (api.ListAgentVaultSessionSkillsResponse, error) {
 	if c.tunnel != nil {
 		listed, err := c.retrying(ctx, func() (api.ListAgentVaultSessionSkillsResponse, error) {
-			return api.CallListAgentVaultSessionSkillsThroughProxy(ctx, c.tunnel.httpClient, c.tunnel.tlsAPIURL, c.sessionToken,
+			return api.CallListAgentVaultSessionSkillsThroughProxy(ctx, c.tunnel.httpClient, c.tunnel.tlsAPIURL,
 				c.includeBuiltin, func(res *resty.Response) error { return c.tunnel.check(res, agentvault.DecisionSkills) })
 		})
 		// An answer that didn't come from the proxy's own Infisical is dropped, and Infisical is asked directly instead.
@@ -155,7 +155,7 @@ func (c *agentVaultSkillsClient) list(ctx context.Context) (api.ListAgentVaultSe
 func (c *agentVaultSkillsClient) services(ctx context.Context) (api.ListAgentVaultSessionServicesResponse, error) {
 	if c.tunnel != nil {
 		listed, err := agentVaultRetrying(ctx, c.retryUnauthorized, func() (api.ListAgentVaultSessionServicesResponse, error) {
-			return api.CallListAgentVaultSessionServicesThroughProxy(ctx, c.tunnel.httpClient, c.tunnel.tlsAPIURL, c.sessionToken,
+			return api.CallListAgentVaultSessionServicesThroughProxy(ctx, c.tunnel.httpClient, c.tunnel.tlsAPIURL,
 				func(res *resty.Response) error { return c.tunnel.check(res, agentvault.DecisionDiscovery) })
 		})
 		if !errors.Is(err, errAgentVaultProxyAnswerUnconfirmed) {

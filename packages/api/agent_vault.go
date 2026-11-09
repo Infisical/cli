@@ -357,24 +357,28 @@ func CallListAgentVaultSessionSkills(ctx context.Context, httpClient *resty.Clie
 
 // CallListAgentVaultSessionSkillsThroughProxy asks for the session's skills at proxyAPIURL, the API of the proxy's own
 // Infisical, through the proxy, which answers for the session itself. A host that can reach only the proxy still gets
-// them. httpClient has to send its requests through the proxy and trust the proxy's certificate authority. check sees
-// the answer before anything is read from it, and an error from it is returned as is.
-func CallListAgentVaultSessionSkillsThroughProxy(ctx context.Context, httpClient *resty.Client, proxyAPIURL, sessionToken string, includeBuiltin bool, check func(*resty.Response) error) (ListAgentVaultSessionSkillsResponse, error) {
+// them. httpClient has to send its requests through the proxy, as the session, and trust the proxy's certificate
+// authority. The request carries no session token: the proxy adds the session's own, and until check has confirmed
+// that proxyAPIURL is the proxy's Infisical, the request could reach another host. check sees the answer before
+// anything is read from it, and an error from it is returned as is.
+func CallListAgentVaultSessionSkillsThroughProxy(ctx context.Context, httpClient *resty.Client, proxyAPIURL string, includeBuiltin bool, check func(*resty.Response) error) (ListAgentVaultSessionSkillsResponse, error) {
 	return listAgentVaultSessionSkills(ctx, httpClient, proxyAPIURL+"/v1/agent-vault/session/skills",
-		sessionToken, includeBuiltin, "CallListAgentVaultSessionSkillsThroughProxy", check)
+		"", includeBuiltin, "CallListAgentVaultSessionSkillsThroughProxy", check)
 }
 
 func listAgentVaultSessionSkills(ctx context.Context, httpClient *resty.Client, url, sessionToken string, includeBuiltin bool, operation string, check func(*resty.Response) error) (ListAgentVaultSessionSkillsResponse, error) {
 	var res ListAgentVaultSessionSkillsResponse
-	response, err := httpClient.
+	request := httpClient.
 		R().
 		SetContext(ctx).
 		SetResponseBodyLimit(agentVaultSessionSkillsResponseLimit).
 		SetResult(&res).
 		SetHeader("User-Agent", USER_AGENT).
-		SetAuthToken(sessionToken).
-		SetQueryParam("includeBuiltin", strconv.FormatBool(includeBuiltin)).
-		Get(url)
+		SetQueryParam("includeBuiltin", strconv.FormatBool(includeBuiltin))
+	if sessionToken != "" {
+		request.SetAuthToken(sessionToken)
+	}
+	response, err := request.Get(url)
 
 	if err != nil {
 		return ListAgentVaultSessionSkillsResponse{}, NewGenericRequestError(operation, err)
@@ -427,23 +431,25 @@ func CallListAgentVaultSessionServices(ctx context.Context, httpClient *resty.Cl
 
 // CallListAgentVaultSessionServicesThroughProxy asks for the session's services at proxyAPIURL, the API of the proxy's
 // own Infisical, through the proxy, which answers for the session itself. httpClient has to send its requests through the
-// proxy and trust the proxy's certificate authority. check sees the answer before anything is read from it, and an
-// error from it is returned as is.
-func CallListAgentVaultSessionServicesThroughProxy(ctx context.Context, httpClient *resty.Client, proxyAPIURL, sessionToken string, check func(*resty.Response) error) (ListAgentVaultSessionServicesResponse, error) {
+// proxy, as the session, and trust the proxy's certificate authority. Like the skills, the request carries no session
+// token. check sees the answer before anything is read from it, and an error from it is returned as is.
+func CallListAgentVaultSessionServicesThroughProxy(ctx context.Context, httpClient *resty.Client, proxyAPIURL string, check func(*resty.Response) error) (ListAgentVaultSessionServicesResponse, error) {
 	return listAgentVaultSessionServices(ctx, httpClient, proxyAPIURL+"/v1/agent-vault/session/services",
-		sessionToken, "CallListAgentVaultSessionServicesThroughProxy", check)
+		"", "CallListAgentVaultSessionServicesThroughProxy", check)
 }
 
 func listAgentVaultSessionServices(ctx context.Context, httpClient *resty.Client, url, sessionToken, operation string, check func(*resty.Response) error) (ListAgentVaultSessionServicesResponse, error) {
 	var res ListAgentVaultSessionServicesResponse
-	response, err := httpClient.
+	request := httpClient.
 		R().
 		SetContext(ctx).
 		SetResponseBodyLimit(agentVaultSessionServicesResponseLimit).
 		SetResult(&res).
-		SetHeader("User-Agent", USER_AGENT).
-		SetAuthToken(sessionToken).
-		Get(url)
+		SetHeader("User-Agent", USER_AGENT)
+	if sessionToken != "" {
+		request.SetAuthToken(sessionToken)
+	}
+	response, err := request.Get(url)
 
 	if err != nil {
 		return ListAgentVaultSessionServicesResponse{}, NewGenericRequestError(operation, err)
