@@ -65,6 +65,10 @@ const (
 	decisionPassthrough = "passthrough"
 	decisionBlocked     = "blocked"
 	decisionError       = "error"
+	// The session's services list, which the proxy gets from Infisical for the session.
+	decisionDiscovery = "discovery"
+	// The session's skills, which the proxy gets from Infisical for the session.
+	decisionSkills = "skills"
 )
 
 type Options struct {
@@ -195,13 +199,14 @@ func (ps *proxyServer) denyAtGate(w http.ResponseWriter, sessionToken, hostname,
 		Str("decision", refusal.decision).
 		Int("status", refusal.status).
 		Msg(refusal.msg)
-	http.Error(w, refusal.body, refusal.status)
+	writeProxyError(w, refusal.status, refusal.decision, refusal.code, refusal.body)
 }
 
 type gateRefusal struct {
 	event    *zerolog.Event
 	decision string
 	status   int
+	code     string
 	body     string
 	msg      string
 }
@@ -209,15 +214,22 @@ type gateRefusal struct {
 // Shared by both doors so a refused session reads the same in the log whichever way it arrived.
 func classifyGateRefusal(err error) gateRefusal {
 	if isProxyTokenRejected(err) {
-		return gateRefusal{log.Error().Err(err), decisionError, http.StatusServiceUnavailable, proxyRevokedBody,
+		return gateRefusal{log.Error().Err(err), decisionError, http.StatusServiceUnavailable, errorCodeProxyRevoked, proxyRevokedBody,
 			"agent-vault: refused, Infisical rejected this proxy's token"}
 	}
 	if isSessionGone(err) {
-		return gateRefusal{log.Warn(), decisionBlocked, http.StatusForbidden, "the session is no longer valid, or it belongs to a different Agent Vault project than this proxy",
+		return gateRefusal{log.Warn(), decisionBlocked, http.StatusForbidden, errorCodeSessionInvalid, "the session is no longer valid, or it belongs to a different Agent Vault project than this proxy",
 			"agent-vault: refused, the session is no longer valid, or it belongs to a different Agent Vault project than this proxy"}
 	}
-	return gateRefusal{log.Error().Err(err), decisionError, http.StatusBadGateway, "failed to resolve the session",
+	return gateRefusal{log.Error().Err(err), decisionError, http.StatusBadGateway, errorCodeSessionUnresolvable, "failed to resolve the session",
 		"agent-vault: refused, the session could not be resolved"}
+}
+
+// A well-formed token is enough to open a tunnel to the proxy's own Infisical: inside it, every request checks the
+// session itself, so a refused session's reason reaches the agent as JSON rather than as a failed CONNECT it can't
+// read. A token that isn't one never gets that far.
+func infisicalHostDefersGate(hostname, port, sessionToken string) bool {
+	return isProxyInfisicalHost(hostname, port) && plausibleSessionToken(sessionToken)
 }
 
 func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
@@ -235,10 +247,23 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Resolve before the leaf minting further down, so an unauthenticated caller cannot make the proxy work
-	// on their behalf.
-	if _, err := ps.cache.get(sessionToken); err != nil {
-		ps.denyAtGate(w, sessionToken, hostname, port, err)
-		return
+	// on their behalf. The proxy's own Infisical checks the session inside the tunnel instead, so a refused session
+	// still gets a tunnel there, but not the Infisical's URL.
+	var refused *gateRefusal
+	if !infisicalHostDefersGate(hostname, port, sessionToken) {
+		if _, err := ps.cache.get(sessionToken); err != nil {
+			ps.denyAtGate(w, sessionToken, hostname, port, err)
+			return
+		}
+	} else if _, err := ps.cache.get(sessionToken); err != nil {
+		// The refusal reaches the agent inside the tunnel, but the operator looks for it here, as for any other door.
+		refusal := classifyGateRefusal(err)
+		refused = &refusal
+		refusal.event.
+			Str("host", net.JoinHostPort(hostname, port)).
+			Str("sessionKey", sessionKey(sessionToken)).
+			Str("decision", refusal.decision).
+			Msg(refusal.msg)
 	}
 
 	// Private and link-local addresses are reachable, deliberately: an internal API inside the operator's
@@ -261,7 +286,15 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	defer clientConn.Close()
 
-	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
+	// Names the proxy's Infisical, so agent-vault run can tell the agent where its session's endpoints are. A refused
+	// session gets the refusal's decision instead, so run doesn't take this proxy for one too old to name it.
+	established := "HTTP/1.1 200 Connection Established\r\n"
+	if refused != nil {
+		established += HeaderDecision + ": " + refused.decision + "\r\n" + HeaderError + ": " + refused.code + "\r\n"
+	} else if apiURL := proxyAPIURL(); apiURL != "" {
+		established += HeaderAPIURL + ": " + apiURL + "\r\n"
+	}
+	if _, err := clientConn.Write([]byte(established + "\r\n")); err != nil {
 		return
 	}
 
@@ -600,15 +633,21 @@ func (ps *proxyServer) handlePlainForward(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if _, err := ps.cache.get(sessionToken); err != nil {
-		ps.denyAtGate(w, sessionToken, hostname, port, err)
-		return
+	if !infisicalHostDefersGate(hostname, port, sessionToken) {
+		if _, err := ps.cache.get(sessionToken); err != nil {
+			ps.denyAtGate(w, sessionToken, hostname, port, err)
+			return
+		}
 	}
 
 	ps.forwardHTTP(w, r, tunnel{scheme: "http", hostname: hostname, port: port, sessionToken: sessionToken})
 }
 
 func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, t tunnel) {
+	if route, ok := sessionRouteFor(t, r.URL.Path); ok {
+		ps.serveSessionEndpoint(w, r, t, route)
+		return
+	}
 	scheme, hostname, port := t.scheme, t.hostname, t.port
 	// Before anything reads the path: the policy check, the substitutions and the forward all have to see
 	// the bytes the agent sent, not the ones Go rebuilds.
@@ -626,28 +665,31 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, t tun
 	decision := decisionPassthrough
 	status := 0
 	body := ""
+	code := ""
 	var refusal *mcpToolRefusal
 	switch {
 	case errors.As(err, &refusal):
 		decision, status = decisionBlocked, refusal.status
-	case errors.Is(err, errHostBlocked), errors.Is(err, errPolicyBlocked):
-		decision, status, body = decisionBlocked, http.StatusForbidden, err.Error()
+	case errors.Is(err, errHostBlocked):
+		decision, status, code, body = decisionBlocked, http.StatusForbidden, errorCodeHostNotAllowed, err.Error()
+	case errors.Is(err, errPolicyBlocked):
+		decision, status, code, body = decisionBlocked, http.StatusForbidden, errorCodePolicyBlocked, err.Error()
 	case errors.Is(err, errBodyUnreadable):
 		// The agent's upload broke, so this is its request to retry rather than an upstream or policy failure.
-		decision, status, body = decisionBlocked, http.StatusBadRequest, err.Error()
+		decision, status, code, body = decisionBlocked, http.StatusBadRequest, errorCodeBadRequest, err.Error()
 	case errors.Is(err, errOpaqueTarget):
-		decision, status, body = decisionBlocked, http.StatusBadRequest, errOpaqueTarget.Error()
+		decision, status, code, body = decisionBlocked, http.StatusBadRequest, errorCodeBadRequest, errOpaqueTarget.Error()
 	case errors.Is(err, errPrivateDestination):
 		// The dial error names the address it refused, which would tell the agent about the internal network.
-		decision, status, body = decisionBlocked, http.StatusForbidden, errPrivateDestination.Error()
+		decision, status, code, body = decisionBlocked, http.StatusForbidden, errorCodePrivateDestination, errPrivateDestination.Error()
 	case isProxyTokenRejected(err):
-		decision, status, body = decisionError, http.StatusServiceUnavailable, proxyRevokedBody
+		decision, status, code, body = decisionError, http.StatusServiceUnavailable, errorCodeProxyRevoked, proxyRevokedBody
 	case isSessionGone(err):
-		decision, status, body = decisionBlocked, http.StatusForbidden, "the session is no longer valid, or it belongs to a different Agent Vault project than this proxy"
+		decision, status, code, body = decisionBlocked, http.StatusForbidden, errorCodeSessionInvalid, "the session is no longer valid, or it belongs to a different Agent Vault project than this proxy"
 	case errors.Is(err, errSessionResolve):
-		decision, status, body = decisionError, http.StatusBadGateway, "failed to resolve the session"
+		decision, status, code, body = decisionError, http.StatusBadGateway, errorCodeSessionUnresolvable, "failed to resolve the session"
 	case err != nil:
-		decision, status, body = decisionError, http.StatusBadGateway, "failed to reach the upstream"
+		decision, status, code, body = decisionError, http.StatusBadGateway, errorCodeUpstreamUnreachable, "failed to reach the upstream"
 	case outcome.brokered:
 		decision, status = decisionBrokered, resp.StatusCode
 	default:
@@ -708,12 +750,16 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, t tun
 		})
 	}
 
+	if matched != nil {
+		w.Header().Set(HeaderService, matched.name)
+	}
 	if refusal != nil {
+		w.Header().Set(HeaderDecision, decision)
 		refusal.write(w)
 		return
 	}
 	if err != nil {
-		http.Error(w, body, status)
+		writeProxyError(w, status, decision, code, body)
 		return
 	}
 	defer resp.Body.Close()
@@ -724,6 +770,15 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, t tun
 		for _, v := range values {
 			dst.Add(name, v)
 		}
+	}
+	// After the upstream's headers, so an upstream cannot claim a decision the proxy did not make, or name an Infisical
+	// for agent-vault run to trust.
+	dst.Del(HeaderAPIURL)
+	dst.Set(HeaderDecision, decision)
+	if matched != nil {
+		dst.Set(HeaderService, matched.name)
+	} else {
+		dst.Del(HeaderService)
 	}
 	// The status line is already on the wire, so a failure part way through the body cannot be reported
 	// as a status. Returning normally would have net/http finish the chunked encoding and hand the agent

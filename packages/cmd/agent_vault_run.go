@@ -125,13 +125,23 @@ neither flag is passed, the run stops and asks which you meant.
 The proxy's certificate authority is fetched from the proxy on every run and trusted for the agent. Pass
 --ca-fingerprint to abort if the served certificate does not match the proxy's fingerprint from Infisical.
 
-The skills in the session's access bundle are installed when the agent starts, into
-~/.agents/skills, where Codex, OpenCode and OpenClaw find them. If ~/.claude (or $CLAUDE_CONFIG_DIR) or
+The proxy says which Infisical it works with, and the agent gets that Infisical's URL in INFISICAL_AGENT_VAULT_URL.
+Through the proxy, the agent lists the services its session reaches at
+$INFISICAL_AGENT_VAULT_URL/api/v1/agent-vault/session/services, with no credential of its own.
+
+The skills in the session's access bundle, plus infisical-agent-vault, which tells the agent how to work behind
+the proxy, are fetched through the proxy and installed when the agent starts, into
+~/.agents/skills, where Codex, OpenCode and OpenClaw find them. A proxy too old to pass skills on is skipped and
+Infisical asked directly. Pass --no-agent-vault-skill to leave out infisical-agent-vault. If ~/.claude (or $CLAUDE_CONFIG_DIR) or
 ~/.hermes (or $HERMES_HOME) exists, each skill is also linked into its skills folder for Claude Code or
 Hermes, and for Claude Code whenever the agent is claude. Pass --skills-dir to install them into another
 folder instead, with no links, or --no-skills to start without them. Installed skills stay after the agent
 exits, and folders of your own with a skill's name are left alone. Restart the agent to pick up changes to
 them. If they cannot be installed, the agent starts without them.
+
+When the agent is claude, the session's MCP servers that are ready are added to it with --mcp-config, on top of any
+you pass, each with a placeholder credential the proxy replaces, so Claude Code has their tools from the start. Pass
+--no-mcp-servers to leave them out.
 
 Unlike 'secrets agent-proxy run', this command does not sandbox the agent: it sets environment variables
 and starts the process.`,
@@ -444,30 +454,77 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 		Set("pinned", pinnedFingerprint != "").
 		Set("caTrust", !noCaTrust))
 
-	env := buildAgentVaultRunEnv(os.Environ(), proxyAddr, sessionToken, caPath, extraNoProxy)
-
 	printAgentVaultRunSummary(proxyAddr, caResp, servedFingerprint, minted, project, tokenSource, bundleSource)
 
-	if exitCode, interrupted := runAgentVaultRunSkillsStep(noSkills,
-		func(ctx context.Context) {
-			if minted == nil {
-				useAgentVaultSessionTokenDomain()
-			}
-			skillsHTTPClient, clientErr := newAgentVaultSkillsHTTPClient()
+	noBuiltinSkill, _ := cmd.Flags().GetBool("no-agent-vault-skill")
+	noMCPServers, _ := cmd.Flags().GetBool("no-mcp-servers")
+	sessionClient := func(tunnel *agentVaultSkillsTunnel, proxyTooOld bool) (*agentVaultSkillsClient, error) {
+		httpClient, err := newAgentVaultSessionHTTPClient()
+		if err != nil {
+			return nil, err
+		}
+		return &agentVaultSkillsClient{
+			httpClient:        httpClient,
+			sessionToken:      sessionToken,
+			retryUnauthorized: minted != nil,
+			includeBuiltin:    !noBuiltinSkill,
+			tunnel:            tunnel,
+			proxyTooOld:       proxyTooOld,
+			beforeDirect: func() {
+				if minted == nil {
+					useAgentVaultSessionTokenDomain()
+				}
+			},
+		}, nil
+	}
+	var installSkills agentVaultRunProxyStep
+	if !noSkills {
+		installSkills = func(ctx context.Context, tunnel *agentVaultSkillsTunnel, proxyTooOld bool) {
+			skillsClient, clientErr := sessionClient(tunnel, proxyTooOld)
 			if clientErr != nil {
 				util.PrintWarning(fmt.Sprintf("Starting without skills: %v.", clientErr))
 				return
 			}
-			skillsClient := &agentVaultSkillsClient{httpClient: skillsHTTPClient, sessionToken: sessionToken, retryUnauthorized: minted != nil}
-			installAgentVaultRunSkills(ctx, skillsClient, agentvault.InstallOptions{Dir: skillsDir, ForceClaude: agentVaultRunStartsClaude(args)})
+			installAgentVaultRunSkills(ctx, skillsClient, agentvault.InstallOptions{Dir: skillsDir, ForceClaude: agentVaultRunStartsClaude(args)}, !noBuiltinSkill)
+		}
+	}
+	// Claude Code loads MCP servers only when it starts, so the session's are handed to it rather than left for the agent
+	// to find.
+	var mcpConfigPath string
+	removeMCPConfig := func() {}
+	var listMCPServers agentVaultRunProxyStep
+	if !noMCPServers && agentVaultRunStartsClaude(args) {
+		silent, _ := cmd.Flags().GetBool("silent")
+		bypassesProxy := agentVaultBypassesProxy(agentVaultRunNoProxy(os.Environ(), extraNoProxy))
+		listMCPServers = func(ctx context.Context, tunnel *agentVaultSkillsTunnel, proxyTooOld bool) {
+			servicesClient, clientErr := sessionClient(tunnel, proxyTooOld)
+			if clientErr != nil {
+				util.PrintWarning(fmt.Sprintf("Starting Claude Code without the session's MCP servers: %v.", clientErr))
+				return
+			}
+			if path, remove := agentVaultRunMCPConfig(ctx, servicesClient, bypassesProxy, silent, args[0]); path != "" {
+				mcpConfigPath, removeMCPConfig = path, remove
+			}
+		}
+	}
+	var agentAPIURL string
+	if exitCode, interrupted := runAgentVaultRunStartupStep(
+		func(ctx context.Context) {
+			agentAPIURL = prepareAgentVaultRunProxy(ctx, proxyAddr, sessionToken, caPEM, minted != nil, installSkills, listMCPServers)
 		},
 		func(ctx context.Context) {
 			revokeAgentVaultRunSession(ctx, cmd, minted, keepSession, "The run was interrupted", true)
 		}); interrupted {
+		removeMCPConfig()
 		os.Exit(exitCode)
 	}
 
+	env := buildAgentVaultRunEnv(os.Environ(), proxyAddr, sessionToken, caPath, extraNoProxy, agentAPIURL)
+	if mcpConfigPath != "" {
+		args = withAgentVaultMCPConfig(args, mcpConfigPath)
+	}
 	exitCode := runAgentVaultChild(args, env)
+	removeMCPConfig()
 
 	revokeAgentVaultRunSession(context.Background(), cmd, minted, keepSession, "The agent exited", false)
 	os.Exit(exitCode)
@@ -510,15 +567,12 @@ func agentVaultRunStartsClaude(args []string) bool {
 	return false
 }
 
-// runAgentVaultRunSkillsStep runs install unless skip is set. The signals are the ones the agent step forwards
-// to the agent; when one interrupts the step, onInterrupt runs with a context that a second signal cancels, and
-// the step returns the exit code a shell reports for the last signal received.
-func runAgentVaultRunSkillsStep(skip bool, install func(context.Context), onInterrupt func(context.Context)) (exitCode int, interrupted bool) {
-	if skip {
-		return 0, false
-	}
+// runAgentVaultRunStartupStep runs prepare, which talks to the proxy and installs skills before the agent starts. The
+// signals are the ones the agent step forwards to the agent; when one interrupts the step, onInterrupt runs with a
+// context that a second signal cancels, and the step returns the exit code a shell reports for the last signal received.
+func runAgentVaultRunStartupStep(prepare func(context.Context), onInterrupt func(context.Context)) (exitCode int, interrupted bool) {
 	interruptCtx, abortCtx, stopSignals := notifyAgentVaultTerminationSignals()
-	interrupted = prepareAgentVaultRunSkills(interruptCtx, install, func() { onInterrupt(abortCtx) })
+	interrupted = prepareAgentVaultRunStartup(interruptCtx, prepare, func() { onInterrupt(abortCtx) })
 	stopSignals()
 	if !interrupted {
 		return 0, false
@@ -718,13 +772,25 @@ func isAgentVaultSessionTokenKey(key string) bool {
 //
 // 'secrets agent-proxy run' strips a longer list because its agent is sandboxed and cannot read those
 // credentials back from disk.
-func buildAgentVaultRunEnv(parent []string, proxyAddr, sessionToken, caPath, extraNoProxy string) []string {
-	stale := map[string]bool{}
+// agentVaultRunNoProxy is the agent's NO_PROXY: the operator's own entries and --no-proxy, merged with the ones every
+// run needs.
+func agentVaultRunNoProxy(parent []string, extraNoProxy string) string {
+	var operatorNoProxy []string
+	for _, kv := range parent {
+		if key, value, ok := strings.Cut(kv, "="); ok && (key == "NO_PROXY" || key == "no_proxy") {
+			operatorNoProxy = append(operatorNoProxy, value)
+		}
+	}
+	return mergeNoProxy(append(operatorNoProxy, extraNoProxy)...)
+}
+
+func buildAgentVaultRunEnv(parent []string, proxyAddr, sessionToken, caPath, extraNoProxy, apiURL string) []string {
+	// The URL is the proxy's to name, so a value from the environment never reaches the agent in its place.
+	stale := map[string]bool{agentvault.URLEnv: true}
 	for _, k := range proxyEnvKeys {
 		stale[k] = true
 	}
 
-	var operatorNoProxy []string
 	env := map[string]string{}
 	for _, kv := range parent {
 		parts := strings.SplitN(kv, "=", 2)
@@ -732,7 +798,6 @@ func buildAgentVaultRunEnv(parent []string, proxyAddr, sessionToken, caPath, ext
 			continue
 		}
 		if parts[0] == "NO_PROXY" || parts[0] == "no_proxy" {
-			operatorNoProxy = append(operatorNoProxy, parts[1])
 			continue
 		}
 		if isAgentVaultSessionTokenKey(parts[0]) && parts[1] != sessionToken {
@@ -743,7 +808,11 @@ func buildAgentVaultRunEnv(parent []string, proxyAddr, sessionToken, caPath, ext
 		}
 	}
 
-	setProxyEnv(env, agentVaultProxyURL(proxyAddr, sessionToken), mergeNoProxy(append(operatorNoProxy, extraNoProxy)...))
+	setProxyEnv(env, agentVaultProxyURL(proxyAddr, sessionToken), agentVaultRunNoProxy(parent, extraNoProxy))
+	// Through the proxy like any request, so the session comes from the tunnel and the agent never handles its token.
+	if infisicalURL := agentvault.InfisicalURL(apiURL); infisicalURL != "" {
+		env[agentvault.URLEnv] = infisicalURL
+	}
 
 	if caPath != "" {
 		for _, k := range caTrustEnvVars {
@@ -877,6 +946,8 @@ func init() {
 	agentVaultRunCmd.Flags().Bool("no-ca-trust", false, "skip writing the certificate authority and setting the trust variables, for a host that already trusts this proxy's CA (a pinned fingerprint is still checked)")
 	agentVaultRunCmd.Flags().String("skills-dir", "", "install the session's skills into this `folder` instead of ~/.agents/skills, without linking them for Claude Code or Hermes")
 	agentVaultRunCmd.Flags().Bool("no-skills", false, "start the agent without installing the session's skills")
+	agentVaultRunCmd.Flags().Bool("no-agent-vault-skill", false, "skip the built-in "+agentvault.BuiltinSkillName+" skill, which tells the agent how to work behind the proxy (--no-skills skips it too)")
+	agentVaultRunCmd.Flags().Bool("no-mcp-servers", false, "don't add the session's MCP servers to Claude Code with --mcp-config")
 	agentVaultRunCmd.Flags().String("client-id", "", "universal auth client id of the machine identity that mints the session (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_ID)")
 	agentVaultRunCmd.Flags().String("client-secret", "", "universal auth client secret of that machine identity (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET)")
 

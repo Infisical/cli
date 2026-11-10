@@ -156,9 +156,18 @@ func TestMethodPolicyThroughTheTunnel(t *testing.T) {
 	if status != http.StatusForbidden {
 		t.Fatalf("POST should be refused, got %d: %s", status, body)
 	}
-	if !strings.Contains(body, `service "github" does not allow POST`) {
+	if refusal := decodeProxyError(t, body); !strings.Contains(refusal.Message, `service "github" does not allow POST`) || refusal.Error != errorCodePolicyBlocked {
 		t.Fatalf("unhelpful 403 body: %q", body)
 	}
+}
+
+func decodeProxyError(t *testing.T, body string) proxyErrorBody {
+	t.Helper()
+	var refusal proxyErrorBody
+	if err := json.Unmarshal([]byte(body), &refusal); err != nil {
+		t.Fatalf("the proxy's own error should be JSON, got %q: %v", body, err)
+	}
+	return refusal
 }
 
 func TestPathPolicyThroughTheTunnel(t *testing.T) {

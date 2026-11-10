@@ -152,8 +152,11 @@ type refusedEntry struct {
 	until time.Time
 }
 
+// SessionRefusalTTL is how long the proxy answers a refused session from memory before it asks Infisical again.
+const SessionRefusalTTL = 5 * time.Second
+
 const (
-	refusedTTL        = 5 * time.Second
+	refusedTTL        = SessionRefusalTTL
 	maxRefusedEntries = 4096
 )
 
