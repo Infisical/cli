@@ -258,6 +258,7 @@ const (
 	errorCodeMethodNotAllowed     = "method_not_allowed"
 	errorCodeBusy                 = "busy"
 	errorCodeInfisicalUnreachable = "infisical_unreachable"
+	errorCodeServiceRefused       = "service_refused"
 )
 
 var proxyErrorHints = map[string]string{
@@ -275,4 +276,6 @@ var proxyErrorHints = map[string]string{
 	errorCodeUpstreamUnreachable:  "The Agent Vault proxy could not reach the API. Try again in a moment.",
 	errorCodeBusy:                 "Too many agents are starting through this Agent Vault proxy at once. Try again in a moment.",
 	errorCodeInfisicalUnreachable: "The Agent Vault proxy could not reach Infisical to answer this. Try again in a moment.",
+	errorCodeServiceRefused: "This is the Agent Vault proxy: it can't serve this database or SSH service for the session, so a " +
+		"different password or key will not help. " + servicesURLPlaceholder + " lists the session's services and their status.",
 }

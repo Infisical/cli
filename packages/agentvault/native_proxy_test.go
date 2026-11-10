@@ -166,6 +166,9 @@ func TestNativeRefusalsHappenBeforeTheTunnel(t *testing.T) {
 		if !errors.As(err, &refused) || refused.Status != http.StatusForbidden || !strings.Contains(refused.Message, tc.want) {
 			t.Errorf("probe %s: %v, want a 403 containing %q", tc.service, err, tc.want)
 		}
+		if refused != nil && (refused.Code != errorCodeServiceRefused || refused.SessionInvalid()) {
+			t.Errorf("probe %s: code %q, want %q", tc.service, refused.Code, errorCodeServiceRefused)
+		}
 	}
 }
 

@@ -265,7 +265,7 @@ func (c *hangUpConn) Read(p []byte) (int, error) {
 func (ps *proxyServer) refuseNative(w http.ResponseWriter, sessionToken, serviceName, body string) {
 	log.Warn().Str("service", serviceName).Str("sessionKey", sessionKey(sessionToken)).Str("reason", body).
 		Msg("agent-vault: refused a database or SSH connection")
-	http.Error(w, body, http.StatusForbidden)
+	writeProxyError(w, http.StatusForbidden, decisionBlocked, errorCodeServiceRefused, body)
 }
 
 // refuseNativeService refuses a connection to a service the session has, and records it so the session log shows

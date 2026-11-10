@@ -34,8 +34,7 @@ var ErrProxyTooOld = errors.New("the Agent Vault proxy at this address is too ol
 // ProxyRefusedError is the proxy's own refusal, whose message is written for the person reading it.
 type ProxyRefusedError struct {
 	Status int
-	// The proxy's error code (HeaderError) on the refusals it codes, such as a session it can't use; empty on a
-	// database or SSH service refusal.
+	// The proxy's error code (HeaderError), such as a session it can't use; empty from a proxy too old to send one.
 	Code    string
 	Message string
 }
@@ -187,7 +186,7 @@ func (c *ConnectClient) connect(ctx context.Context, service string, probe bool)
 func refusalOf(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 	message := strings.TrimSpace(string(body))
-	// A coded refusal carries its text in a JSON body; a database or SSH service refusal is the text itself.
+	// The proxy's refusal carries its text in a JSON body; a proxy too old to send one wrote the text itself.
 	var coded proxyErrorBody
 	if json.Unmarshal(body, &coded) == nil && coded.Message != "" {
 		message = coded.Message
