@@ -216,6 +216,15 @@ type CreateAgentVaultSessionLogChunkRequest struct {
 	CiphertextBytes  int    `json:"ciphertextBytes"`
 	CiphertextSha256 string `json:"ciphertextSha256"`
 	RecordCount      int    `json:"recordCount"`
+	// Nil sends nothing, so Infisical can tell a chunk that was never counted from one with no requests of a kind.
+	DecisionCounts *AgentVaultSessionLogDecisionCounts `json:"decisionCounts,omitempty"`
+}
+
+type AgentVaultSessionLogDecisionCounts struct {
+	Brokered    int `json:"brokered"`
+	Passthrough int `json:"passthrough"`
+	Blocked     int `json:"blocked"`
+	Error       int `json:"error"`
 }
 
 type CreateAgentVaultSessionLogChunkResponse struct {
