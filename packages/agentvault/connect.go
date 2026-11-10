@@ -33,19 +33,21 @@ var ErrProxyTooOld = errors.New("the Agent Vault proxy at this address is too ol
 
 // ProxyRefusedError is the proxy's own refusal, whose message is written for the person reading it.
 type ProxyRefusedError struct {
-	Status  int
+	Status int
+	// The proxy's error code (HeaderError) on the refusals it codes, such as a session it can't use; empty on a
+	// database or SSH service refusal.
+	Code    string
 	Message string
 }
 
 func (e *ProxyRefusedError) Error() string { return e.Message }
 
-// The proxy answers a session that ended, or that belongs to another project, with this text and the same 403 it
-// uses for a service refusal, so only the text tells the two apart.
 const sessionInvalidRefusal = "the session is no longer valid, or it belongs to a different Agent Vault project than this proxy"
 
-// SessionInvalid is true when the proxy refused because the session itself can't be used any more.
+// SessionInvalid is true when the proxy refused because the session itself can't be used any more. A service refusal
+// is the same 403, so the code tells them apart.
 func (e *ProxyRefusedError) SessionInvalid() bool {
-	return e.Status == http.StatusForbidden && strings.HasPrefix(e.Message, sessionInvalidRefusal)
+	return e.Status == http.StatusForbidden && e.Code == errorCodeSessionInvalid
 }
 
 // LocalConnError is a failure on this machine's side of a tunnel, such as the local client resetting its
@@ -185,10 +187,15 @@ func (c *ConnectClient) connect(ctx context.Context, service string, probe bool)
 func refusalOf(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 	message := strings.TrimSpace(string(body))
+	// A coded refusal carries its text in a JSON body; a database or SSH service refusal is the text itself.
+	var coded proxyErrorBody
+	if json.Unmarshal(body, &coded) == nil && coded.Message != "" {
+		message = coded.Message
+	}
 	if message == "" {
 		message = fmt.Sprintf("the Agent Vault proxy refused the request (%d)", resp.StatusCode)
 	}
-	return &ProxyRefusedError{Status: resp.StatusCode, Message: message}
+	return &ProxyRefusedError{Status: resp.StatusCode, Code: resp.Header.Get(HeaderError), Message: message}
 }
 
 // waitsForClient is true for protocols whose client speaks first. For those a port check that connects and says

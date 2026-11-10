@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Infisical/infisical-merge/packages/agentvault"
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/spf13/cobra"
@@ -69,8 +70,9 @@ func TestBuildAgentVaultRunEnvPointsAtTheProxy(t *testing.T) {
 		"HOME=/home/dev",
 		"HTTPS_PROXY=http://stale:3128",
 		"NO_PROXY=internal.example.com",
+		agentvault.URLEnv + "=https://stale.example.com",
 	}
-	env := envToMap(buildAgentVaultRunEnv(parent, "10.0.1.5:17323", "agv_tok", "/tmp/ca.pem", "metadata.google.internal"))
+	env := envToMap(buildAgentVaultRunEnv(parent, "10.0.1.5:17323", "agv_tok", "/tmp/ca.pem", "metadata.google.internal", "https://eu.infisical.com/api"))
 
 	if env["HOME"] != "/home/dev" {
 		t.Fatalf("unrelated variables must pass through, got HOME=%q", env["HOME"])
@@ -91,10 +93,21 @@ func TestBuildAgentVaultRunEnvPointsAtTheProxy(t *testing.T) {
 			t.Fatalf("%s = %q, want the CA path", k, env[k])
 		}
 	}
+	// The proxy's Infisical, without the /api the agent adds, in place of whatever the operator's environment held.
+	if env[agentvault.URLEnv] != "https://eu.infisical.com" {
+		t.Fatalf("%s = %q, want the URL of the Infisical the proxy named", agentvault.URLEnv, env[agentvault.URLEnv])
+	}
+	if strings.Contains(env["NO_PROXY"], "eu.infisical.com") {
+		t.Fatal("the session's endpoints are answered by the proxy, so Infisical must not be in NO_PROXY")
+	}
+	// A proxy that doesn't name its Infisical leaves the agent without the variable, rather than with a stale one.
+	if old := envToMap(buildAgentVaultRunEnv(parent, "10.0.1.5:17323", "agv_tok", "", "", "")); old[agentvault.URLEnv] != "" {
+		t.Fatalf("%s = %q behind a proxy that named no Infisical", agentvault.URLEnv, old[agentvault.URLEnv])
+	}
 }
 
 func TestBuildAgentVaultRunEnvWithoutCaTrustSetsNoTrustVariables(t *testing.T) {
-	env := envToMap(buildAgentVaultRunEnv([]string{"SSL_CERT_FILE=/etc/ssl/corp.pem"}, "proxy:17323", "agv_tok", "", ""))
+	env := envToMap(buildAgentVaultRunEnv([]string{"SSL_CERT_FILE=/etc/ssl/corp.pem"}, "proxy:17323", "agv_tok", "", "", ""))
 	if env["SSL_CERT_FILE"] != "/etc/ssl/corp.pem" {
 		t.Fatalf("--no-ca-trust must leave the operator's own trust variables alone, got %q", env["SSL_CERT_FILE"])
 	}
@@ -289,7 +302,7 @@ func TestResolveAgentVaultSessionTokenWithNeitherSourceIsEmpty(t *testing.T) {
 func TestBuildAgentVaultRunEnvDropsAStaleSessionTokenVariable(t *testing.T) {
 	parent := []string{agentVaultSessionTokenEnv + "=agv_stale", "PATH=/usr/bin"}
 
-	env := buildAgentVaultRunEnv(parent, "10.0.1.5:17323", "agv_minted", "", "")
+	env := buildAgentVaultRunEnv(parent, "10.0.1.5:17323", "agv_minted", "", "", "")
 
 	for _, kv := range env {
 		if strings.Contains(kv, "agv_stale") {
@@ -305,7 +318,7 @@ func TestBuildAgentVaultRunEnvKeepsTheVariableThatHoldsThisSession(t *testing.T)
 	// Removing it here would hide nothing: the same token is the proxy password either way.
 	parent := []string{agentVaultSessionTokenEnv + "=agv_this_run", "PATH=/usr/bin"}
 
-	env := buildAgentVaultRunEnv(parent, "10.0.1.5:17323", "agv_this_run", "", "")
+	env := buildAgentVaultRunEnv(parent, "10.0.1.5:17323", "agv_this_run", "", "", "")
 
 	var kept bool
 	for _, kv := range env {

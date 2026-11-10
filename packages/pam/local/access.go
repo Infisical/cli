@@ -23,6 +23,7 @@ import (
 // Account type constants (match API enum)
 const (
 	AccountTypePostgres          = "postgres"
+	AccountTypeCockroachDB       = "cockroachdb"
 	AccountTypeSSH               = "ssh"
 	AccountTypeMySQL             = "mysql"
 	AccountTypeMsSQL             = "mssql"
@@ -130,7 +131,7 @@ func StartPAMAccess(accessToken string, opts AccessOptions) {
 	// Route based on account type from API response
 	switch pamResponse.AccountType {
 	// Database types - all use the same proxy mechanism with different display configs
-	case AccountTypePostgres, AccountTypeMySQL, AccountTypeMsSQL, AccountTypeMongoDB, AccountTypeOracleDB, AccountTypeClickhouse:
+	case AccountTypePostgres, AccountTypeCockroachDB, AccountTypeMySQL, AccountTypeMsSQL, AccountTypeMongoDB, AccountTypeOracleDB, AccountTypeClickhouse:
 		startDatabaseProxy(httpClient, &pamResponse, displayPath, durationStr, port)
 
 	case AccountTypeSSH:
@@ -333,18 +334,8 @@ type AccountConnectionDisplay struct {
 // sessions lazily and so has neither, and passes placeholders. Every entry therefore has to render
 // something sane for an empty database.
 var accountDisplays = map[string]AccountConnectionDisplay{
-	AccountTypePostgres: {
-		TypeLabel:   "PostgreSQL",
-		DefaultPort: 5432,
-		ConnectionString: func(username, database string, port int) string {
-			return fmt.Sprintf("postgres://%s@127.0.0.1:%d/%s", username, port, database)
-		},
-		UsageExamples: func(username, database string, port int) []string {
-			return []string{
-				fmt.Sprintf("psql -h 127.0.0.1 -p %d -U %s -d %s", port, username, database),
-			}
-		},
-	},
+	AccountTypePostgres:    postgresWireDisplay("PostgreSQL", 5432),
+	AccountTypeCockroachDB: postgresWireDisplay("CockroachDB", 26257),
 	AccountTypeMySQL: {
 		TypeLabel:   "MySQL",
 		DefaultPort: 3306,
@@ -449,6 +440,22 @@ var accountDisplays = map[string]AccountConnectionDisplay{
 		TypeLabel:   "Windows RDP",
 		DefaultPort: 3389,
 	},
+}
+
+// postgresWireDisplay is shared by the account types reached over the Postgres wire protocol.
+func postgresWireDisplay(typeLabel string, defaultPort int) AccountConnectionDisplay {
+	return AccountConnectionDisplay{
+		TypeLabel:   typeLabel,
+		DefaultPort: defaultPort,
+		ConnectionString: func(username, database string, port int) string {
+			return fmt.Sprintf("postgres://%s@127.0.0.1:%d/%s", username, port, database)
+		},
+		UsageExamples: func(username, database string, port int) []string {
+			return []string{
+				fmt.Sprintf("psql -h 127.0.0.1 -p %d -U %s -d %s", port, username, database),
+			}
+		},
+	}
 }
 
 // mongoDBURI builds the loopback URI for a MongoDB proxy, for an account whose database is known or

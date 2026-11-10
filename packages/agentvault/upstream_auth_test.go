@@ -373,7 +373,7 @@ func TestARefreshThatEndsTheSessionIsAnsweredAsARevokedSession(t *testing.T) {
 
 			for range 2 {
 				resp, body := doWith(t, client, http.MethodGet, fmt.Sprintf("https://%s/mcp", host), "", nil)
-				if resp.StatusCode != tc.status || strings.TrimSpace(body) != tc.body {
+				if resp.StatusCode != tc.status || decodeProxyError(t, body).Message != tc.body {
 					t.Fatalf("got %d: %s, want %d: %s", resp.StatusCode, body, tc.status, tc.body)
 				}
 			}

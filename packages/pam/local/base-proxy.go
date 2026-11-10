@@ -305,6 +305,14 @@ func (b *BaseProxyServer) FetchGatewayCapabilities() (*pam.PAMCapabilitiesRespon
 	return &response, nil
 }
 
+// gatewayResourceType is the type the gateway brokers an account as: CockroachDB rides its Postgres protocol
+func gatewayResourceType(accountType string) string {
+	if accountType == AccountTypeCockroachDB {
+		return AccountTypePostgres
+	}
+	return accountType
+}
+
 // ValidateResourceTypeSupported checks if the resource type is supported by the gateway
 func (b *BaseProxyServer) ValidateResourceTypeSupported() error {
 	capabilities, err := b.FetchGatewayCapabilities()
@@ -317,7 +325,7 @@ func (b *BaseProxyServer) ValidateResourceTypeSupported() error {
 		return nil
 	}
 
-	if slices.Contains(capabilities.SupportedResourceTypes, b.resourceType) {
+	if slices.Contains(capabilities.SupportedResourceTypes, gatewayResourceType(b.resourceType)) {
 		return nil
 	}
 

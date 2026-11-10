@@ -139,7 +139,7 @@ func TestConnectAllSkipsOnlyAServiceRefusal(t *testing.T) {
 		skip bool
 	}{
 		{"service refused", &agentvault.ProxyRefusedError{Status: http.StatusForbidden, Message: "personal values aren't set"}, true},
-		{"session ended", &agentvault.ProxyRefusedError{Status: http.StatusForbidden,
+		{"session ended", &agentvault.ProxyRefusedError{Status: http.StatusForbidden, Code: "session_invalid",
 			Message: "the session is no longer valid, or it belongs to a different Agent Vault project than this proxy"}, false},
 		{"proxy can't reach Infisical", &agentvault.ProxyRefusedError{Status: http.StatusBadGateway, Message: "failed to resolve the session"}, false},
 		{"network", errors.New("connection reset"), false},
@@ -151,7 +151,7 @@ func TestConnectAllSkipsOnlyAServiceRefusal(t *testing.T) {
 }
 
 func TestConnectGivesAnEndedSessionItsOwnCode(t *testing.T) {
-	err := classifyAgentVaultConnectError(&agentvault.ProxyRefusedError{Status: http.StatusForbidden,
+	err := classifyAgentVaultConnectError(&agentvault.ProxyRefusedError{Status: http.StatusForbidden, Code: "session_invalid",
 		Message: "the session is no longer valid, or it belongs to a different Agent Vault project than this proxy"}, "10.0.0.5:17323")
 	if codeOf(err) != errCodeSessionInvalid {
 		t.Fatalf("code %q, want %q", codeOf(err), errCodeSessionInvalid)
