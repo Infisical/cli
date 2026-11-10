@@ -126,6 +126,37 @@ func TestASealedChunkCarriesTheDigestOfExactlyWhatIsUploaded(t *testing.T) {
 	}
 }
 
+func TestASealedChunkCountsItsRecordsByDecision(t *testing.T) {
+	spool := newSessionLogSpool(newSessionLogGrant("sess-1", make([]byte, 32)), time.Now())
+	var records []sessionLogRecord
+	for _, decision := range []string{
+		decisionBrokered, decisionBrokered, decisionBrokered,
+		decisionPassthrough, decisionPassthrough,
+		decisionBlocked,
+		decisionError,
+	} {
+		rec := vectorRecords()[0]
+		rec.Decision = decision
+		records = append(records, rec)
+	}
+	plaintext, err := json.Marshal(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunk, err := spool.sealSlice(records, plaintext)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := [4]int{chunk.meta.BrokeredCount, chunk.meta.PassthroughCount, chunk.meta.BlockedCount, chunk.meta.ErrorCount}
+	if want := [4]int{3, 2, 1, 1}; got != want {
+		t.Fatalf("the chunk reports brokered, passthrough, blocked and error counts %v, want %v", got, want)
+	}
+	if sum := got[0] + got[1] + got[2] + got[3]; sum != chunk.meta.RecordCount {
+		t.Fatalf("the decision counts add up to %d, the chunk reports %d records", sum, chunk.meta.RecordCount)
+	}
+}
+
 func TestAChunkCannotBeReplayedElsewhere(t *testing.T) {
 	key := mustHex(t, vectorKeyHex)
 	plaintext, _ := json.Marshal(vectorRecords())

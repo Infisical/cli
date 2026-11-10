@@ -215,6 +215,10 @@ type CreateAgentVaultSessionLogChunkRequest struct {
 	CiphertextBytes  int    `json:"ciphertextBytes"`
 	CiphertextSha256 string `json:"ciphertextSha256"`
 	RecordCount      int    `json:"recordCount"`
+	BrokeredCount    int    `json:"brokeredCount"`
+	PassthroughCount int    `json:"passthroughCount"`
+	BlockedCount     int    `json:"blockedCount"`
+	ErrorCount       int    `json:"errorCount"`
 }
 
 type CreateAgentVaultSessionLogChunkResponse struct {

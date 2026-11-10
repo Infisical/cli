@@ -243,14 +243,28 @@ func (s *sessionLogSpool) sealSlice(records []sessionLogRecord, plaintext []byte
 		return nil, err
 	}
 
+	meta := api.CreateAgentVaultSessionLogChunkRequest{
+		ChunkID:          chunkID,
+		EndedAt:          latest.Ts,
+		CiphertextBytes:  len(ciphertext),
+		CiphertextSha256: infisicalCiphertextSha256(ciphertext),
+		RecordCount:      len(records),
+	}
+	for _, rec := range records {
+		switch rec.Decision {
+		case decisionBrokered:
+			meta.BrokeredCount++
+		case decisionPassthrough:
+			meta.PassthroughCount++
+		case decisionBlocked:
+			meta.BlockedCount++
+		case decisionError:
+			meta.ErrorCount++
+		}
+	}
+
 	return &sealedChunk{
-		meta: api.CreateAgentVaultSessionLogChunkRequest{
-			ChunkID:          chunkID,
-			EndedAt:          latest.Ts,
-			CiphertextBytes:  len(ciphertext),
-			CiphertextSha256: infisicalCiphertextSha256(ciphertext),
-			RecordCount:      len(records),
-		},
+		meta:       meta,
 		ciphertext: ciphertext,
 		records:    len(records),
 	}, nil
