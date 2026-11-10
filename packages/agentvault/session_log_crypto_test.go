@@ -134,6 +134,7 @@ func TestASealedChunkCountsItsRecordsByDecision(t *testing.T) {
 		decisionPassthrough, decisionPassthrough,
 		decisionBlocked,
 		decisionError,
+		"a-decision-added-later",
 	} {
 		rec := vectorRecords()[0]
 		rec.Decision = decision
@@ -148,9 +149,13 @@ func TestASealedChunkCountsItsRecordsByDecision(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := [4]int{chunk.meta.BrokeredCount, chunk.meta.PassthroughCount, chunk.meta.BlockedCount, chunk.meta.ErrorCount}
-	if want := [4]int{3, 2, 1, 1}; got != want {
-		t.Fatalf("the chunk reports brokered, passthrough, blocked and error counts %v, want %v", got, want)
+	counts := chunk.meta.DecisionCounts
+	if counts == nil {
+		t.Fatal("the chunk sends no decision counts")
+	}
+	got := [4]int{counts.Brokered, counts.Passthrough, counts.Blocked, counts.Error}
+	if want := [4]int{3, 2, 1, 2}; got != want {
+		t.Fatalf("the chunk reports brokered, passthrough, blocked and error counts %v, want %v (an unknown decision counts as error)", got, want)
 	}
 	if sum := got[0] + got[1] + got[2] + got[3]; sum != chunk.meta.RecordCount {
 		t.Fatalf("the decision counts add up to %d, the chunk reports %d records", sum, chunk.meta.RecordCount)

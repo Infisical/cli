@@ -250,18 +250,21 @@ func (s *sessionLogSpool) sealSlice(records []sessionLogRecord, plaintext []byte
 		CiphertextSha256: infisicalCiphertextSha256(ciphertext),
 		RecordCount:      len(records),
 	}
+	counts := &api.AgentVaultSessionLogDecisionCounts{}
 	for _, rec := range records {
 		switch rec.Decision {
 		case decisionBrokered:
-			meta.BrokeredCount++
+			counts.Brokered++
 		case decisionPassthrough:
-			meta.PassthroughCount++
+			counts.Passthrough++
 		case decisionBlocked:
-			meta.BlockedCount++
-		case decisionError:
-			meta.ErrorCount++
+			counts.Blocked++
+		default:
+			// Counted somewhere so the four always add up to RecordCount, which Infisical checks before using them.
+			counts.Error++
 		}
 	}
+	meta.DecisionCounts = counts
 
 	return &sealedChunk{
 		meta:       meta,
