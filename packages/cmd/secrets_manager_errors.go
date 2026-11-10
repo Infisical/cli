@@ -49,6 +49,9 @@ var errorCodes = []string{
 	errCodeProjectDeleteProtected, errCodeInvalidArgument, errCodeServiceTokenUnsupported,
 	errCodeProjectConfigInvalid, errCodeTokenProjectMismatch, errCodeFolderExists,
 	errCodeAccessBundleRequired, errCodeInvalidAccessBundle, errCodeInvalidProjectID, errCodeAccessBundleNotGranted,
+	errCodeSessionTokenRequired, errCodeProxyRequired, errCodeProxyUnreachable, errCodeProxyUntrusted,
+	errCodeProxyNotSupported, errCodeServiceNotFound, errCodeNoServices, errCodeServiceRefused,
+	errCodeSessionInvalid, errCodeLocalPortUnavailable,
 }
 
 const secretsManagerPrefix = "infisical " + secretsManagerCommandName

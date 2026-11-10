@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Infisical/infisical-merge/packages/agentvault"
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/telemetry"
 	"github.com/Infisical/infisical-merge/packages/util"
@@ -30,6 +31,25 @@ func agentVaultConstructedErrors() []*util.CLIError {
 		errAgentVaultInvalidProjectID("my-project", "--project-id"),
 		errAgentVaultProjectNotFound(agentVaultProject{ID: projectFromFlag, Source: "--project-id"}, cause),
 		errAgentVaultProjectNotFound(agentVaultProject{ID: projectFromProjEnv, Source: util.INFISICAL_PROJECT_ID_NAME}, cause),
+		errAgentVaultConnectEmptyFlag("--proxy", agentVaultProxyAddressEnv),
+		errAgentVaultConnectSessionTokenRequired(),
+		errAgentVaultConnectProxyRequired(),
+		errAgentVaultConnectProxyUnreachable("10.0.0.5:17323", cause),
+		errAgentVaultConnectProxyUntrusted("10.0.0.5:17323", nil),
+		errAgentVaultConnectFingerprintMismatch("10.0.0.5:17323", "SHA256:AA"),
+		errAgentVaultConnectNoServices(),
+		errAgentVaultConnectServiceNotFound("nope", nil),
+		classifyAgentVaultConnectError(agentvault.ErrProxyTooOld, "10.0.0.5:17323").(*util.CLIError),
+		classifyAgentVaultConnectError(&agentvault.ProxyRefusedError{Status: 403, Message: "no"}, "10.0.0.5:17323").(*util.CLIError),
+		errAgentVaultConnectSessionInvalid(cause),
+		errAgentVaultConnectSessionUnknown("10.0.0.5:17323", "https://eu.infisical.com", cause),
+		errAgentVaultConnectFingerprintsNotListed("10.0.0.5:17323", cause),
+		errAgentVaultConnectInfisicalUnreachable("10.0.0.5:17323", "https://eu.infisical.com", cause),
+		errAgentVaultConnectPortNeedsOneService(),
+		errAgentVaultConnectInvalidPort(70000),
+		errAgentVaultConnectLocalPort("analytics", 5432, cause),
+		errAgentVaultConnectLocalPort("analytics", 0, cause),
+		errAgentVaultConnectAllRefused(),
 	}
 }
 

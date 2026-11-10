@@ -31,6 +31,9 @@ const (
 	// No server-level Read/WriteTimeout: they would cut CONNECT hijacks and long streaming responses.
 	frontReadHeaderTimeout = 30 * time.Second
 	frontIdleTimeout       = 5 * time.Minute
+	// How long a new connection on the HTTP port has to send its first byte, which says whether it speaks TLS.
+	// Every client speaks first, so this only bounds a connection that says nothing.
+	doorPeekTimeout = 5 * time.Second
 
 	// The write timeouts are absolute deadlines set at request start, so they bound only a response that
 	// has produced nothing yet.
@@ -109,6 +112,10 @@ type proxyServer struct {
 	saturationOnce sync.Once
 
 	sseStreams sseStreamRegistry
+
+	lateNativeLogs lateNativeLogs
+	// Open database and SSH tunnels across every session, held under maxNativeTunnels.
+	nativeTunnels atomic.Int64
 }
 
 func (ps *proxyServer) currentConfig() ProxyConfig {
@@ -218,7 +225,7 @@ func classifyGateRefusal(err error) gateRefusal {
 			"agent-vault: refused, Infisical rejected this proxy's token"}
 	}
 	if isSessionGone(err) {
-		return gateRefusal{log.Warn(), decisionBlocked, http.StatusForbidden, errorCodeSessionInvalid, "the session is no longer valid, or it belongs to a different Agent Vault project than this proxy",
+		return gateRefusal{log.Warn(), decisionBlocked, http.StatusForbidden, errorCodeSessionInvalid, sessionInvalidRefusal,
 			"agent-vault: refused, the session is no longer valid, or it belongs to a different Agent Vault project than this proxy"}
 	}
 	return gateRefusal{log.Error().Err(err), decisionError, http.StatusBadGateway, errorCodeSessionUnresolvable, "failed to resolve the session",
@@ -243,6 +250,11 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	hostname, port, err := parseConnectTarget(r.Host)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("invalid CONNECT target %q", r.Host), http.StatusBadRequest)
+		return
+	}
+
+	if serviceName, ok := nativeServiceName(hostname); ok {
+		ps.handleNativeConnect(w, r, sessionToken, serviceName)
 		return
 	}
 
@@ -685,7 +697,7 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, t tun
 	case isProxyTokenRejected(err):
 		decision, status, code, body = decisionError, http.StatusServiceUnavailable, errorCodeProxyRevoked, proxyRevokedBody
 	case isSessionGone(err):
-		decision, status, code, body = decisionBlocked, http.StatusForbidden, errorCodeSessionInvalid, "the session is no longer valid, or it belongs to a different Agent Vault project than this proxy"
+		decision, status, code, body = decisionBlocked, http.StatusForbidden, errorCodeSessionInvalid, sessionInvalidRefusal
 	case errors.Is(err, errSessionResolve):
 		decision, status, code, body = decisionError, http.StatusBadGateway, errorCodeSessionUnresolvable, "failed to resolve the session"
 	case err != nil:
@@ -1204,6 +1216,9 @@ func (ps *proxyServer) serveSelfEndpoint(w http.ResponseWriter, r *http.Request)
 		})
 		return true
 
+	case NativeServicesPath:
+		ps.serveNativeServices(w, r)
+		return true
 	}
 
 	http.NotFound(w, r)

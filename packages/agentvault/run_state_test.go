@@ -190,3 +190,20 @@ func TestLoadSavedStateRefusesSettingsWithNoTokenAndNoCa(t *testing.T) {
 		t.Fatalf("the message should name both missing halves: %v", err)
 	}
 }
+
+// A failed TLS handshake on the door is routine noise, but a handler panic net/http recovered must stay visible.
+func TestTheFrontServerLogKeepsOnlyHandshakeErrorsAtDebug(t *testing.T) {
+	for _, tc := range []struct {
+		line, level string
+	}{
+		{"http: TLS handshake error from 10.0.0.5:51234: EOF\n", `"level":"debug"`},
+		{"http: panic serving 10.0.0.5:51234: runtime error: index out of range [0] with length 0\n", `"level":"error"`},
+		{"http: Accept error: too many open files; retrying in 5ms\n", `"level":"error"`},
+	} {
+		logs := captureLogs(t)
+		_, _ = debugLogWriter{}.Write([]byte(tc.line))
+		if !strings.Contains(logs.String(), tc.level) || !strings.Contains(logs.String(), strings.TrimSpace(tc.line)) {
+			t.Errorf("%q logged as %s, want %s", tc.line, logs.String(), tc.level)
+		}
+	}
+}

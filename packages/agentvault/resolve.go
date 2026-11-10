@@ -61,13 +61,22 @@ func (r *infisicalResolver) resolve(sessionToken string, held *sessionLogGrant) 
 
 	services := make([]*resolvedService, 0, len(res.Services))
 	for _, wire := range res.Services {
+		kind := toServiceKind(wire.Type)
+		native := toNativeTarget(kind, wire.Native)
+		// A database or SSH service is reached by name only. It never gets host patterns, so no HTTP request can
+		// pick it and carry its password, whatever its host pattern holds.
+		var hostPatterns []hostPattern
+		if !isNativeKind(kind) {
+			hostPatterns = parseHostPatterns(wire.HostPattern)
+		}
 		services = append(services, &resolvedService{
 			id:                    wire.ID,
 			name:                  wire.Name,
-			kind:                  toServiceKind(wire.Type),
+			kind:                  kind,
 			accessBundleName:      wire.AccessBundleName,
 			hostPattern:           wire.HostPattern,
-			hostPatterns:          parseHostPatterns(wire.HostPattern),
+			hostPatterns:          hostPatterns,
+			native:                native,
 			allowedMethods:        toMethodSet(wire.AllowedMethods),
 			allowedPathPrefixes:   toPathPrefixes(wire.AllowedPathPrefixes),
 			allowedTools:          toToolSet(wire.AllowedTools),
@@ -131,10 +140,30 @@ func toSessionLogGrant(sessionID string, wire api.AgentVaultSessionLogGrant, hel
 
 // Anything unrecognised is http, so a newer backend's type is brokered the way this proxy already knows how.
 func toServiceKind(wire string) string {
-	if wire == serviceKindMCP {
-		return serviceKindMCP
+	switch wire {
+	case serviceKindMCP, serviceKindPostgres, serviceKindMySQL, serviceKindSSH:
+		return wire
 	}
 	return serviceKindHTTP
+}
+
+// Nil unless the service is a database or SSH service and the server said where it is.
+func toNativeTarget(kind string, wire *api.AgentVaultNativeTarget) *nativeTarget {
+	if !isNativeKind(kind) || wire == nil || wire.Host == "" || wire.Port == 0 {
+		return nil
+	}
+	// TLS on and verified unless the server says otherwise, so a missing or partial tls object fails closed.
+	target := &nativeTarget{host: wire.Host, port: wire.Port, database: wire.Database, tlsEnabled: true, tlsVerify: true}
+	if wire.TLS != nil {
+		if wire.TLS.Enabled != nil {
+			target.tlsEnabled = *wire.TLS.Enabled
+		}
+		if wire.TLS.Verify != nil {
+			target.tlsVerify = *wire.TLS.Verify
+		}
+		target.ca = wire.TLS.CA
+	}
+	return target
 }
 
 func toCredential(wire api.AgentVaultCredential) credential {
@@ -155,6 +184,13 @@ func toCredential(wire api.AgentVaultCredential) credential {
 			kind:     credentialBasic,
 			username: wire.Username,
 			password: []byte(wire.Password),
+		}
+	case credentialSSHKey:
+		return credential{
+			kind:        credentialSSHKey,
+			username:    wire.Username,
+			privateKey:  []byte(wire.PrivateKey),
+			certificate: wire.Certificate,
 		}
 	default:
 		return credential{kind: credentialPassthrough}

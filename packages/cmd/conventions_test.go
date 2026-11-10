@@ -15,7 +15,8 @@ import (
 var (
 	crudActions      = map[string]bool{"get": true, "create": true, "update": true, "delete": true}
 	lifecycleActions = map[string]bool{"start": true, "stop": true, "install": true, "uninstall": true}
-	workflowCommands = map[string]bool{"run": true, "export": true}
+	workflowCommands = map[string]bool{"run": true, "export": true, "proxy": true, "connect": true}
+	resourceActions  = map[string]bool{"revoke": true, "push": true}
 )
 
 type conventionRule struct {
@@ -29,10 +30,10 @@ var conventionRules = []conventionRule{
 			return ""
 		}
 		name := cmd.Name()
-		if crudActions[name] || lifecycleActions[name] || workflowCommands[name] {
+		if crudActions[name] || lifecycleActions[name] || workflowCommands[name] || resourceActions[name] {
 			return ""
 		}
-		return fmt.Sprintf("%q is not an action from CLI.md (get, create, update, delete, or a lifecycle or workflow command)", name)
+		return fmt.Sprintf("%q is not an action from CLI.md (get, create, update, delete, revoke, push, or a lifecycle or workflow command)", name)
 	}},
 	{"plural-resource", func(cmd *cobra.Command) string {
 		if !cmd.HasAvailableSubCommands() || cmd.Parent() == RootCmd || strings.HasSuffix(cmd.Name(), "s") {

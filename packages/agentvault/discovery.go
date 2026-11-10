@@ -212,10 +212,20 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 // writeProxyError answers a request the proxy itself refused or could not complete. The message is the same fixed
 // text the proxy always sent; the code and hint are for an agent deciding what to do next.
 func writeProxyError(w http.ResponseWriter, status int, decision, code, message string) {
+	// A caller whose session the proxy refused, or couldn't check, learns nothing about where its Infisical is.
+	writeProxyErrorAPIURL(w, status, decision, code, message, !refusesSession(code))
+}
+
+// writeUncheckedProxyError answers a request refused before its session was checked, so it never names the proxy's
+// Infisical, whatever the code.
+func writeUncheckedProxyError(w http.ResponseWriter, status int, decision, code, message string) {
+	writeProxyErrorAPIURL(w, status, decision, code, message, false)
+}
+
+func writeProxyErrorAPIURL(w http.ResponseWriter, status int, decision, code, message string, namesAPIURL bool) {
 	w.Header().Set(HeaderDecision, decision)
 	w.Header().Set(HeaderError, code)
-	// A caller whose session the proxy refused, or couldn't check, learns nothing about where its Infisical is.
-	if apiURL := proxyAPIURL(); apiURL != "" && !refusesSession(code) {
+	if apiURL := proxyAPIURL(); apiURL != "" && namesAPIURL {
 		w.Header().Set(HeaderAPIURL, apiURL)
 	}
 	writeJSON(w, status, proxyErrorBody{Error: code, Message: message, Hint: proxyErrorHint(code)})
@@ -258,6 +268,8 @@ const (
 	errorCodeMethodNotAllowed     = "method_not_allowed"
 	errorCodeBusy                 = "busy"
 	errorCodeInfisicalUnreachable = "infisical_unreachable"
+	errorCodeServiceRefused       = "service_refused"
+	errorCodeTLSRequired          = "tls_required"
 )
 
 var proxyErrorHints = map[string]string{
@@ -275,4 +287,8 @@ var proxyErrorHints = map[string]string{
 	errorCodeUpstreamUnreachable:  "The Agent Vault proxy could not reach the API. Try again in a moment.",
 	errorCodeBusy:                 "Too many agents are starting through this Agent Vault proxy at once. Try again in a moment.",
 	errorCodeInfisicalUnreachable: "The Agent Vault proxy could not reach Infisical to answer this. Try again in a moment.",
+	errorCodeServiceRefused: "This is the Agent Vault proxy: it can't serve this database or SSH service for the session, so a " +
+		"different password or key will not help. " + servicesURLPlaceholder + " lists the session's services and their status.",
+	errorCodeTLSRequired: "This is the Agent Vault proxy: database and SSH services are reached with infisical agent-vault connect, " +
+		"which talks to the proxy over TLS.",
 }

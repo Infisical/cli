@@ -23,6 +23,13 @@
     "config": "|string|"
   },
   "infisical agent-vault": {},
+  "infisical agent-vault connect": {
+    "all": "|bool|false",
+    "ca-fingerprint": "|string|",
+    "port": "|int|0",
+    "proxy": "|string|",
+    "session-token": "|string|"
+  },
   "infisical agent-vault proxy": {
     "ca-cert": "|string|",
     "ca-key": "|string|",
@@ -80,6 +87,13 @@
     "project-id": "|string|"
   },
   "infisical av": {},
+  "infisical av connect": {
+    "all": "|bool|false",
+    "ca-fingerprint": "|string|",
+    "port": "|int|0",
+    "proxy": "|string|",
+    "session-token": "|string|"
+  },
   "infisical av proxy": {
     "ca-cert": "|string|",
     "ca-key": "|string|",

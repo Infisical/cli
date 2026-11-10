@@ -15,10 +15,20 @@ var errPolicyBlocked = errors.New("blocked by service policy")
 // own status rather than landing in either of theirs.
 var errBodyUnreadable = errors.New("could not read the request body")
 
+// Shared by HTTP requests and database or SSH connections, so the agent's owner reads the same fix either way.
+func errPersonalValuesMissing(svc *resolvedService) error {
+	// A database or SSH login has no sign-in to set up, only a username or a password.
+	what := "credential or sign-in"
+	if svc.native != nil {
+		what = "username or password"
+	}
+	return fmt.Errorf("service %q needs your own %s, which isn't set up yet: %w. Set it up on access bundle %q in Infisical Agent Vault, or for a machine identity, start the session on behalf of a user who has set it up. It can take a few minutes to apply.", svc.name, what, errPolicyBlocked, svc.accessBundleName)
+}
+
 func checkServicePolicy(svc *resolvedService, req *http.Request) error {
 	// First, so the refusal names what the agent's owner can fix rather than a method or path rule.
 	if svc.personalValuesMissing {
-		return fmt.Errorf("service %q needs your own credential or sign-in, which isn't set up yet: %w. Set it up on access bundle %q in Infisical Agent Vault, or for a machine identity, start the session on behalf of a user who has set it up. It can take a few minutes to apply.", svc.name, errPolicyBlocked, svc.accessBundleName)
+		return errPersonalValuesMissing(svc)
 	}
 	if !svc.allowsMethod(req.Method) {
 		return fmt.Errorf("service %q does not allow %s: %w", svc.name, truncateLogged(req.Method, maxLoggedMethodLen), errPolicyBlocked)

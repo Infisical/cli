@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
 )
 
@@ -136,5 +137,65 @@ func TestAResolveCarriesPersonalValuesMissingAndMemberProvided(t *testing.T) {
 	}
 	if memberProvided["slack"] {
 		t.Fatal("a service without the field resolved as member provided")
+	}
+}
+
+// A database or SSH service whose host pattern isn't null, with or without a target, must still get no HTTP patterns,
+// or an HTTP request to that host would carry its password.
+func TestAResolvedNativeServiceGetsNoHTTPHostPatterns(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"sessionId":"s1","services":[
+			{"id":"a","name":"with-target","type":"postgres","hostPattern":"db.internal","native":{"host":"db.internal","port":5432,"database":"app"},"credential":{"type":"basic","username":"u","password":"p"}},
+			{"id":"b","name":"no-target","type":"postgres","hostPattern":"db.internal","native":null,"credential":{"type":"basic","username":"u","password":"p"}},
+			{"id":"c","name":"api","type":"http","hostPattern":"api.internal","credential":{"type":"passthrough"}}
+		],"sessionLogs":{"enabled":false}}`))
+	}))
+	defer srv.Close()
+	old := config.INFISICAL_URL
+	config.INFISICAL_URL = srv.URL + "/api"
+	defer func() { config.INFISICAL_URL = old }()
+
+	resolver, err := newInfisicalResolver(func() string { return "ptok" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := resolver.resolve("tok", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, svc := range result.Services {
+		if svc.kind == serviceKindPostgres && len(svc.hostPatterns) != 0 {
+			t.Fatalf("native service %q resolved with HTTP host patterns %v", svc.name, svc.hostPatterns)
+		}
+		if svc.kind == serviceKindHTTP && len(svc.hostPatterns) == 0 {
+			t.Fatal("the HTTP service lost its host patterns, so the check above proves nothing")
+		}
+	}
+}
+
+// A tls object the server leaves out, or sends only in part, must not turn TLS or verification off.
+func TestADatabaseTargetKeepsTLSOnUnlessTheServerTurnsItOff(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		tls                string
+		wantTLS, wantCheck bool
+	}{
+		{"missing", ``, true, true},
+		{"null", `,"tls":null`, true, true},
+		{"empty", `,"tls":{}`, true, true},
+		{"enabled only", `,"tls":{"enabled":true}`, true, true},
+		{"verify off", `,"tls":{"enabled":true,"verify":false}`, true, false},
+		{"off", `,"tls":{"enabled":false,"verify":false}`, false, false},
+	} {
+		var wire api.AgentVaultNativeTarget
+		if err := json.Unmarshal([]byte(`{"host":"db.internal","port":5432,"database":"app"`+tc.tls+`}`), &wire); err != nil {
+			t.Fatal(err)
+		}
+		target := toNativeTarget(serviceKindPostgres, &wire)
+		if target == nil || target.tlsEnabled != tc.wantTLS || target.tlsVerify != tc.wantCheck {
+			t.Errorf("%s: target %+v, want tls %v and verify %v", tc.name, target, tc.wantTLS, tc.wantCheck)
+		}
 	}
 }

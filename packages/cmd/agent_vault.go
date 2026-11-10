@@ -79,7 +79,7 @@ not un-intercepted.`,
 		if err != nil {
 			util.HandleError(err, "Unable to configure logging")
 		}
-		log.Logger = zerolog.New(writer).With().Timestamp().Logger()
+		log.Logger = zerolog.New(agentvault.RedactPayloadLogFields(writer)).With().Timestamp().Logger()
 
 		for _, warning := range in.warnings {
 			log.Warn().Msg("agent-vault: " + warning)

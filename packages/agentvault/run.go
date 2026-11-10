@@ -3,14 +3,17 @@ package agentvault
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
+	stdlog "log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -434,13 +437,19 @@ func serve(opts Options, s startup) error {
 		ReadHeaderTimeout: frontReadHeaderTimeout,
 		IdleTimeout:       frontIdleTimeout,
 		MaxHeaderBytes:    maxRequestHeaderBytes,
+		// Never HTTP/2 on the TLS door: a database tunnel is a hijacked HTTP/1.1 CONNECT.
+		TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){},
+		// net/http prints every failed TLS handshake on the door, which scanners and dropped clients cause all the
+		// time, as plain text on stderr.
+		ErrorLog: stdlog.New(debugLogWriter{}, "", 0),
 	}
 
-	limited := newLimitListener(listener, maxConcurrentConns, func() {
+	// A database or SSH connection keeps its slot for as long as it stays open, like an HTTPS tunnel.
+	limited := newDoorListener(newLimitListener(listener, maxConcurrentConns, func() {
 		log.Warn().
 			Int("limit", maxConcurrentConns).
 			Msg("agent-vault: connection limit reached, new connections are waiting for a slot")
-	})
+	}), proxyDoorTLSConfig(ca), doorPeekTimeout)
 
 	stop := make(chan struct{})
 	fatal := make(chan error, 1)
@@ -502,6 +511,7 @@ func serve(opts Options, s startup) error {
 
 	// Its own budget: in-flight requests can spend all of the shutdown's, and this is the last minute of session logs.
 	closeSessionLogs := func() {
+		ps.flushLateNativeLogs()
 		ctx, cancel := context.WithTimeout(context.Background(), sessionLogCloseTimeout)
 		defer cancel()
 		ps.sessionLogs.close(ctx)
@@ -511,6 +521,7 @@ func serve(opts Options, s startup) error {
 	case err := <-serveErr:
 		close(stop)
 		closeSocks()
+		ps.cache.closeNative(nativeShutdownWait)
 		closeSessionLogs()
 		ps.cache.close()
 		if errors.Is(err, http.ErrServerClosed) {
@@ -527,6 +538,7 @@ func serve(opts Options, s startup) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = front.Shutdown(ctx)
+		ps.cache.closeNative(nativeShutdownWait)
 		closeSessionLogs()
 		ps.cache.close()
 		return fmt.Errorf("the SOCKS5 listener stopped: %w", err)
@@ -537,6 +549,7 @@ func serve(opts Options, s startup) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = front.Shutdown(ctx)
+		ps.cache.closeNative(nativeShutdownWait)
 		closeSessionLogs()
 		ps.cache.close()
 		return nil
@@ -546,11 +559,15 @@ func serve(opts Options, s startup) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = front.Shutdown(ctx)
+		ps.cache.closeNative(nativeShutdownWait)
 		closeSessionLogs()
 		ps.cache.close()
 		return err
 	}
 }
+
+// How long shutdown waits for open database and SSH connections to finish, so their last rows reach the session log.
+const nativeShutdownWait = 2 * time.Second
 
 // A 401 on the heartbeat is never transient. A timeout, a 5xx or a 429 rides out the grace window; a
 // rejected token does not.
@@ -647,4 +664,18 @@ func (ps *proxyServer) tick(st stateSaver) (tokenRejected bool) {
 
 	ps.cache.refreshInBackground()
 	return tokenRejected
+}
+
+// Only failed TLS handshakes go to debug. Anything else net/http reports, a recovered handler panic included, stays
+// an error.
+type debugLogWriter struct{}
+
+func (debugLogWriter) Write(p []byte) (int, error) {
+	line := strings.TrimRight(string(p), "\n")
+	if strings.HasPrefix(line, "http: TLS handshake error") {
+		log.Debug().Msg("agent-vault: " + line)
+	} else {
+		log.Error().Msg("agent-vault: " + line)
+	}
+	return len(p), nil
 }
