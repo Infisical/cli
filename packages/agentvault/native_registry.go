@@ -26,9 +26,12 @@ type nativeConn struct {
 	// The session's last successful fetch, kept here because an outage drops the entry, so a session Infisical
 	// can't be asked about stops being served after the grace window, as HTTP requests are.
 	fetchedAt time.Time
-	ctx       context.Context
-	cancel    context.CancelFunc
-	release   sync.Once
+	// The grace window in force when fetchedAt was set, so lowering the poll interval doesn't make a connection
+	// checked under the old one look stale.
+	grace   time.Duration
+	ctx     context.Context
+	cancel  context.CancelFunc
+	release sync.Once
 }
 
 // A session's database and SSH connections each hold one of the door's slots for as long as they stay open, so
@@ -81,6 +84,7 @@ func (c *sessionCache) registerNative(sessionToken string, svc *resolvedService)
 		target:    *svc.native,
 		kind:      svc.kind,
 		fetchedAt: entry.fetchedAt,
+		grace:     c.grace(),
 		ctx:       ctx,
 		cancel:    cancel,
 	}
@@ -151,19 +155,11 @@ func (c *sessionCache) nativeExpiredLocked(key string, now time.Time) bool {
 
 func (c *sessionCache) nativeStaleLocked(key string, now time.Time) bool {
 	for conn := range c.native[key] {
-		if now.Sub(conn.fetchedAt) > c.grace() {
+		if conn.ctx.Err() == nil && now.Sub(conn.fetchedAt) > conn.grace {
 			return true
 		}
 	}
 	return false
-}
-
-func (c *sessionCache) endStaleNativeLocked(now time.Time) {
-	for key := range c.native {
-		if c.nativeStaleLocked(key, now) {
-			c.endStaleNativeOneLocked(key)
-		}
-	}
 }
 
 func (c *sessionCache) endStaleNativeOneLocked(key string) {
@@ -188,6 +184,7 @@ func (c *sessionCache) applyNativeLocked(key string, services []*resolvedService
 	now := time.Now().Round(0)
 	for conn := range c.native[key] {
 		conn.fetchedAt = now
+		conn.grace = c.grace()
 		conn.setExpiryLocked(expiresAt)
 		current := findServiceByID(services, conn.serviceID)
 		if current == nil || current.native == nil || current.kind != conn.kind || !current.native.equal(conn.target) {

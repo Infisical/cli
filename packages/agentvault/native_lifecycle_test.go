@@ -3,6 +3,7 @@ package agentvault
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -475,23 +476,63 @@ func TestAnExpiryMovedLaterKeepsTheConnectionOpen(t *testing.T) {
 	}
 }
 
-// A slow refresh makes the next ticks skip, and a skipped tick still ends connections past the grace window.
-func TestASkippedRefreshStillClosesAConnectionPastTheGraceWindow(t *testing.T) {
+// A long refresh makes the next ticks skip, and a session still queued in it hasn't been asked about yet, so a skipped
+// tick leaves its connections alone.
+func TestASkippedRefreshLeavesAQueuedConnectionOpen(t *testing.T) {
 	cache, conn := openNativeConn(t, &stubResolver{})
 	cache.refreshing.Store(true)
 	defer cache.refreshing.Store(false)
-
-	cache.refreshInBackground()
-	if closed(conn) {
-		t.Fatal("a skipped tick closed a connection inside the grace window")
-	}
 
 	cache.mu.Lock()
 	conn.fetchedAt = time.Now().Add(-2 * cache.grace())
 	cache.mu.Unlock()
 	cache.refreshInBackground()
+	if closed(conn) {
+		t.Fatal("a skipped tick closed a connection whose session hadn't been asked about yet")
+	}
+}
+
+// A failed resolve past the grace window ends the connections then, not only when the next refresh starts.
+func TestAFailedResolvePastTheGraceWindowClosesTheConnection(t *testing.T) {
+	resolver := &stubResolver{}
+	cache, conn := openNativeConn(t, resolver)
+	setResult(resolver, nil, errors.New("connection refused"))
+
+	cache.mu.Lock()
+	conn.fetchedAt = time.Now().Add(-2 * cache.grace())
+	cache.mu.Unlock()
+	cache.refreshOne(sessionKey(nativeTestToken), nativeTestToken)
 	if !closed(conn) {
-		t.Fatal("a skipped tick left a connection open past the grace window")
+		t.Fatal("a failed resolve past the grace window left the connection open")
+	}
+}
+
+// Lowering the poll interval shortens the grace window only for checks made after the change.
+func TestLoweringThePollIntervalLeavesConnectionsCheckedUnderTheOldOneOpen(t *testing.T) {
+	interval := time.Minute
+	var mu sync.Mutex
+	resolver := &stubResolver{result: &resolveResult{SessionID: "s1", Services: []*resolvedService{nativeService("db", "db.internal")}}}
+	cache := newSessionCache(resolver, func() time.Duration { mu.Lock(); defer mu.Unlock(); return interval })
+	services, err := cache.get(nativeTestToken)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	conn, err := cache.registerNative(nativeTestToken, services[0])
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	t.Cleanup(func() { cache.releaseNative(conn) })
+	setResult(resolver, nil, errors.New("connection refused"))
+
+	cache.mu.Lock()
+	conn.fetchedAt = time.Now().Add(-2 * time.Minute)
+	cache.mu.Unlock()
+	mu.Lock()
+	interval = 10 * time.Second
+	mu.Unlock()
+	cache.refresh()
+	if closed(conn) {
+		t.Fatal("lowering the poll interval closed a connection checked under the old one")
 	}
 }
 

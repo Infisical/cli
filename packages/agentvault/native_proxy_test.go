@@ -25,6 +25,8 @@ import (
 	mysqlserver "github.com/go-mysql-org/go-mysql/server"
 	"github.com/jackc/pgx/v5/pgproto3"
 	"golang.org/x/crypto/ssh"
+
+	"github.com/Infisical/infisical-merge/packages/config"
 )
 
 // A proxy behind the real door listener, so tests go through the TLS door the way `connect` does.
@@ -133,6 +135,9 @@ func TestATLSConnectionIdleLongerThanThePeekIsNotCut(t *testing.T) {
 }
 
 func TestANativeConnectOnThePlainDoorIsRefused(t *testing.T) {
+	old := config.INFISICAL_URL
+	config.INFISICAL_URL = "https://" + testInfisicalHost + "/api"
+	t.Cleanup(func() { config.INFISICAL_URL = old })
 	_, client, addr := newNativeProxy(t, []*resolvedService{nativeServiceAt(serviceKindPostgres, "db", "127.0.0.1:1")})
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
@@ -149,6 +154,12 @@ func TestANativeConnectOnThePlainDoorIsRefused(t *testing.T) {
 	}
 	if got := resp.Header.Get(HeaderError); got != errorCodeTLSRequired {
 		t.Fatalf("a plaintext native CONNECT got %s %q, want %q", HeaderError, got, errorCodeTLSRequired)
+	}
+	if proxyAPIURL() == "" {
+		t.Fatal("the test needs an API URL the refusal could leak")
+	}
+	if got := resp.Header.Get(HeaderAPIURL); got != "" {
+		t.Fatalf("a refusal sent before the session was checked named the proxy's Infisical: %q", got)
 	}
 }
 

@@ -137,7 +137,7 @@ func checkSSHKey(svc *resolvedService) error {
 func (ps *proxyServer) handleNativeConnect(w http.ResponseWriter, r *http.Request, sessionToken, serviceName string) {
 	// The database leg after this is plaintext, so the tunnel to it is only offered over TLS.
 	if r.TLS == nil {
-		writeProxyError(w, http.StatusForbidden, decisionBlocked, errorCodeTLSRequired,
+		writeUncheckedProxyError(w, http.StatusForbidden, decisionBlocked, errorCodeTLSRequired,
 			"database and SSH services are reached with `infisical agent-vault connect`, which talks to the proxy over TLS")
 		return
 	}
@@ -352,11 +352,11 @@ type NativeServicesResponse struct {
 // Only over the TLS door, the one `connect` uses, and only with the session's token, as the tunnels themselves.
 func (ps *proxyServer) serveNativeServices(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeProxyError(w, http.StatusMethodNotAllowed, decisionBlocked, errorCodeMethodNotAllowed, "method not allowed")
+		writeUncheckedProxyError(w, http.StatusMethodNotAllowed, decisionBlocked, errorCodeMethodNotAllowed, "method not allowed")
 		return
 	}
 	if r.TLS == nil {
-		writeProxyError(w, http.StatusForbidden, decisionBlocked, errorCodeTLSRequired,
+		writeUncheckedProxyError(w, http.StatusForbidden, decisionBlocked, errorCodeTLSRequired,
 			"database and SSH services are listed only over the proxy's TLS door, which `infisical agent-vault connect` uses")
 		return
 	}

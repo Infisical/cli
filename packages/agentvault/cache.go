@@ -362,11 +362,6 @@ func (c *sessionCache) evictIfFullLocked() {
 func (c *sessionCache) refreshInBackground() {
 	if !c.refreshing.CompareAndSwap(false, true) {
 		log.Warn().Msg("agent-vault: the previous session refresh is still running, skipping this one")
-		// A refresh checks the grace window only when it starts, so a slow one would otherwise hold database and SSH
-		// connections open past it.
-		c.mu.Lock()
-		c.endStaleNativeLocked(time.Now())
-		c.mu.Unlock()
 		return
 	}
 	go func() {
@@ -493,6 +488,13 @@ func keepNewerSwaps(entry *sessionEntry, polled []*resolvedService, startGen uin
 func (c *sessionCache) handleRefreshFailure(key string, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// Checked here too, not only when a refresh starts: a slow refresh would otherwise hold database and SSH
+	// connections open past the grace window. Only a failed resolve counts, so a session still queued in a long
+	// refresh isn't mistaken for one Infisical can't answer for.
+	if c.nativeStaleLocked(key, time.Now()) {
+		c.endStaleNativeOneLocked(key)
+	}
 
 	entry, ok := c.entries[key]
 	if !ok {
