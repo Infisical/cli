@@ -110,6 +110,11 @@ func bestMatch(services []*resolvedService, host, port string) *resolvedService 
 	var bestDetail matchDetail
 
 	for _, svc := range services {
+		// Resolve never gives a database or SSH service host patterns; this keeps one from carrying its password on an
+		// HTTP request even if it had some.
+		if svc.native != nil || isNativeKind(svc.kind) {
+			continue
+		}
 		// Every pattern on the service is considered, not just the first that matches, so an exact pattern
 		// still wins over a wildcard on the same service.
 		var svcDetail matchDetail

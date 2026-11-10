@@ -237,6 +237,8 @@ type agentVaultTrustCase struct {
 	wantCode    string
 	wantText    string
 	wantCalls   int32
+	// The error must name the Infisical that was asked and suggest --domain.
+	wantDomainHint bool
 }
 
 // The proxy's CA is trusted only when the pin, the run's CA file or Infisical vouches for it, and the session token
@@ -281,8 +283,8 @@ func TestConnectTrustsTheProxyOnlyWhenSomethingVouchesForIt(t *testing.T) {
 			wantCode: errCodeProxyUntrusted, wantText: "not the one passed in --ca-fingerprint"},
 		{name: "nothing matches", caFile: other, infisical: lists(otherFP), wantCode: errCodeProxyUntrusted,
 			wantText: "wasn't sent to the proxy", wantCalls: 1},
-		{name: "session no longer valid (401)", infisical: answers(401, `{"statusCode":401,"error":"UnauthorizedError","message":"x"}`),
-			wantCode: errCodeSessionInvalid, wantCalls: 1},
+		{name: "session unknown to this Infisical (401)", infisical: answers(401, `{"statusCode":401,"error":"UnauthorizedError","message":"x"}`),
+			wantCode: errCodeProxyUntrusted, wantText: "doesn't know this session token", wantDomainHint: true, wantCalls: 1},
 		{name: "session no longer valid (403)", infisical: answers(403, `{"statusCode":403,"error":"PermissionDenied","message":"x"}`),
 			wantCode: errCodeSessionInvalid, wantCalls: 1},
 		{name: "Infisical predates the fingerprint route", infisical: answers(404, `{"statusCode":404,"error":"Not Found","message":"Route GET:/api/v1/agent-vault/session/proxy-ca-fingerprints not found"}`),
@@ -330,6 +332,9 @@ func TestConnectTrustsTheProxyOnlyWhenSomethingVouchesForIt(t *testing.T) {
 			} else {
 				if pool != nil || codeOf(err) != tc.wantCode || !strings.Contains(err.Error(), tc.wantText) {
 					t.Fatalf("pool %v, err %v; want code %s with %q", pool != nil, err, tc.wantCode, tc.wantText)
+				}
+				if tc.wantDomainHint && (!strings.Contains(err.Error(), infisicalURL+" doesn't know") || !strings.Contains(err.Error(), "pass --domain")) {
+					t.Fatalf("err %v; want it to name %s and suggest --domain", err, infisicalURL)
 				}
 			}
 			if calls.Load() != tc.wantCalls {

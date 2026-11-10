@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
 )
 
@@ -170,6 +171,31 @@ func TestAResolvedNativeServiceGetsNoHTTPHostPatterns(t *testing.T) {
 		}
 		if svc.kind == serviceKindHTTP && len(svc.hostPatterns) == 0 {
 			t.Fatal("the HTTP service lost its host patterns, so the check above proves nothing")
+		}
+	}
+}
+
+// A tls object the server leaves out, or sends only in part, must not turn TLS or verification off.
+func TestADatabaseTargetKeepsTLSOnUnlessTheServerTurnsItOff(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		tls                string
+		wantTLS, wantCheck bool
+	}{
+		{"missing", ``, true, true},
+		{"null", `,"tls":null`, true, true},
+		{"empty", `,"tls":{}`, true, true},
+		{"enabled only", `,"tls":{"enabled":true}`, true, true},
+		{"verify off", `,"tls":{"enabled":true,"verify":false}`, true, false},
+		{"off", `,"tls":{"enabled":false,"verify":false}`, false, false},
+	} {
+		var wire api.AgentVaultNativeTarget
+		if err := json.Unmarshal([]byte(`{"host":"db.internal","port":5432,"database":"app"`+tc.tls+`}`), &wire); err != nil {
+			t.Fatal(err)
+		}
+		target := toNativeTarget(serviceKindPostgres, &wire)
+		if target == nil || target.tlsEnabled != tc.wantTLS || target.tlsVerify != tc.wantCheck {
+			t.Errorf("%s: target %+v, want tls %v and verify %v", tc.name, target, tc.wantTLS, tc.wantCheck)
 		}
 	}
 }

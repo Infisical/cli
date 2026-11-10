@@ -168,6 +168,11 @@ func errAgentVaultConnectInfisicalUnreachable(proxyAddr, domain string, cause er
 		Message: fmt.Sprintf("Couldn't reach Infisical at %s to verify the proxy at %s, so the session token wasn't sent to the proxy: check --domain, or pass --ca-fingerprint SHA256:... with the fingerprint shown in %s.", domain, proxyAddr, agentVaultFingerprintLocation)}
 }
 
+func errAgentVaultConnectSessionUnknown(proxyAddr, domain string, cause error) *util.CLIError {
+	return &util.CLIError{Code: errCodeProxyUntrusted, Cause: cause,
+		Message: fmt.Sprintf("%s doesn't know this session token, so the proxy at %s couldn't be verified and the session token wasn't sent to it. If the session is on another Infisical instance, pass --domain, or pass --ca-fingerprint SHA256:... with the fingerprint shown in %s.", domain, proxyAddr, agentVaultFingerprintLocation)}
+}
+
 func errAgentVaultConnectSessionInvalid(cause error) *util.CLIError {
 	return &util.CLIError{Code: errCodeSessionInvalid, Cause: cause,
 		Message: "This session is no longer valid, or it belongs to a different Agent Vault project than the proxy: start a new session with 'infisical agent-vault sessions create', or run the agent again under 'infisical agent-vault run'."}

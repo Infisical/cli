@@ -110,6 +110,8 @@ type proxyServer struct {
 	sseStreams sseStreamRegistry
 
 	lateNativeLogs lateNativeLogs
+	// Open database and SSH tunnels across every session, held under maxNativeTunnels.
+	nativeTunnels atomic.Int64
 }
 
 func (ps *proxyServer) currentConfig() ProxyConfig {

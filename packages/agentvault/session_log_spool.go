@@ -2,7 +2,6 @@ package agentvault
 
 import (
 	"encoding/json"
-	"strconv"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
@@ -168,32 +167,6 @@ type sessionLogSpool struct {
 
 	lastRecordAt time.Time
 	lastFlushAt  time.Time
-}
-
-// Tells whoever reads the session that rows are missing, since otherwise only the proxy's own log says so. It takes
-// its routing fields and time from the last row sealed with it.
-func (s *sessionLogSpool) droppedRowsNote(last sessionLogRecord, dropped uint64) sessionLogRecord {
-	text := strconv.FormatUint(dropped, 10) + " rows were dropped because the session log was full"
-	if dropped == 1 {
-		text = "1 row was dropped because the session log was full"
-	}
-	note := sessionLogRecord{
-		Ts:           last.Ts,
-		Seq:          s.nextSeq,
-		ProxyID:      last.ProxyID,
-		Method:       last.Method,
-		Host:         last.Host,
-		Port:         last.Port,
-		Decision:     last.Decision,
-		Service:      last.Service,
-		AccessBundle: last.AccessBundle,
-		ServiceType:  last.ServiceType,
-		Native:       &nativeDetail{Note: text},
-		at:           last.at,
-	}
-	s.nextSeq++
-	note.size = note.estimateSize()
-	return note
 }
 
 func (s *sessionLogSpool) popPending() *sealedChunk {

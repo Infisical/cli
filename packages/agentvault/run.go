@@ -666,9 +666,16 @@ func (ps *proxyServer) tick(st stateSaver) (tokenRejected bool) {
 	return tokenRejected
 }
 
+// Only failed TLS handshakes go to debug. Anything else net/http reports, a recovered handler panic included, stays
+// an error.
 type debugLogWriter struct{}
 
 func (debugLogWriter) Write(p []byte) (int, error) {
-	log.Debug().Msg("agent-vault: " + strings.TrimRight(string(p), "\n"))
+	line := strings.TrimRight(string(p), "\n")
+	if strings.HasPrefix(line, "http: TLS handshake error") {
+		log.Debug().Msg("agent-vault: " + line)
+	} else {
+		log.Error().Msg("agent-vault: " + line)
+	}
 	return len(p), nil
 }

@@ -89,7 +89,7 @@ With `-o json`, the same error is JSON on stderr:
 | `session_token_required` | `agent-vault connect` without `--session-token` or `INFISICAL_AGENT_VAULT_SESSION_TOKEN` |
 | `proxy_required` | `agent-vault connect` without `--proxy` or `INFISICAL_AGENT_VAULT_PROXY_ADDRESS` |
 | `proxy_unreachable` | `agent-vault connect` can't reach the Agent Vault proxy at the address, or a connection to it failed |
-| `proxy_untrusted` | `agent-vault connect` can't verify the proxy's certificate authority from `agent-vault run`'s CA file or Infisical (which doesn't list fingerprints yet, can't be reached, or doesn't list this proxy), or it doesn't match `--ca-fingerprint`. The session token isn't sent to the proxy |
+| `proxy_untrusted` | `agent-vault connect` can't verify the proxy's certificate authority from `agent-vault run`'s CA file or Infisical (which doesn't list fingerprints yet, can't be reached, doesn't know the session token, or doesn't list this proxy), or it doesn't match `--ca-fingerprint`. The session token isn't sent to the proxy |
 | `proxy_not_supported` | The Agent Vault proxy at the address predates database and SSH services |
 | `no_services` | `agent-vault connect` for a session that has no database or SSH services |
 | `service_not_found` | `agent-vault connect` names a service the session doesn't have. The message lists the ones it has |

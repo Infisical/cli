@@ -383,11 +383,17 @@ func (c *sessionCache) refresh() {
 		targets[key] = c.tokens[key]
 	}
 	// A pinned session whose entry went past the grace window during an outage is still asked about, and still
-	// ends at its expiry without Infisical saying so.
+	// ends at its expiry without Infisical saying so. Its connections end once the grace window has passed since
+	// Infisical last answered for it, the same window an HTTP request is served for.
 	for key := range c.native {
 		if _, ok := c.entries[key]; !ok && c.nativeExpiredLocked(key, now) {
 			c.forgetLocked(key, true)
 			continue
+		}
+		if c.nativeStaleLocked(key, now) {
+			log.Warn().Str("sessionKey", key).Dur("grace", c.grace()).
+				Msg("agent-vault: could not reach Infisical within the grace window, closing the session's database and SSH connections")
+			c.endNativeLocked(key)
 		}
 		if _, ok := targets[key]; !ok && c.tokens[key] != "" {
 			targets[key] = c.tokens[key]
@@ -437,7 +443,8 @@ func (c *sessionCache) refreshOne(key, token string) {
 		c.applyNativeLocked(key, entry.services, entry.expiresAt)
 		return
 	}
-	if c.pinnedLocked(key) {
+	// A session that ended while this poll was out lost its token, and must not come back from the poll's answer.
+	if c.pinnedLocked(key) && c.tokens[key] == token {
 		c.entries[key] = &sessionEntry{
 			sessionID:  result.SessionID,
 			expiresAt:  result.ExpiresAt,
@@ -503,7 +510,8 @@ func (c *sessionCache) handleRefreshFailure(key string, err error) {
 		return
 	}
 
-	// Infisical being unreachable says nothing about the session, so open connections stay and keep being polled.
+	// Infisical being unreachable isn't a verdict on the session, so open connections stay and keep being polled
+	// until the grace window has passed since its last answer, when refresh closes them.
 	grace := c.grace()
 	if time.Since(entry.fetchedAt) > grace {
 		log.Warn().

@@ -3,6 +3,7 @@ package agentvault
 import (
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -364,5 +365,164 @@ func TestEvictionSkipsASessionWithAnOpenConnection(t *testing.T) {
 	}
 	if size != maxSessionCacheEntries-1 {
 		t.Fatalf("cache holds %d entries after eviction, want %d", size, maxSessionCacheEntries-1)
+	}
+}
+
+// Answers every resolve with result, and while gated holds each one until release is closed.
+type gatedResolver struct {
+	result  *resolveResult
+	gated   atomic.Bool
+	started chan struct{}
+	release chan struct{}
+}
+
+func (g *gatedResolver) resolve(string, *sessionLogGrant) (*resolveResult, error) {
+	if g.gated.Load() {
+		g.started <- struct{}{}
+		<-g.release
+	}
+	return g.result, nil
+}
+
+// A poll that was already out when the session ended must not rebuild its entry from the answer it brings back.
+func TestAPollThatLandsAfterTheSessionEndedDoesNotBringItBack(t *testing.T) {
+	resolver := &gatedResolver{
+		result:  &resolveResult{SessionID: "s1", Services: []*resolvedService{nativeService("db", "db.internal")}},
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	cache := newTestCache(resolver)
+	services, err := cache.get(nativeTestToken)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	conn, err := cache.registerNative(nativeTestToken, services[0])
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	t.Cleanup(func() { cache.releaseNative(conn) })
+	key := sessionKey(nativeTestToken)
+
+	resolver.gated.Store(true)
+	done := make(chan struct{})
+	go func() {
+		cache.refreshOne(key, nativeTestToken)
+		close(done)
+	}()
+	<-resolver.started
+	cache.mu.Lock()
+	cache.forgetLocked(key, true)
+	cache.mu.Unlock()
+	close(resolver.release)
+	<-done
+	resolver.gated.Store(false)
+
+	cache.mu.Lock()
+	_, back := cache.entries[key]
+	cache.mu.Unlock()
+	if back {
+		t.Fatal("the poll's answer brought back a session that ended while it was out")
+	}
+	if again, err := cache.registerNative(nativeTestToken, services[0]); !errors.Is(err, errSessionGone) {
+		if again != nil {
+			cache.releaseNative(again)
+		}
+		t.Fatalf("register after the session ended: %v, want errSessionGone", err)
+	}
+}
+
+func TestANativeConnectionClosesAtExpiryWithoutAPoll(t *testing.T) {
+	resolver := &stubResolver{}
+	expiresAt := time.Now().Add(50 * time.Millisecond)
+	resolver.result = &resolveResult{SessionID: "s1", ExpiresAt: &expiresAt, Services: []*resolvedService{nativeService("db", "db.internal")}}
+	cache := newTestCache(resolver)
+	services, err := cache.get(nativeTestToken)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	conn, err := cache.registerNative(nativeTestToken, services[0])
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	t.Cleanup(func() { cache.releaseNative(conn) })
+
+	select {
+	case <-conn.ctx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("the connection stayed open past the session's expiry with nothing polling")
+	}
+}
+
+func TestAnExpiryMovedLaterKeepsTheConnectionOpen(t *testing.T) {
+	resolver := &stubResolver{}
+	soon := time.Now().Add(100 * time.Millisecond)
+	resolver.result = &resolveResult{SessionID: "s1", ExpiresAt: &soon, Services: []*resolvedService{nativeService("db", "db.internal")}}
+	cache := newTestCache(resolver)
+	services, _ := cache.get(nativeTestToken)
+	conn, err := cache.registerNative(nativeTestToken, services[0])
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	t.Cleanup(func() { cache.releaseNative(conn) })
+
+	later := time.Now().Add(time.Hour)
+	setResult(resolver, &resolveResult{SessionID: "s1", ExpiresAt: &later, Services: []*resolvedService{nativeService("db", "db.internal")}}, nil)
+	cache.refreshOne(sessionKey(nativeTestToken), nativeTestToken)
+
+	time.Sleep(300 * time.Millisecond)
+	if closed(conn) {
+		t.Fatal("the connection closed at the old expiry after a refresh moved it later")
+	}
+}
+
+// Polls that keep failing say nothing about the session, but past the grace window it is no longer served, as an
+// HTTP request isn't.
+func TestANativeConnectionClosesOnceInfisicalIsUnreachablePastTheGraceWindow(t *testing.T) {
+	resolver := &stubResolver{}
+	cache, conn := openNativeConn(t, resolver)
+	key := sessionKey(nativeTestToken)
+	setResult(resolver, nil, errors.New("connection refused"))
+
+	cache.refresh()
+	if closed(conn) {
+		t.Fatal("a failed poll inside the grace window closed the connection")
+	}
+
+	lastAnswer := time.Now().Add(-2 * cache.grace())
+	cache.mu.Lock()
+	cache.entries[key].fetchedAt = lastAnswer
+	conn.fetchedAt = lastAnswer
+	cache.mu.Unlock()
+	cache.refresh()
+	cache.refresh()
+
+	if !closed(conn) {
+		t.Fatal("the connection stayed open past the grace window with Infisical unreachable")
+	}
+}
+
+func TestASessionIsCappedAtItsOpenNativeConnections(t *testing.T) {
+	restore := maxNativeConnsPerSession
+	maxNativeConnsPerSession = 2
+	t.Cleanup(func() { maxNativeConnsPerSession = restore })
+
+	resolver := &stubResolver{}
+	resolver.result = &resolveResult{SessionID: "s1", Services: []*resolvedService{nativeService("db", "db.internal")}}
+	cache := newTestCache(resolver)
+	services, _ := cache.get(nativeTestToken)
+	for i := 0; i < 2; i++ {
+		conn, err := cache.registerNative(nativeTestToken, services[0])
+		if err != nil {
+			t.Fatalf("register %d: %v", i, err)
+		}
+		t.Cleanup(func() { cache.releaseNative(conn) })
+	}
+
+	conn, err := cache.registerNative(nativeTestToken, services[0])
+	if conn != nil {
+		cache.releaseNative(conn)
+	}
+	if err == nil || err.Error() != "this session already has 2 open database or SSH connections. Close some and try again" {
+		t.Fatalf("third register: %v, want the per-session limit", err)
 	}
 }

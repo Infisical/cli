@@ -20,6 +20,9 @@ import (
 	"testing"
 	"time"
 
+	mysqlclient "github.com/go-mysql-org/go-mysql/client"
+	"github.com/go-mysql-org/go-mysql/mysql"
+	mysqlserver "github.com/go-mysql-org/go-mysql/server"
 	"github.com/jackc/pgx/v5/pgproto3"
 	"golang.org/x/crypto/ssh"
 )
@@ -223,6 +226,7 @@ func TestAClientHangingUpIsNotAnError(t *testing.T) {
 func TestANativeServiceNeverMatchesAnHTTPRequest(t *testing.T) {
 	svc := nativeServiceAt(serviceKindPostgres, "db", "127.0.0.1:5432")
 	svc.hostPattern = "127.0.0.1:5432"
+	svc.hostPatterns = parseHostPatterns(svc.hostPattern)
 	if bestMatch([]*resolvedService{svc}, "127.0.0.1", "5432") != nil {
 		t.Fatal("a database service matched an HTTP request to its host")
 	}
@@ -489,3 +493,216 @@ func serveFakeSSH(conn net.Conn, config *ssh.ServerConfig) {
 		}()
 	}
 }
+
+// Waits until every database and SSH tunnel the proxy opened has finished, so its last row is written.
+func waitNativeDone(t *testing.T, ps *proxyServer) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for ps.nativeTunnels.Load() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the native connection didn't finish")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func errorRows(records []sessionLogRecord) []sessionLogRecord {
+	var out []sessionLogRecord
+	for _, record := range records {
+		if record.Decision == decisionError {
+			out = append(out, record)
+		}
+	}
+	return out
+}
+
+// PAM's handlers wrap a client's hang-up as they wrap a server failure, so these must still read as ordinary ends.
+func TestAClientThatHangsUpLeavesNoErrorRow(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		kind     string
+		upstream func(t *testing.T) string
+		hangUp   func(t *testing.T, tunnel net.Conn)
+	}{
+		{"mysql client drops the socket", serviceKindMySQL, startFakeMySQL, func(t *testing.T, tunnel net.Conn) {
+			if _, err := mysqlclient.ConnectWithDialer(context.Background(), "tcp", "db", "whoever", "", "",
+				func(context.Context, string, string) (net.Conn, error) { return tunnel, nil }); err != nil {
+				t.Fatalf("mysql through the proxy: %v", err)
+			}
+			_ = tunnel.Close()
+		}},
+		{"postgres client asks for TLS and hangs up", serviceKindPostgres, func(t *testing.T) string { return startFakePostgres(t, "agent", "secret") },
+			func(t *testing.T, tunnel net.Conn) {
+				sslRequest, _ := (&pgproto3.SSLRequest{}).Encode(nil)
+				_, _ = tunnel.Write(sslRequest)
+				reply := make([]byte, 1)
+				if _, err := io.ReadFull(tunnel, reply); err != nil || reply[0] != 'N' {
+					t.Fatalf("SSLRequest reply %q, err %v", reply, err)
+				}
+				_ = tunnel.Close()
+			}},
+		{"ssh client rejects the host key", serviceKindSSH, func(t *testing.T) string { return startFakeSSH(t, "agent", "secret") },
+			func(t *testing.T, tunnel net.Conn) {
+				_, _, _, err := ssh.NewClientConn(tunnel, "bastion", &ssh.ClientConfig{
+					User:            "anyone",
+					Auth:            []ssh.AuthMethod{ssh.Password("ignored")},
+					HostKeyCallback: func(string, net.Addr, ssh.PublicKey) error { return errors.New("unknown host key") },
+					Timeout:         5 * time.Second,
+				})
+				if err == nil {
+					t.Fatal("the SSH client accepted a host key it was told to reject")
+				}
+				_ = tunnel.Close()
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ps, client, _ := newNativeProxy(t, []*resolvedService{nativeServiceAt(tc.kind, "db", tc.upstream(t))})
+			tunnel, err := client.OpenTunnel(context.Background(), "db")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = tunnel.SetDeadline(time.Now().Add(5 * time.Second))
+			tc.hangUp(t, tunnel)
+
+			waitNativeDone(t, ps)
+			if rows := errorRows(nativeRecords(t, ps, 0)); len(rows) != 0 {
+				t.Fatalf("a client hanging up was recorded as an error: %+v", rows[0].Native)
+			}
+		})
+	}
+}
+
+// The server side failing must still be recorded, including when what failed was an EOF from the server.
+func TestAServerFailureIsStillAnErrorRow(t *testing.T) {
+	for _, tc := range []struct {
+		name, want string
+		reply      func(conn net.Conn)
+	}{
+		{"certificate not trusted", "certificate", func(conn net.Conn) {
+			key, cert, _ := generateRootCa()
+			leaf, _ := newCaManager(key, cert).mintLeaf("127.0.0.1")
+			tlsConn := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{leaf}})
+			_ = tlsConn.Handshake()
+			_ = tlsConn.Close()
+		}},
+		{"server hangs up during the TLS handshake", "TLS handshake failed", func(conn net.Conn) { _ = conn.Close() }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = ln.Close() })
+			go func() {
+				conn, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+				if _, err := io.ReadFull(conn, make([]byte, 8)); err != nil {
+					return
+				}
+				_, _ = conn.Write([]byte("S"))
+				tc.reply(conn)
+			}()
+
+			svc := nativeServiceAt(serviceKindPostgres, "db", ln.Addr().String())
+			svc.native.tlsEnabled, svc.native.tlsVerify = true, true
+			ps, client, _ := newNativeProxy(t, []*resolvedService{svc})
+			tunnel, err := client.OpenTunnel(context.Background(), "db")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tunnel.Close()
+
+			rows := errorRows(nativeRecords(t, ps, 1))
+			if len(rows) != 1 || rows[0].Native == nil || !strings.Contains(rows[0].Native.Note, tc.want) {
+				t.Fatalf("records = %+v, want one error row mentioning %q", rows, tc.want)
+			}
+		})
+	}
+}
+
+// A session that ends between the lookup and the tunnel opening is refused as an ended session, not as its service.
+func TestASessionEndingAsTheTunnelOpensIsRefusedAsAnEndedSession(t *testing.T) {
+	ps, client, _ := newNativeProxy(t, nil)
+	expired := time.Now().Add(-time.Second)
+	ps.cache = newSessionCache(&stubResolver{result: &resolveResult{
+		SessionID:  "s1",
+		ExpiresAt:  &expired,
+		Services:   []*resolvedService{nativeServiceAt(serviceKindPostgres, "db", "127.0.0.1:1")},
+		SessionLog: &sessionLogGrant{sessionID: "s1", key: make([]byte, 32)},
+	}}, ps.pollInterval)
+
+	_, err := client.OpenTunnel(context.Background(), "db")
+	var refused *ProxyRefusedError
+	if !errors.As(err, &refused) || !refused.SessionInvalid() {
+		t.Fatalf("open: %v, want a session-invalid refusal", err)
+	}
+	if records := nativeRecords(t, ps, 0); len(records) != 0 {
+		t.Fatalf("an ended session was recorded against its service: %+v", records)
+	}
+}
+
+func TestDatabaseAndSSHTunnelsLeaveDoorSlotsForHTTP(t *testing.T) {
+	restore := maxNativeTunnels
+	maxNativeTunnels = 1
+	t.Cleanup(func() { maxNativeTunnels = restore })
+
+	upstream := startFakePostgres(t, "agent", "secret")
+	ps, client, _ := newNativeProxy(t, []*resolvedService{nativeServiceAt(serviceKindPostgres, "db", upstream)})
+	first, err := client.OpenTunnel(context.Background(), "db")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = client.OpenTunnel(context.Background(), "db")
+	var refused *ProxyRefusedError
+	if !errors.As(err, &refused) || strings.TrimSpace(refused.Message) != errNativeTunnelsFull.Error() {
+		t.Fatalf("second open: %v, want the proxy-wide limit", err)
+	}
+
+	_ = first.Close()
+	waitNativeDone(t, ps)
+	again, err := client.OpenTunnel(context.Background(), "db")
+	if err != nil {
+		t.Fatalf("open after a tunnel closed: %v", err)
+	}
+	_ = again.Close()
+}
+
+// An upstream MySQL server that accepts agent/secret and answers every command with an empty result.
+func startFakeMySQL(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	srv := mysqlserver.NewServer("8.0.11", mysql.DEFAULT_COLLATION_ID, mysql.AUTH_NATIVE_PASSWORD, nil, nil)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				served, err := srv.NewConn(conn, "agent", "secret", quietMySQLHandler{})
+				if err != nil {
+					return
+				}
+				for !served.Closed() {
+					if served.HandleCommand() != nil {
+						return
+					}
+				}
+			}()
+		}
+	}()
+	return ln.Addr().String()
+}
+
+type quietMySQLHandler struct{ mysqlserver.EmptyHandler }
+
+func (quietMySQLHandler) UseDB(string) error { return nil }

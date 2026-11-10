@@ -152,10 +152,15 @@ func toNativeTarget(kind string, wire *api.AgentVaultNativeTarget) *nativeTarget
 	if !isNativeKind(kind) || wire == nil || wire.Host == "" || wire.Port == 0 {
 		return nil
 	}
-	target := &nativeTarget{host: wire.Host, port: wire.Port, database: wire.Database}
+	// TLS on and verified unless the server says otherwise, so a missing or partial tls object fails closed.
+	target := &nativeTarget{host: wire.Host, port: wire.Port, database: wire.Database, tlsEnabled: true, tlsVerify: true}
 	if wire.TLS != nil {
-		target.tlsEnabled = wire.TLS.Enabled
-		target.tlsVerify = wire.TLS.Verify
+		if wire.TLS.Enabled != nil {
+			target.tlsEnabled = *wire.TLS.Enabled
+		}
+		if wire.TLS.Verify != nil {
+			target.tlsVerify = *wire.TLS.Verify
+		}
 		target.ca = wire.TLS.CA
 	}
 	return target

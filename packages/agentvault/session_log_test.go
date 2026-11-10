@@ -455,8 +455,10 @@ func TestReachingTheFlushBytesWakesTheLoop(t *testing.T) {
 	}
 }
 
-// The admin reading the session must see that rows are missing, not only the proxy's own log.
-func TestDroppedRowsAreNotedInTheSession(t *testing.T) {
+// Dropped rows are reported in the proxy's own log only: a note in the session would show as a request that never
+// happened.
+func TestDroppedRowsAreReportedOnlyInTheProxysLog(t *testing.T) {
+	logs := captureLogs(t)
 	shipper := &fakeShipper{}
 	log, _, _ := newTestLog(shipper)
 	grant := testGrant("s1")
@@ -472,32 +474,16 @@ func TestDroppedRowsAreNotedInTheSession(t *testing.T) {
 	}
 	log.flush(context.Background(), flushFinal)
 
-	uploads := shipper.uploadedRecords(t)
-	lastUpload := uploads[len(uploads)-1]
-	note := lastUpload[len(lastUpload)-1]
-	want := fmt.Sprintf("%d rows were dropped because the session log was full", dropped)
-	if note.Native == nil || note.Native.Note != want {
-		t.Fatalf("the last record is %+v, want a note saying %q", note.Native, want)
-	}
-	var notes int
-	var maxSeq uint64
-	for _, upload := range uploads {
+	for _, upload := range shipper.uploadedRecords(t) {
 		for _, rec := range upload {
 			if rec.Native != nil && rec.Native.Note != "" {
-				notes++
+				t.Fatalf("the session holds a note %q, want the drops reported only in the proxy's log", rec.Native.Note)
 			}
-			maxSeq = max(maxSeq, rec.Seq)
 		}
 	}
-	if notes != 1 || note.Seq != maxSeq || note.Ts != lastUpload[len(lastUpload)-2].Ts {
-		t.Fatalf("%d notes, note seq %d of %d, ts %s, want one note after the rows it sealed with", notes, note.Seq, maxSeq, note.Ts)
-	}
-
-	log.record(grant, aNativeRecord("z"))
-	log.flush(context.Background(), flushFinal)
-	uploads = shipper.uploadedRecords(t)
-	if next := uploads[len(uploads)-1]; len(next) != 1 || next[0].Native.Note != "" {
-		t.Fatalf("the next chunk is %+v, want only its row once the drops were noted", next)
+	if !strings.Contains(logs.String(), "some activity wasn't recorded in the session log") ||
+		!strings.Contains(logs.String(), fmt.Sprintf(`"records":%d`, dropped)) {
+		t.Fatalf("the proxy's log doesn't report the %d dropped rows: %s", dropped, logs.String())
 	}
 }
 

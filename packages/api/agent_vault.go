@@ -123,9 +123,10 @@ type AgentVaultService struct {
 	MemberProvided bool `json:"memberProvided"`
 }
 
+// Pointers, so a field the server leaves out is told apart from false and keeps the safe default.
 type AgentVaultNativeTLS struct {
-	Enabled bool   `json:"enabled"`
-	Verify  bool   `json:"verify"`
+	Enabled *bool  `json:"enabled"`
+	Verify  *bool  `json:"verify"`
 	CA      string `json:"ca"`
 }
 

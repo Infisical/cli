@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"syscall"
 
 	pamhandlers "github.com/Infisical/infisical-merge/packages/pam/handlers"
 	pammysql "github.com/Infisical/infisical-merge/packages/pam/handlers/mysql"
@@ -178,7 +180,18 @@ func (ps *proxyServer) handleNativeConnect(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	if ps.nativeTunnels.Add(1) > int64(maxNativeTunnels) {
+		ps.nativeTunnels.Add(-1)
+		refuse(errNativeTunnelsFull.Error())
+		return
+	}
+	defer ps.nativeTunnels.Add(-1)
+
 	conn, err := ps.cache.registerNative(sessionToken, svc)
+	if errors.Is(err, errSessionGone) {
+		ps.denyAtGate(w, sessionToken, serviceName+NativeServiceSuffix, NativeServicePort, err)
+		return
+	}
 	if err != nil {
 		refuse(err.Error())
 		return
@@ -215,8 +228,9 @@ func (ps *proxyServer) handleNativeConnect(w http.ResponseWriter, r *http.Reques
 	// TODO: when PAM's handler can't log in to the server (a wrong password, a certificate it doesn't trust, a host it
 	// can't reach), the agent's client only sees the connection close. The reason reaches this log and the session
 	// log. Fix in PAM's handlers by sending the client an error in its own protocol before closing.
-	err = serveNative(conn.ctx, clientConn, svc, tlsConfig, logger)
-	if err != nil && conn.ctx.Err() == nil && !isClientHangUp(err) {
+	client := &hangUpConn{Conn: clientConn}
+	err = serveNative(conn.ctx, client, svc, tlsConfig, logger)
+	if err != nil && conn.ctx.Err() == nil && !isClientHangUp(err) && !client.hungUp.Load() {
 		log.Warn().Err(err).Str("service", svc.name).Str("sessionKey", conn.key).Msg("agent-vault: native connection ended with an error")
 		logger.recordOutcome(decisionError, "The proxy couldn't connect to the service: "+err.Error())
 		return
@@ -224,10 +238,28 @@ func (ps *proxyServer) handleNativeConnect(w http.ResponseWriter, r *http.Reques
 	log.Info().Str("service", svc.name).Str("sessionKey", conn.key).Msg("agent-vault: native connection closed")
 }
 
-// PAM's handlers return a bare EOF when the client hangs up, which is how every connection ends. A failure to reach or
+var errNativeTunnelsFull = errors.New("the proxy is serving as many database and SSH connections as it can. Close some and try again, or run another proxy")
+
+// PAM's handlers return a bare EOF when the client hangs up, which is how most connections end. A failure to reach or
 // log in to the server comes back wrapped with what failed.
 func isClientHangUp(err error) bool {
 	return err == io.EOF || err == io.ErrUnexpectedEOF
+}
+
+// hangUpConn records the client hanging up. PAM's handlers wrap the client's EOF in the same way as a server's
+// (a dropped MySQL client reads as a bad connection, a Postgres one as a failed startup), so which side closed
+// first is the only reliable way to tell an ordinary end from a failure.
+type hangUpConn struct {
+	net.Conn
+	hungUp atomic.Bool
+}
+
+func (c *hangUpConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if err != nil && (errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET)) {
+		c.hungUp.Store(true)
+	}
+	return n, err
 }
 
 func (ps *proxyServer) refuseNative(w http.ResponseWriter, sessionToken, serviceName, body string) {
@@ -267,7 +299,10 @@ func serveNative(ctx context.Context, conn net.Conn, svc *resolvedService, tlsCo
 	case serviceKindPostgres:
 		// TODO: PAM's Postgres handler builds its pgproto3 Backend and Frontend without SetMaxBodyLen, so a session
 		// holder can declare a huge message in a 5-byte header and make the proxy allocate it before any body arrives.
-		// Fix in PAM's handler by calling SetMaxBodyLen on both sides.
+		// Fix in PAM's handler by calling SetMaxBodyLen on both sides. That alone isn't enough: before forwarding,
+		// trackClientMessage builds the executable SQL for every Bind (buildExecutableSQL replaces each $n with the
+		// bound value), so a Parse that repeats $1 many times with one large parameter allocates far more than any
+		// message cap. Fix by also capping the expanded SQL. Both must land in PAM before release.
 		// It also dials the server with no timeout, so a host or port that drops packets keeps the agent waiting until
 		// the operating system gives up, about 75 seconds. Fix by dialing with a timeout, as its SSH handler does (10s).
 		// It also never removes a prepared statement on Close, so a long-lived connection keeps the SQL of every
@@ -291,6 +326,9 @@ func serveNative(ctx context.Context, conn net.Conn, svc *resolvedService, tlsCo
 		// Fix in PAM's handler by also offering caching_sha2_password.
 		// TODO: PAM's MySQL handler logs a statement the database refused as NO_RESPONSE, so the session log doesn't
 		// say it was denied. Fix in PAM's handler by recording MySQL's error instead.
+		// TODO: PAM's MySQL handler doesn't log the database a client names at login or switches to with COM_INIT_DB
+		// (both reach RelayHandler.UseDB), so the session log doesn't show which database later statements ran in.
+		// Fix in PAM's handler by logging UseDB.
 		return pammysql.NewMysqlProxy(pammysql.MysqlProxyConfig{
 			TargetAddr:     target.addr(),
 			InjectUsername: cred.username,
@@ -321,11 +359,20 @@ func serveNative(ctx context.Context, conn net.Conn, svc *resolvedService, tlsCo
 		}
 		// TODO: PAM's SSH handler never reads the server's stderr, so the agent doesn't see error output and a command
 		// writing a lot to stderr can stall its channel. The fix belongs in PAM's handler.
+		// TODO: PAM's SFTP parser panics on a zero-length packet (parseOnePacket in sftp_parser.go), in a goroutine with
+		// no recover, so one packet from an agent crashes the whole proxy and every session on it. The parser is set
+		// up before the subsystem request is answered, so even a refused sftp request reaches it. Fix in PAM by
+		// rejecting packetLen < 1 and recovering in the channel goroutines; this must land in PAM before release.
+		// TODO: PAM's SSH handler sets a channel's type in its request goroutine while proxyData reads it for every
+		// chunk, so stdin sent right after the exec request, as OpenSSH sends piped input, can arrive untyped and is
+		// dropped from the session log (the command still gets it). Fix in PAM by holding a session channel's data
+		// until its first request sets the type.
 		// TODO: PAM's SSH handler can close the client's channel before it replies to `exec`, so a command that
 		// finishes fast can fail with "exec request failed" even though it ran. The fix belongs in PAM's handler.
 		// TODO: PAM's SSH handler closes an exec channel about 6 seconds after the client's stdin ends (proxy.go waits
 		// 3s for output, then 3s for exit-status), so `ssh -n host 'long command'`, the usual way agents run
-		// commands, is cut off with exit 255. The fix belongs in PAM's handler and must keep scp working.
+		// commands, is cut off with exit 255, and whatever it wrote to stderr never reaches the agent. The fix belongs
+		// in PAM's handler (wait for the server's channel to close, and copy stderr) and must keep scp working.
 		// TODO: PAM's SSH handler writes every exec command to the proxy's own log at info, and its Postgres handler
 		// every query at debug, whether or not session logs are on, so a secret in a command line reaches that log.
 		// The fix belongs in PAM's handlers: leave the command and query out of those lines.

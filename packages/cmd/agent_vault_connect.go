@@ -263,8 +263,9 @@ func pickAgentVaultConnectServices(available []agentvault.NativeServiceInfo, nam
 
 var agentVaultConnectTypeLabels = map[string]string{"postgres": "PostgreSQL", "mysql": "MySQL", "ssh": "SSH"}
 
-// The database is left out of the examples: the proxy connects to the service's own database whatever the client
-// asks for, and a name pasted into a shell command could run something else. Postgres turns TLS off on the local
+// The database is left out of the examples: a Postgres client always gets the service's own database, and a MySQL
+// client starts there unless it names another (it can also switch later), so a name pasted into a shell command
+// could run something else. Postgres turns TLS off on the local
 // hop, which the proxy refuses anyway, so an inherited PGSSLMODE=require can't fail the login.
 func agentVaultConnectBlock(service agentvault.NativeServiceInfo, port int) string {
 	title := service.Name
@@ -343,7 +344,11 @@ func trustAgentVaultProxy(proxyAddr, sessionToken, pinnedFingerprint string) (*x
 func classifyAgentVaultFingerprintsError(err error, proxyAddr string) *util.CLIError {
 	var apiErr *api.APIError
 	switch {
-	case errors.As(err, &apiErr) && (apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden):
+	// The route answers 401 only for a token this Infisical has no session for (an ended session still gets its
+	// fingerprints), so the session is most likely on another instance.
+	case errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusUnauthorized:
+		return errAgentVaultConnectSessionUnknown(proxyAddr, strings.TrimSuffix(config.INFISICAL_URL, "/api"), err)
+	case errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusForbidden:
 		return errAgentVaultConnectSessionInvalid(err)
 	case isInfisicalRouteMissing(err):
 		return errAgentVaultConnectFingerprintsNotListed(proxyAddr, err)

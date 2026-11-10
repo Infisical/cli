@@ -23,7 +23,7 @@ const (
 	nativeLogLateWindow = 500 * time.Millisecond
 )
 
-const nativeUnrecordedChannelNote = "Port forwarding or another channel was opened through this SSH connection; its traffic isn't recorded"
+const nativeUnrecordedChannelNote = "Some input wasn't recorded, or a forwarded port or another channel was opened through this SSH connection"
 
 // What a database or SSH connection did. A database row is one statement; an SSH row is one command, a stretch of
 // what was piped into it and what it printed, one file operation, or a stretch of an interactive shell's screen.
@@ -110,7 +110,8 @@ func (l *nativeSessionLogger) LogSessionEvent(event session.SessionEvent) error 
 		l.logShellLocked(data, now)
 	case session.SessionChannelRDP:
 	default:
-		// PAM forwards channels it can't read, such as port forwarding, and labels them with no type.
+		// PAM forwards channels it can't read, such as port forwarding, and labels them with no type. Stdin that arrives
+		// before PAM has typed its channel comes here too (see the TODO in native.go), so the note covers both.
 		if !l.unrecorded {
 			l.unrecorded = true
 			l.writeLocked(&nativeDetail{Note: nativeUnrecordedChannelNote}, now)

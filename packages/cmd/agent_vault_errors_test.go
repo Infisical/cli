@@ -42,6 +42,7 @@ func agentVaultConstructedErrors() []*util.CLIError {
 		classifyAgentVaultConnectError(agentvault.ErrProxyTooOld, "10.0.0.5:17323").(*util.CLIError),
 		classifyAgentVaultConnectError(&agentvault.ProxyRefusedError{Status: 403, Message: "no"}, "10.0.0.5:17323").(*util.CLIError),
 		errAgentVaultConnectSessionInvalid(cause),
+		errAgentVaultConnectSessionUnknown("10.0.0.5:17323", "https://eu.infisical.com", cause),
 		errAgentVaultConnectFingerprintsNotListed("10.0.0.5:17323", cause),
 		errAgentVaultConnectInfisicalUnreachable("10.0.0.5:17323", "https://eu.infisical.com", cause),
 		errAgentVaultConnectPortNeedsOneService(),

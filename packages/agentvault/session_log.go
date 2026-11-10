@@ -415,11 +415,6 @@ func (r *sessionLogRecorder) sealNext(spool *sessionLogSpool, unsealed map[*sess
 	unsealed[spool] -= len(records)
 	r.unsealedRecords -= len(records)
 	dropped := spool.ring.takeUnreportedDrops()
-	if dropped > 0 {
-		// Added at sealing rather than when the rows are dropped: while the ring stays full every new row drops
-		// one, and a note per row would take the place of the rows it reports on.
-		records = append(records, spool.droppedRowsNote(records[len(records)-1], dropped))
-	}
 	r.mu.Unlock()
 	logUnrecordedRequests(spool.sessionID, dropped)
 
