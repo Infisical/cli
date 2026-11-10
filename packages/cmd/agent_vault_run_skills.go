@@ -178,25 +178,28 @@ func (c *agentVaultSkillsClient) services(ctx context.Context) (api.ListAgentVau
 // there through the proxy, whatever domain this command uses. The answer is only a claim until a tunnel confirms it.
 // answered is false when the proxy didn't answer in time, which says nothing about its age; a proxy that answered
 // without naming one is too old.
+func agentVaultRefusalMayClear(code string, minted bool) bool {
+	return agentvault.IsTransientSessionRefusal(code) || (minted && agentvault.IsSessionRefusal(code))
+}
+
 func askAgentVaultProxyAPIURL(ctx context.Context, proxyAddr, sessionToken string, minted bool) (claimed string, answered bool, refusal *agentvault.ProxyRefusalError) {
 	ctx, cancel := context.WithTimeout(ctx, agentVaultProxyAPIURLTimeout)
 	defer cancel()
 	claimed, err := agentvault.AskProxyAPIURL(ctx, proxyAddr, sessionToken, agentVaultProxyAPIURLTarget())
-	// The proxy names its Infisical only to a session it accepts, and remembers a refusal for a few seconds, such as one
-	// from a database replica that hadn't seen a session this run just minted. So a minted session that reads as invalid
-	// asks again until the proxy accepts it, for as long as the skills step would. No other refusal clears up by itself.
-	if minted {
-		for _, delay := range agentVaultSkillsUnauthorizedRetryDelays {
-			if !errors.As(err, &refusal) || !agentvault.IsSessionRefusal(refusal.Code) {
-				break
-			}
-			select {
-			case <-ctx.Done():
-				return "", false, nil
-			case <-time.After(delay):
-			}
-			claimed, err = agentvault.AskProxyAPIURL(ctx, proxyAddr, sessionToken, agentVaultProxyAPIURLTarget())
+	// The proxy names its Infisical only to a session it accepts. Two refusals can clear up by themselves, so they're asked
+	// again for as long as the skills step would: a lookup that failed for a moment (session_unresolvable, never cached),
+	// and, for a session this run just minted, session_invalid, which the proxy remembers for a few seconds and a database
+	// replica that hadn't seen the session can cause. Any other refusal, such as a revoked proxy, is final.
+	for _, delay := range agentVaultSkillsUnauthorizedRetryDelays {
+		if !errors.As(err, &refusal) || !agentVaultRefusalMayClear(refusal.Code, minted) {
+			break
 		}
+		select {
+		case <-ctx.Done():
+			return "", false, nil
+		case <-time.After(delay):
+		}
+		claimed, err = agentvault.AskProxyAPIURL(ctx, proxyAddr, sessionToken, agentVaultProxyAPIURLTarget())
 	}
 	refusal = nil
 	if errors.As(err, &refusal) {

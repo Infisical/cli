@@ -39,6 +39,12 @@ func IsInfisicalForwardRefusal(code string) bool {
 		code == errorCodeProxyRevoked || code == errorCodeSessionUnresolvable
 }
 
+// IsTransientSessionRefusal reports whether an error code is the proxy failing to look the session up for a moment, such as
+// on a 429 or a dropped connection, which it doesn't remember and asking again can clear.
+func IsTransientSessionRefusal(code string) bool {
+	return code == errorCodeSessionUnresolvable
+}
+
 // IsSessionRefusal reports whether an error code is the proxy refusing the session itself, which only a new session fixes.
 func IsSessionRefusal(code string) bool {
 	return code == errorCodeSessionInvalid

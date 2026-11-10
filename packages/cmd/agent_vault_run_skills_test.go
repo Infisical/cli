@@ -1255,6 +1255,18 @@ func TestAMintedSessionAsksAgainUntilTheProxyNamesItsInfisical(t *testing.T) {
 	}
 }
 
+// A lookup that failed for a moment isn't remembered by the proxy, so any session asks again, not only a minted one.
+func TestATemporaryLookupFailureIsAskedAgain(t *testing.T) {
+	old := agentVaultSkillsUnauthorizedRetryDelays
+	agentVaultSkillsUnauthorizedRetryDelays = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+	t.Cleanup(func() { agentVaultSkillsUnauthorizedRetryDelays = old })
+
+	addr, asked := refusingThenNamingProxy(t, 1, "session_unresolvable")
+	if got, _, refusal := askAgentVaultProxyAPIURL(context.Background(), addr, "agv_tok", false); got != testProxyAPIURL || refusal != nil || asked.Load() != 2 {
+		t.Fatalf("named %q, refusal %v, asked %d times", got, refusal, asked.Load())
+	}
+}
+
 // A revoked proxy won't recover in seconds, so run asks once, says why, and doesn't go to Infisical directly, where
 // skills could install with no warning while the proxy refuses everything the agent sends.
 func TestARefusedSessionStopsRunWithTheProxysReason(t *testing.T) {
