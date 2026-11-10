@@ -526,3 +526,39 @@ func TestASessionIsCappedAtItsOpenNativeConnections(t *testing.T) {
 		t.Fatalf("third register: %v, want the per-session limit", err)
 	}
 }
+
+func TestShutdownWaitsForAnSSHChannelsLastLinesOnlyWhenSSHWasOpen(t *testing.T) {
+	old := nativeSSHLateLineWait
+	nativeSSHLateLineWait = 200 * time.Millisecond
+	t.Cleanup(func() { nativeSSHLateLineWait = old })
+
+	for _, kind := range []string{serviceKindPostgres, serviceKindSSH} {
+		resolver := &stubResolver{}
+		svc := nativeService("db", "db.internal")
+		svc.kind = kind
+		resolver.result = &resolveResult{SessionID: "s1", Services: []*resolvedService{svc}}
+		cache := newTestCache(resolver)
+		services, err := cache.get(nativeTestToken)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn, err := cache.registerNative(nativeTestToken, services[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			<-conn.ctx.Done()
+			cache.releaseNative(conn)
+		}()
+
+		start := time.Now()
+		cache.closeNative(time.Second)
+		waited := time.Since(start)
+		if kind == serviceKindSSH && waited < nativeSSHLateLineWait {
+			t.Errorf("shutdown with an SSH connection returned after %v, want at least %v for its last lines", waited, nativeSSHLateLineWait)
+		}
+		if kind != serviceKindSSH && waited >= nativeSSHLateLineWait {
+			t.Errorf("shutdown with only a %s connection waited %v", kind, waited)
+		}
+	}
+}

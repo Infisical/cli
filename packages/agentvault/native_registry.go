@@ -31,6 +31,8 @@ type nativeConn struct {
 
 // A session's database and SSH connections each hold one of the door's slots for as long as they stay open, so
 // these keep one session, and all of them together, from taking the slots HTTP requests need.
+var nativeSSHLateLineWait = 500 * time.Millisecond
+
 var (
 	maxNativeConnsPerSession = 64
 	maxNativeTunnels         = maxConcurrentConns - 128
@@ -197,7 +199,11 @@ func (c *sessionCache) forgetLocked(key string, ended bool) {
 func (c *sessionCache) closeNative(timeout time.Duration) {
 	c.mu.Lock()
 	c.closing = true
-	for key := range c.native {
+	hadSSH := false
+	for key, conns := range c.native {
+		for conn := range conns {
+			hadSSH = hadSSH || conn.kind == serviceKindSSH
+		}
 		c.endNativeLocked(key)
 	}
 	c.mu.Unlock()
@@ -210,6 +216,11 @@ func (c *sessionCache) closeNative(timeout time.Duration) {
 	select {
 	case <-done:
 	case <-time.After(timeout):
+	}
+	// PAM's SSH handler runs each channel in a goroutine it doesn't wait for, so a channel's last buffered line can be
+	// logged just after its connection has returned. A short wait lets it land before the session logs close.
+	if hadSSH {
+		time.Sleep(nativeSSHLateLineWait)
 	}
 }
 

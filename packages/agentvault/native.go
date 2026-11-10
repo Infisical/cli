@@ -302,7 +302,7 @@ func serveNative(ctx context.Context, conn net.Conn, svc *resolvedService, tlsCo
 		// Fix in PAM's handler by calling SetMaxBodyLen on both sides. That alone isn't enough: before forwarding,
 		// trackClientMessage builds the executable SQL for every Bind (buildExecutableSQL replaces each $n with the
 		// bound value), so a Parse that repeats $1 many times with one large parameter allocates far more than any
-		// message cap. Fix by also capping the expanded SQL. Both must land in PAM before release.
+		// message cap. Fix by also capping the expanded SQL.
 		// It also dials the server with no timeout, so a host or port that drops packets keeps the agent waiting until
 		// the operating system gives up, about 75 seconds. Fix by dialing with a timeout, as its SSH handler does (10s).
 		// It also never removes a prepared statement on Close, so a long-lived connection keeps the SQL of every
@@ -362,7 +362,7 @@ func serveNative(ctx context.Context, conn net.Conn, svc *resolvedService, tlsCo
 		// TODO: PAM's SFTP parser panics on a zero-length packet (parseOnePacket in sftp_parser.go), in a goroutine with
 		// no recover, so one packet from an agent crashes the whole proxy and every session on it. The parser is set
 		// up before the subsystem request is answered, so even a refused sftp request reaches it. Fix in PAM by
-		// rejecting packetLen < 1 and recovering in the channel goroutines; this must land in PAM before release.
+		// rejecting packetLen < 1 and recovering in the channel goroutines.
 		// TODO: PAM's SSH handler sets a channel's type in its request goroutine while proxyData reads it for every
 		// chunk, so stdin sent right after the exec request, as OpenSSH sends piped input, can arrive untyped and is
 		// dropped from the session log (the command still gets it). Fix in PAM by holding a session channel's data
