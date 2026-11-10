@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -113,6 +114,8 @@ var sessionRefusalMessages = map[string]string{
 	errorCodeSessionUnresolvable: "the proxy could not reach Infisical to load the session",
 }
 
+const maxConnectAnswerBytes = 64 << 10
+
 // AskProxyAPIURL asks the proxy at proxyAddr which Infisical it works with. It opens a CONNECT for target with the
 // session's token, reads the proxy's answer, and closes the connection without sending anything through it. A proxy too
 // old to say answers without the header, and "" comes back.
@@ -137,7 +140,9 @@ func AskProxyAPIURL(ctx context.Context, proxyAddr, sessionToken, target string)
 		return "", err
 	}
 	// Only the head is read: closing the body would wait for the tunnel to end, and the connection is closed instead.
-	resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodConnect})
+	// http.ReadResponse sets no limit of its own, and this answer crosses the network in the clear, so anyone on the way
+	// could otherwise send an endless head. The proxy's answer is a status line and a few headers.
+	resp, err := http.ReadResponse(bufio.NewReader(io.LimitReader(conn, maxConnectAnswerBytes)), &http.Request{Method: http.MethodConnect})
 	if err != nil {
 		return "", err
 	}

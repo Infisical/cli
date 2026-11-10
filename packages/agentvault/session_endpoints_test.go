@@ -693,3 +693,32 @@ func TestInfisicalsRetryAfterReachesTheCaller(t *testing.T) {
 		t.Fatalf("got %d with Retry-After %q", resp.StatusCode, resp.Header.Get("Retry-After"))
 	}
 }
+
+// The CONNECT answer crosses the network in the clear, so an endless head from anyone on the way ends with an error
+// instead of filling memory.
+func TestAnEndlessConnectAnswerIsCutOff(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\nX-Padding: ")
+		chunk := strings.Repeat("a", 32<<10)
+		for i := 0; i < 64; i++ {
+			if _, err := io.WriteString(conn, chunk); err != nil {
+				return
+			}
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if got, err := AskProxyAPIURL(ctx, listener.Addr().String(), "agv_tok", "infisical.test:443"); err == nil || got != "" {
+		t.Fatalf("named %q, err %v", got, err)
+	}
+}
