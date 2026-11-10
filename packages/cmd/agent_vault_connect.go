@@ -379,7 +379,6 @@ func agentVaultRunCaFingerprints() ([]string, bool) {
 
 // Asks Infisical directly, never through the Agent Vault proxy: under `agent-vault run` HTTPS_PROXY points at the
 // proxy, whose policy may refuse Infisical, and the answer must not come from the thing it vouches for.
-// TODO: revisit when Agent Vault has a service discovery endpoint, which could return these with the services.
 func fetchAgentVaultSessionProxyCaFingerprints(sessionToken string) ([]string, error) {
 	useAgentVaultSessionTokenDomain()
 	client, err := newAgentVaultSkillsHTTPClient()

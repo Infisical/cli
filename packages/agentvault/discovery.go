@@ -259,6 +259,7 @@ const (
 	errorCodeBusy                 = "busy"
 	errorCodeInfisicalUnreachable = "infisical_unreachable"
 	errorCodeServiceRefused       = "service_refused"
+	errorCodeTLSRequired          = "tls_required"
 )
 
 var proxyErrorHints = map[string]string{
@@ -278,4 +279,6 @@ var proxyErrorHints = map[string]string{
 	errorCodeInfisicalUnreachable: "The Agent Vault proxy could not reach Infisical to answer this. Try again in a moment.",
 	errorCodeServiceRefused: "This is the Agent Vault proxy: it can't serve this database or SSH service for the session, so a " +
 		"different password or key will not help. " + servicesURLPlaceholder + " lists the session's services and their status.",
+	errorCodeTLSRequired: "This is the Agent Vault proxy: database and SSH services are reached with infisical agent-vault connect, " +
+		"which talks to the proxy over TLS.",
 }

@@ -111,7 +111,7 @@ func (l *nativeSessionLogger) LogSessionEvent(event session.SessionEvent) error 
 	case session.SessionChannelRDP:
 	default:
 		// PAM forwards channels it can't read, such as port forwarding, and labels them with no type. Stdin that arrives
-		// before PAM has typed its channel comes here too (see the TODO in native.go), so the note covers both.
+		// before PAM has typed its channel comes here too, so the note covers both.
 		if !l.unrecorded {
 			l.unrecorded = true
 			l.writeLocked(&nativeDetail{Note: nativeUnrecordedChannelNote}, now)
@@ -124,11 +124,6 @@ func (l *nativeSessionLogger) LogSessionEvent(event session.SessionEvent) error 
 // PAM reports an exec channel's command as "$ cmd", then each line of what the client pipes in as more input.
 // Once a command has been piped something, a line starting with "$ " is more of that, or a file of shell
 // examples piped into cat would read as commands the agent ran.
-//
-// TODO: PAM's events carry no channel id, so two exec channels open at once on one connection (an ssh
-// ControlMaster) share these rows and can mix their stdin and output. A real command sent on such a connection
-// after another command's stdin is also kept as that stdin. Both need PAM to name the channel. And a first piped
-// line starting with "$ " still reads as a command: telling them apart needs PAM to mark the command event.
 func (l *nativeSessionLogger) logExecLocked(eventType session.SessionEventType, data string, now time.Time) {
 	if eventType == session.SessionEventInput {
 		if command, ok := strings.CutPrefix(data, "$ "); ok && !l.execHasPipe {

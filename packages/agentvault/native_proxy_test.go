@@ -147,6 +147,9 @@ func TestANativeConnectOnThePlainDoorIsRefused(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("a plaintext native CONNECT got %d, want 403", resp.StatusCode)
 	}
+	if got := resp.Header.Get(HeaderError); got != errorCodeTLSRequired {
+		t.Fatalf("a plaintext native CONNECT got %s %q, want %q", HeaderError, got, errorCodeTLSRequired)
+	}
 }
 
 func TestNativeRefusalsHappenBeforeTheTunnel(t *testing.T) {
@@ -303,7 +306,7 @@ func TestSSHExecThroughTheProxyRecordsTheCommandAndItsOutput(t *testing.T) {
 		}
 		return session.Output("whoami")
 	}
-	// PAM's SSH handler can close the channel before it replies to a fast exec (see the TODO in native.go), which
+	// PAM's SSH handler can close the channel before it replies to a fast exec, which
 	// shows here as EOF or "exec request failed". The connection stays usable, so the exec is tried again on a new
 	// channel. One retry still lost it twice in a row within 60 runs with -race -cpu=1, hence a few.
 	out, err := exec()
