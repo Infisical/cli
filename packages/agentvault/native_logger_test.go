@@ -253,6 +253,26 @@ func TestAForwardedChannelIsNotedOnce(t *testing.T) {
 	}
 }
 
+func TestAForwardedChannelIsNotedOnceLogsAreTurnedOn(t *testing.T) {
+	logger, ps := newLoggerUnderTest(t)
+	grant := logger.grant
+	setSessionLog := func(grant *sessionLogGrant) {
+		ps.cache.mu.Lock()
+		ps.cache.entries[logger.key].sessionLog = grant
+		ps.cache.mu.Unlock()
+	}
+	setSessionLog(nil)
+	_ = logger.LogSessionEvent(event("", session.SessionEventOutput, "while logs were off"))
+	setSessionLog(grant)
+	_ = logger.LogSessionEvent(event("", session.SessionEventOutput, "once logs were on"))
+	_ = logger.Close()
+
+	rows := loggedRows(ps)
+	if len(rows) != 1 || rows[0].Note != nativeUnrecordedChannelNote {
+		t.Fatalf("rows = %+v, want the note once logs were turned on", rows)
+	}
+}
+
 func TestALongStatementIsCutAndMarked(t *testing.T) {
 	logger, ps := newLoggerUnderTest(t)
 	_ = logger.LogEntry(session.SessionLogEntry{Input: strings.Repeat("é", nativeLogInputCap), Output: "SELECT 0"})

@@ -112,7 +112,7 @@ func (l *nativeSessionLogger) LogSessionEvent(event session.SessionEvent) error 
 	default:
 		// PAM forwards channels it can't read, such as port forwarding, and labels them with no type. Stdin that arrives
 		// before PAM has typed its channel comes here too, so the note covers both.
-		if !l.unrecorded {
+		if !l.unrecorded && l.loggingOnLocked() {
 			l.unrecorded = true
 			l.writeLocked(&nativeDetail{Note: nativeUnrecordedChannelNote}, now)
 		}

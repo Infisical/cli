@@ -362,6 +362,11 @@ func (c *sessionCache) evictIfFullLocked() {
 func (c *sessionCache) refreshInBackground() {
 	if !c.refreshing.CompareAndSwap(false, true) {
 		log.Warn().Msg("agent-vault: the previous session refresh is still running, skipping this one")
+		// A refresh checks the grace window only when it starts, so a slow one would otherwise hold database and SSH
+		// connections open past it.
+		c.mu.Lock()
+		c.endStaleNativeLocked(time.Now())
+		c.mu.Unlock()
 		return
 	}
 	go func() {
@@ -394,9 +399,7 @@ func (c *sessionCache) refresh() {
 			continue
 		}
 		if c.nativeStaleLocked(key, now) {
-			log.Warn().Str("sessionKey", key).Dur("grace", c.grace()).
-				Msg("agent-vault: could not reach Infisical within the grace window, closing the session's database and SSH connections")
-			c.endNativeLocked(key)
+			c.endStaleNativeOneLocked(key)
 		}
 		if _, ok := targets[key]; !ok && c.tokens[key] != "" {
 			targets[key] = c.tokens[key]

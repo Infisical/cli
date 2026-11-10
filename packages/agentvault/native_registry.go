@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // A database or SSH connection the proxy is serving. It is tracked under the session cache's lock, so the cache can
@@ -154,6 +156,20 @@ func (c *sessionCache) nativeStaleLocked(key string, now time.Time) bool {
 		}
 	}
 	return false
+}
+
+func (c *sessionCache) endStaleNativeLocked(now time.Time) {
+	for key := range c.native {
+		if c.nativeStaleLocked(key, now) {
+			c.endStaleNativeOneLocked(key)
+		}
+	}
+}
+
+func (c *sessionCache) endStaleNativeOneLocked(key string) {
+	log.Warn().Str("sessionKey", key).Dur("grace", c.grace()).
+		Msg("agent-vault: could not reach Infisical within the grace window, closing the session's database and SSH connections")
+	c.endNativeLocked(key)
 }
 
 // The session really ended, so every connection it opened closes. Cancelling never blocks: each connection closes

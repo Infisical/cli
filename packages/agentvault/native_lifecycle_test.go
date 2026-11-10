@@ -475,6 +475,26 @@ func TestAnExpiryMovedLaterKeepsTheConnectionOpen(t *testing.T) {
 	}
 }
 
+// A slow refresh makes the next ticks skip, and a skipped tick still ends connections past the grace window.
+func TestASkippedRefreshStillClosesAConnectionPastTheGraceWindow(t *testing.T) {
+	cache, conn := openNativeConn(t, &stubResolver{})
+	cache.refreshing.Store(true)
+	defer cache.refreshing.Store(false)
+
+	cache.refreshInBackground()
+	if closed(conn) {
+		t.Fatal("a skipped tick closed a connection inside the grace window")
+	}
+
+	cache.mu.Lock()
+	conn.fetchedAt = time.Now().Add(-2 * cache.grace())
+	cache.mu.Unlock()
+	cache.refreshInBackground()
+	if !closed(conn) {
+		t.Fatal("a skipped tick left a connection open past the grace window")
+	}
+}
+
 // Polls that keep failing say nothing about the session, but past the grace window it is no longer served, as an
 // HTTP request isn't.
 func TestANativeConnectionClosesOnceInfisicalIsUnreachablePastTheGraceWindow(t *testing.T) {
