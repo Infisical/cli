@@ -112,9 +112,10 @@ func withAgentVaultMCPConfig(args []string, path string) []string {
 	return append(out, args[1:]...)
 }
 
-// What cmd.exe leaves alone in an argument. On Windows, npm installs Claude Code as claude.cmd, which runs through
-// cmd.exe, and cmd.exe reads |, &, ^ and %NAME% in its arguments even inside quotes.
-var agentVaultCmdExeSafePath = regexp.MustCompile(`^[A-Za-z0-9_.:\\/~ -]+$`)
+// What cmd.exe leaves alone in an argument: letters and digits in any script, and a few marks. On Windows, npm installs
+// Claude Code as claude.cmd, which runs through cmd.exe, and cmd.exe reads |, &, ^, %NAME%, !, < > and ( ) in its
+// arguments even inside quotes.
+var agentVaultCmdExeSafePath = regexp.MustCompile(`^[\p{L}\p{N}_.:\\/~ '-]+$`)
 
 // agentVaultIsBatchFile reports whether a command resolved to path on goos runs through cmd.exe.
 func agentVaultIsBatchFile(goos, path string) bool {

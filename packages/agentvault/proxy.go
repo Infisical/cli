@@ -249,14 +249,21 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// Resolve before the leaf minting further down, so an unauthenticated caller cannot make the proxy work
 	// on their behalf. The proxy's own Infisical checks the session inside the tunnel instead, so a refused session
 	// still gets a tunnel there, but not the Infisical's URL.
-	var sessionErr error
+	var refused *gateRefusal
 	if !infisicalHostDefersGate(hostname, port, sessionToken) {
 		if _, err := ps.cache.get(sessionToken); err != nil {
 			ps.denyAtGate(w, sessionToken, hostname, port, err)
 			return
 		}
-	} else {
-		_, sessionErr = ps.cache.get(sessionToken)
+	} else if _, err := ps.cache.get(sessionToken); err != nil {
+		// The refusal reaches the agent inside the tunnel, but the operator looks for it here, as for any other door.
+		refusal := classifyGateRefusal(err)
+		refused = &refusal
+		refusal.event.
+			Str("host", net.JoinHostPort(hostname, port)).
+			Str("sessionKey", sessionKey(sessionToken)).
+			Str("decision", refusal.decision).
+			Msg(refusal.msg)
 	}
 
 	// Private and link-local addresses are reachable, deliberately: an internal API inside the operator's
@@ -282,8 +289,8 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// Names the proxy's Infisical, so agent-vault run can tell the agent where its session's endpoints are. A refused
 	// session gets the refusal's decision instead, so run doesn't take this proxy for one too old to name it.
 	established := "HTTP/1.1 200 Connection Established\r\n"
-	if sessionErr != nil {
-		established += HeaderDecision + ": " + classifyGateRefusal(sessionErr).decision + "\r\n"
+	if refused != nil {
+		established += HeaderDecision + ": " + refused.decision + "\r\n" + HeaderError + ": " + refused.code + "\r\n"
 	} else if apiURL := proxyAPIURL(); apiURL != "" {
 		established += HeaderAPIURL + ": " + apiURL + "\r\n"
 	}

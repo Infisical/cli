@@ -663,7 +663,9 @@ func TestARefusedSessionLearnsNothingAboutTheProxysInfisical(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	for _, target := range []string{testInfisicalHost + ":443", "api.github.com:443"} {
-		if got, err := AskProxyAPIURL(ctx, proxyURL.Host, testSocks5Token, target); got != "" || !errors.Is(err, ErrProxyRefusedSession) {
+		var refusal *ProxyRefusalError
+		if got, err := AskProxyAPIURL(ctx, proxyURL.Host, testSocks5Token, target); got != "" || !errors.Is(err, ErrProxyRefusedSession) ||
+			!errors.As(err, &refusal) || refusal.Code != errorCodeSessionInvalid {
 			t.Fatalf("CONNECT %s for a gone session named %q (%v)", target, got, err)
 		}
 	}

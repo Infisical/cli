@@ -50,6 +50,9 @@ const (
 const (
 	HeaderDecision = "X-Agent-Vault-Decision"
 	HeaderService  = "X-Agent-Vault-Service"
+	// The code of a refusal the proxy wrote, such as session_invalid, also on a CONNECT answer that opens a tunnel for a
+	// refused session, so agent-vault run can say why without reading a body.
+	HeaderError = "X-Agent-Vault-Error"
 )
 
 // The decisions only the proxy's own session endpoints set.
@@ -84,8 +87,31 @@ func publishableAPIURL(parsed *url.URL) string {
 }
 
 // ErrProxyRefusedSession is AskProxyAPIURL's answer from a proxy that refused the session, or couldn't check it, and so
-// named no Infisical. Unlike an answer without any Agent Vault header, it doesn't mean the proxy is too old.
+// named no Infisical. Unlike an answer without any Agent Vault header, it doesn't mean the proxy is too old. The error
+// returned is a *ProxyRefusalError that matches it.
 var ErrProxyRefusedSession = errors.New("the proxy refused the session, so it named no Infisical")
+
+// ProxyRefusalError is a proxy's refusal of the session on its CONNECT answer. Code is the proxy's error code, empty
+// from a proxy that marked the refusal without one.
+type ProxyRefusalError struct {
+	Code string
+}
+
+func (e *ProxyRefusalError) Error() string {
+	if message := sessionRefusalMessages[e.Code]; message != "" {
+		return message
+	}
+	return "the proxy refused the session"
+}
+
+func (e *ProxyRefusalError) Is(target error) bool { return target == ErrProxyRefusedSession }
+
+// The fixed text the proxy sends with each refusal of the session itself.
+var sessionRefusalMessages = map[string]string{
+	errorCodeSessionInvalid:      "the session is no longer valid, or it belongs to a different Agent Vault project than this proxy",
+	errorCodeProxyRevoked:        proxyRevokedBody,
+	errorCodeSessionUnresolvable: "the proxy could not reach Infisical to load the session",
+}
 
 // AskProxyAPIURL asks the proxy at proxyAddr which Infisical it works with. It opens a CONNECT for target with the
 // session's token, reads the proxy's answer, and closes the connection without sending anything through it. A proxy too
@@ -118,7 +144,7 @@ func AskProxyAPIURL(ctx context.Context, proxyAddr, sessionToken, target string)
 
 	claimed := APIURLFromHeader(resp.Header.Get(HeaderAPIURL))
 	if claimed == "" && IsProxyRefusal(resp.Header.Get(HeaderDecision)) {
-		return "", ErrProxyRefusedSession
+		return "", &ProxyRefusalError{Code: resp.Header.Get(HeaderError)}
 	}
 	return claimed, nil
 }
@@ -182,6 +208,7 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 // text the proxy always sent; the code and hint are for an agent deciding what to do next.
 func writeProxyError(w http.ResponseWriter, status int, decision, code, message string) {
 	w.Header().Set(HeaderDecision, decision)
+	w.Header().Set(HeaderError, code)
 	// A caller whose session the proxy refused, or couldn't check, learns nothing about where its Infisical is.
 	if apiURL := proxyAPIURL(); apiURL != "" && !refusesSession(code) {
 		w.Header().Set(HeaderAPIURL, apiURL)

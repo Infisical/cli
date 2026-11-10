@@ -859,7 +859,7 @@ func TestRunGetsSkillsThroughTheProxysTunnel(t *testing.T) {
 
 func TestRunAsksTheProxyWhichInfisicalItWorksWith(t *testing.T) {
 	proxy := newFakeTunnelProxy(t, "forwards", http.StatusOK, skillsBody())
-	if got, answered := askAgentVaultProxyAPIURL(context.Background(), proxy.addr, "agv_tok", false); got != testProxyAPIURL || !answered {
+	if got, answered, _ := askAgentVaultProxyAPIURL(context.Background(), proxy.addr, "agv_tok", false); got != testProxyAPIURL || !answered {
 		t.Fatalf("the proxy named %q (answered %v), want %q", got, answered, testProxyAPIURL)
 	}
 	if got := proxy.sessionToken.Load(); got != "agv_tok" {
@@ -876,7 +876,7 @@ func TestRunAsksInfisicalDirectlyBehindAProxyThatNamesNoInfisical(t *testing.T) 
 		t.Run(mode, func(t *testing.T) {
 			home := isolateSkillsHome(t)
 			proxy := newFakeTunnelProxy(t, mode, 0, nil)
-			if got, answered := askAgentVaultProxyAPIURL(context.Background(), proxy.addr, "agv_tok", false); got != "" || !answered {
+			if got, answered, _ := askAgentVaultProxyAPIURL(context.Background(), proxy.addr, "agv_tok", false); got != "" || !answered {
 				t.Fatalf("an older proxy named %q (answered %v)", got, answered)
 			}
 			var askedDirectly bool
@@ -1206,8 +1206,8 @@ func TestTunneledRequestsCarryNoSessionToken(t *testing.T) {
 	}
 }
 
-// A proxy that names its Infisical only once it accepts the session, refusing it the first times it's asked.
-func refusingThenNamingProxy(t *testing.T, refusals int32) (addr string, asked *atomic.Int32) {
+// A proxy that names its Infisical only once it accepts the session, refusing it with code the first times it's asked.
+func refusingThenNamingProxy(t *testing.T, refusals int32, code string) (addr string, asked *atomic.Int32) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -1228,7 +1228,7 @@ func refusingThenNamingProxy(t *testing.T, refusals int32) (addr string, asked *
 				}
 				answer := agentvault.HeaderAPIURL + ": " + testProxyAPIURL
 				if asked.Add(1) <= refusals {
-					answer = agentvault.HeaderDecision + ": blocked"
+					answer = agentvault.HeaderDecision + ": blocked\r\n" + agentvault.HeaderError + ": " + code
 				}
 				_, _ = io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n"+answer+"\r\n\r\n")
 			}()
@@ -1244,14 +1244,27 @@ func TestAMintedSessionAsksAgainUntilTheProxyNamesItsInfisical(t *testing.T) {
 	agentVaultSkillsUnauthorizedRetryDelays = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
 	t.Cleanup(func() { agentVaultSkillsUnauthorizedRetryDelays = old })
 
-	addr, asked := refusingThenNamingProxy(t, 2)
-	if got, answered := askAgentVaultProxyAPIURL(context.Background(), addr, "agv_tok", true); got != testProxyAPIURL || !answered || asked.Load() != 3 {
-		t.Fatalf("minted: named %q, answered %v, asked %d times", got, answered, asked.Load())
+	addr, asked := refusingThenNamingProxy(t, 2, "session_invalid")
+	if got, answered, refusal := askAgentVaultProxyAPIURL(context.Background(), addr, "agv_tok", true); got != testProxyAPIURL || !answered || refusal != nil || asked.Load() != 3 {
+		t.Fatalf("minted: named %q, answered %v, refusal %v, asked %d times", got, answered, refusal, asked.Load())
 	}
 
-	addr, asked = refusingThenNamingProxy(t, 2)
-	if got, answered := askAgentVaultProxyAPIURL(context.Background(), addr, "agv_tok", false); got != "" || answered || asked.Load() != 1 {
-		t.Fatalf("not minted: named %q, answered %v, asked %d times", got, answered, asked.Load())
+	addr, asked = refusingThenNamingProxy(t, 2, "session_invalid")
+	if got, _, refusal := askAgentVaultProxyAPIURL(context.Background(), addr, "agv_tok", false); got != "" || refusal == nil || refusal.Code != "session_invalid" || asked.Load() != 1 {
+		t.Fatalf("not minted: named %q, refusal %v, asked %d times", got, refusal, asked.Load())
+	}
+}
+
+// A revoked proxy won't recover in seconds, so run asks once, says why, and doesn't go to Infisical directly, where
+// skills could install with no warning while the proxy refuses everything the agent sends.
+func TestARefusedSessionStopsRunWithTheProxysReason(t *testing.T) {
+	printed := captureWarnings(t)
+	addr, asked := refusingThenNamingProxy(t, 10, "proxy_revoked")
+	stepRan := false
+	apiURL := prepareAgentVaultRunProxy(context.Background(), addr, "agv_tok", nil, true,
+		func(context.Context, *agentVaultSkillsTunnel, bool) { stepRan = true })
+	if apiURL != "" || stepRan || asked.Load() != 1 || !strings.Contains(printed.String(), "The proxy refused this session (this proxy's access has been revoked)") {
+		t.Fatalf("URL %q, step ran %v, asked %d times, printed %q", apiURL, stepRan, asked.Load(), printed.String())
 	}
 }
 

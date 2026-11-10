@@ -178,28 +178,31 @@ func (c *agentVaultSkillsClient) services(ctx context.Context) (api.ListAgentVau
 // there through the proxy, whatever domain this command uses. The answer is only a claim until a tunnel confirms it.
 // answered is false when the proxy didn't answer in time, which says nothing about its age; a proxy that answered
 // without naming one is too old.
-func askAgentVaultProxyAPIURL(ctx context.Context, proxyAddr, sessionToken string, minted bool) (claimed string, answered bool) {
+func askAgentVaultProxyAPIURL(ctx context.Context, proxyAddr, sessionToken string, minted bool) (claimed string, answered bool, refusal *agentvault.ProxyRefusalError) {
 	ctx, cancel := context.WithTimeout(ctx, agentVaultProxyAPIURLTimeout)
 	defer cancel()
 	claimed, err := agentvault.AskProxyAPIURL(ctx, proxyAddr, sessionToken, agentVaultProxyAPIURLTarget())
 	// The proxy names its Infisical only to a session it accepts, and remembers a refusal for a few seconds, such as one
-	// from a database replica that hadn't seen a session this run just minted. So a minted session asks again until the
-	// proxy accepts it, for as long as the skills step would.
+	// from a database replica that hadn't seen a session this run just minted. So a minted session that reads as invalid
+	// asks again until the proxy accepts it, for as long as the skills step would. No other refusal clears up by itself.
 	if minted {
 		for _, delay := range agentVaultSkillsUnauthorizedRetryDelays {
-			if !errors.Is(err, agentvault.ErrProxyRefusedSession) {
+			if !errors.As(err, &refusal) || !agentvault.IsSessionRefusal(refusal.Code) {
 				break
 			}
 			select {
 			case <-ctx.Done():
-				return "", false
+				return "", false, nil
 			case <-time.After(delay):
 			}
 			claimed, err = agentvault.AskProxyAPIURL(ctx, proxyAddr, sessionToken, agentVaultProxyAPIURLTarget())
 		}
 	}
-	// A proxy that refused the session answered, but its age is unknown, as when it didn't answer at all.
-	return claimed, err == nil
+	refusal = nil
+	if errors.As(err, &refusal) {
+		return "", true, refusal
+	}
+	return claimed, err == nil, nil
 }
 
 // The CONNECT the question goes out on names this command's own Infisical, usually the proxy's too. The proxy names its
@@ -315,7 +318,13 @@ type agentVaultRunProxyStep func(ctx context.Context, tunnel *agentVaultSkillsTu
 // one budget. It returns the API URL the agent's INFISICAL_AGENT_VAULT_URL comes from, or "" unless an answer from
 // inside TLS confirmed it.
 func prepareAgentVaultRunProxy(ctx context.Context, proxyAddr, sessionToken string, caPEM []byte, minted bool, steps ...agentVaultRunProxyStep) string {
-	claimed, answered := askAgentVaultProxyAPIURL(ctx, proxyAddr, sessionToken, minted)
+	claimed, answered, refusal := askAgentVaultProxyAPIURL(ctx, proxyAddr, sessionToken, minted)
+	// The proxy refuses everything this session sends, so asking Infisical directly would only hide why.
+	if refusal != nil {
+		util.PrintWarning(fmt.Sprintf("The proxy refused this session (%s), so the agent starts without its skills, MCP servers or %s.",
+			refusal.Error(), agentvault.URLEnv))
+		return ""
+	}
 	var tunnel *agentVaultSkillsTunnel
 	if claimed != "" {
 		tunnel, _ = newAgentVaultSkillsTunnel(proxyAddr, sessionToken, claimed, caPEM)
