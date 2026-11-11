@@ -3,6 +3,9 @@ package pam
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -12,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -49,6 +53,7 @@ type PAMTestInfra struct {
 	GatewayCmd      *helpers.Command
 	ProvisionResult *client.ProvisionResult
 	SharedHomeDir   string
+	RecordingPath   string
 }
 
 type SetupPAMOption func(svc *helpers.InfisicalService, extraEnv *[]string)
@@ -158,6 +163,7 @@ func SetupPAMInfra(t *testing.T, ctx context.Context, opts ...SetupPAMOption) *P
 		GatewayCmd:      gatewayCmd,
 		ProvisionResult: svc.ProvisionResult(),
 		SharedHomeDir:   sharedHomeDir,
+		RecordingPath:   sessionRecordingPath,
 	}
 }
 
@@ -427,4 +433,175 @@ func LoginUser(t *testing.T, ctx context.Context, infra *PAMTestInfra) {
 		},
 	})
 	require.Equal(t, helpers.WaitSuccess, result, "Login should succeed")
+}
+
+func getRaw(ctx context.Context, url, token string) (int, []byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, nil, err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	return resp.StatusCode, body, err
+}
+
+func getOK(t *testing.T, ctx context.Context, url, token string) []byte {
+	status, body, err := getRaw(ctx, url, token)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, status, "GET %s: %s", url, string(body))
+	return body
+}
+
+// EndPamAccess interrupts `pam access` like Ctrl+C, which ends the session through the gateway; Stop kills it and leaves the session open.
+func EndPamAccess(t *testing.T, infra *PAMTestInfra, pamCmd *helpers.Command) {
+	defer func() {
+		if t.Failed() {
+			infra.DumpOutput(pamCmd)
+		}
+	}()
+	require.NoError(t, pamCmd.Cmd().Process.Signal(os.Interrupt))
+	result := helpers.WaitFor(t, helpers.WaitForOptions{
+		Timeout:  60 * time.Second,
+		Interval: time.Second,
+		Condition: func() helpers.ConditionResult {
+			if pamCmd.IsRunning() {
+				return helpers.ConditionWait
+			}
+			return helpers.ConditionSuccess
+		},
+	})
+	require.Equal(t, helpers.WaitSuccess, result, "pam access should exit after an interrupt")
+}
+
+// FindPamSessionId returns the ID of the one session opened against the named account.
+func FindPamSessionId(t *testing.T, ctx context.Context, infra *PAMTestInfra, accountName string) string {
+	var list struct {
+		Sessions []struct {
+			Id          string `json:"id"`
+			AccountName string `json:"accountName"`
+		} `json:"sessions"`
+	}
+	body := getOK(t, ctx, fmt.Sprintf("%s/api/v1/pam/sessions?limit=100", infra.Infisical.ApiUrl(t)), infra.ProvisionResult.Token)
+	require.NoError(t, json.Unmarshal(body, &list))
+
+	var ids []string
+	for _, s := range list.Sessions {
+		if s.AccountName == accountName {
+			ids = append(ids, s.Id)
+		}
+	}
+	require.Len(t, ids, 1, "expected one session for account %s", accountName)
+	return ids[0]
+}
+
+type RecordingChunk struct {
+	ChunkIndex             int     `json:"chunkIndex"`
+	StorageBackend         string  `json:"storageBackend"`
+	ExternalChunkObjectKey *string `json:"externalChunkObjectKey"`
+	CiphertextSha256       string  `json:"ciphertextSha256"`
+	CiphertextBytes        int     `json:"ciphertextBytes"`
+	Iv                     string  `json:"iv"`
+	PresignedGetUrl        *string `json:"presignedGetUrl"`
+}
+
+type SessionPlayback struct {
+	SessionComplete bool             `json:"sessionComplete"`
+	SessionKey      string           `json:"sessionKey"`
+	ProjectId       string           `json:"projectId"`
+	StorageBackend  string           `json:"storageBackend"`
+	Chunks          []RecordingChunk `json:"chunks"`
+}
+
+// WaitForSessionRecording waits for the session to end with recording chunks stored, and returns the playback the session viewer reads.
+func WaitForSessionRecording(t *testing.T, ctx context.Context, infra *PAMTestInfra, sessionId string) SessionPlayback {
+	defer func() {
+		if t.Failed() {
+			infra.GatewayCmd.DumpOutput()
+		}
+	}()
+	playbackUrl := fmt.Sprintf("%s/api/v1/pam/sessions/%s/playback", infra.Infisical.ApiUrl(t), sessionId)
+	var playback SessionPlayback
+	var failure string
+	result := helpers.WaitFor(t, helpers.WaitForOptions{
+		Timeout:  90 * time.Second,
+		Interval: 2 * time.Second,
+		Condition: func() helpers.ConditionResult {
+			status, body, err := getRaw(ctx, playbackUrl, infra.ProvisionResult.Token)
+			if err != nil || status != http.StatusOK {
+				failure = fmt.Sprintf("GET %s: status %d, error %v: %s", playbackUrl, status, err, string(body))
+				return helpers.ConditionBreakEarly
+			}
+
+			playback = SessionPlayback{}
+			if err := json.Unmarshal(body, &playback); err != nil {
+				failure = fmt.Sprintf("GET %s: %v", playbackUrl, err)
+				return helpers.ConditionBreakEarly
+			}
+			slog.Info("Waiting for session recording", "sessionId", sessionId,
+				"sessionComplete", playback.SessionComplete, "chunks", len(playback.Chunks))
+			if playback.SessionComplete && len(playback.Chunks) > 0 {
+				return helpers.ConditionSuccess
+			}
+			return helpers.ConditionWait
+		},
+	})
+	require.Equal(t, helpers.WaitSuccess, result, failure)
+	return playback
+}
+
+// ReadSessionRecording downloads, verifies and decrypts each chunk as the session viewer does, returning the recorded events in order.
+func ReadSessionRecording[T any](t *testing.T, ctx context.Context, infra *PAMTestInfra, sessionId string, playback SessionPlayback) []T {
+	sessionKey, err := base64.StdEncoding.DecodeString(playback.SessionKey)
+	require.NoError(t, err)
+	block, err := aes.NewCipher(sessionKey)
+	require.NoError(t, err)
+	gcm, err := cipher.NewGCM(block)
+	require.NoError(t, err)
+
+	chunks := slices.Clone(playback.Chunks)
+	slices.SortFunc(chunks, func(a, b RecordingChunk) int { return a.ChunkIndex - b.ChunkIndex })
+
+	var events []T
+	for i, chunk := range chunks {
+		require.Equal(t, i, chunk.ChunkIndex, "recording chunks should be contiguous")
+
+		var ciphertext []byte
+		switch chunk.StorageBackend {
+		case "postgres":
+			ciphertext = getOK(t, ctx, fmt.Sprintf("%s/api/v1/pam/sessions/%s/chunks/%d/ciphertext",
+				infra.Infisical.ApiUrl(t), sessionId, chunk.ChunkIndex), infra.ProvisionResult.Token)
+		case "aws-s3":
+			require.NotNil(t, chunk.ExternalChunkObjectKey, "chunk %d has no object key", chunk.ChunkIndex)
+			require.Equal(t, fmt.Sprintf("%s/%s/chunk-%06d.json.enc", playback.ProjectId, sessionId, chunk.ChunkIndex),
+				*chunk.ExternalChunkObjectKey)
+			require.NotNil(t, chunk.PresignedGetUrl, "chunk %d has no download URL", chunk.ChunkIndex)
+			ciphertext = getOK(t, ctx, *chunk.PresignedGetUrl, "")
+		default:
+			require.Failf(t, "unexpected storage backend", "chunk %d is stored in %q", chunk.ChunkIndex, chunk.StorageBackend)
+		}
+
+		require.Equal(t, chunk.CiphertextBytes, len(ciphertext), "chunk %d size", chunk.ChunkIndex)
+		digest := sha256.Sum256(ciphertext)
+		require.Equal(t, chunk.CiphertextSha256, base64.StdEncoding.EncodeToString(digest[:]), "chunk %d digest", chunk.ChunkIndex)
+
+		iv, err := base64.StdEncoding.DecodeString(chunk.Iv)
+		require.NoError(t, err)
+		aad := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%d|%s|v1", playback.ProjectId, sessionId, chunk.ChunkIndex, chunk.StorageBackend)))
+		plaintext, err := gcm.Open(nil, iv, ciphertext, aad[:])
+		require.NoError(t, err, "chunk %d should decrypt with the session key", chunk.ChunkIndex)
+
+		var chunkEvents []T
+		require.NoError(t, json.Unmarshal(plaintext, &chunkEvents), "chunk %d should hold a JSON array of events", chunk.ChunkIndex)
+		events = append(events, chunkEvents...)
+	}
+	return events
 }

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -167,4 +169,50 @@ func TestPAM_Postgres_ConnectToDatabase(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, proxyResult)
 	slog.Info("SELECT 1 through PAM proxy succeeded")
+
+	type recordedQuery struct {
+		Input  string `json:"input"`
+		Output string `json:"output"`
+	}
+	expected := []recordedQuery{{Input: "SELECT 1", Output: "SELECT 1"}}
+	for _, query := range []recordedQuery{
+		{Input: "CREATE TABLE pam_recording (note text)", Output: "CREATE TABLE"},
+		{Input: "INSERT INTO pam_recording VALUES ('recorded through pam')", Output: "INSERT 0 1"},
+		{Input: "SELECT note FROM pam_recording", Output: "SELECT 1"},
+	} {
+		_, err := proxyConn.Exec(ctx, query.Input)
+		require.NoError(t, err)
+		expected = append(expected, query)
+	}
+
+	sessionId := FindPamSessionId(t, ctx, infra, accountName)
+
+	// The gateway keeps the encrypted recording on disk until the session ends and it is uploaded.
+	recordingGlob := filepath.Join(infra.RecordingPath, fmt.Sprintf("pam_session_%s_postgres_expires_*.enc", sessionId))
+	fileResult := helpers.WaitFor(t, helpers.WaitForOptions{
+		Timeout:  30 * time.Second,
+		Interval: time.Second,
+		Condition: func() helpers.ConditionResult {
+			files, _ := filepath.Glob(recordingGlob)
+			if len(files) != 1 {
+				return helpers.ConditionWait
+			}
+			if info, statErr := os.Stat(files[0]); statErr != nil || info.Size() == 0 {
+				return helpers.ConditionWait
+			}
+			return helpers.ConditionSuccess
+		},
+	})
+	require.Equal(t, helpers.WaitSuccess, fileResult, "gateway should write the session recording under %s", infra.RecordingPath)
+
+	require.NoError(t, proxyConn.Close(ctx))
+	EndPamAccess(t, infra, &pamCmd)
+
+	playback := WaitForSessionRecording(t, ctx, infra, sessionId)
+	require.Equal(t, "postgres", playback.StorageBackend)
+	recorded := ReadSessionRecording[recordedQuery](t, ctx, infra, sessionId, playback)
+	for _, query := range expected {
+		require.Contains(t, recorded, query)
+	}
+	slog.Info("Postgres session recording verified", "sessionId", sessionId, "entries", len(recorded))
 }

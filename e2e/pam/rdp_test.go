@@ -3,6 +3,7 @@ package pam
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -205,11 +206,34 @@ func TestPAM_RDP(t *testing.T) {
 		createRDPPamAccountAt(t, ctx, infra, folderId, templateId, accountName, resourceHost, rdpPort, rdpUser, rdpPassword)
 
 		proxyPort := helpers.GetFreePort()
-		startRDPProxy(t, ctx, infra, folderName, accountName, "5m", proxyPort)
+		_, pamCmd := startRDPProxy(t, ctx, infra, folderName, accountName, "5m", proxyPort)
 
 		err := connectFreeRDP(t, ctx, rdpBinary, "127.0.0.1", proxyPort, "testuser", "", 10*time.Second)
 		require.NoError(t, err, "xfreerdp should connect through proxy")
 		slog.Info("RDP connection test passed")
+
+		sessionId := FindPamSessionId(t, ctx, infra, accountName)
+		EndPamAccess(t, infra, pamCmd)
+		playback := WaitForSessionRecording(t, ctx, infra, sessionId)
+		require.Equal(t, "aws-s3", playback.StorageBackend)
+
+		type rdpEvent struct {
+			ChannelType string `json:"channelType"`
+			Data        []byte `json:"data"`
+		}
+		frames := 0
+		for _, event := range ReadSessionRecording[rdpEvent](t, ctx, infra, sessionId, playback) {
+			require.Equal(t, "rdp", event.ChannelType)
+			var envelope struct {
+				Type string `json:"type"`
+			}
+			require.NoError(t, json.Unmarshal(event.Data, &envelope))
+			if envelope.Type == "target_frame" {
+				frames++
+			}
+		}
+		require.NotZero(t, frames, "the recording should hold the frames the RDP target sent")
+		slog.Info("RDP session recording verified", "sessionId", sessionId, "frames", frames)
 	})
 
 	t.Run("bad-credentials", func(t *testing.T) {
