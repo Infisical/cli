@@ -141,7 +141,7 @@ func toSessionLogGrant(sessionID string, wire api.AgentVaultSessionLogGrant, hel
 // Anything unrecognised is http, so a newer backend's type is brokered the way this proxy already knows how.
 func toServiceKind(wire string) string {
 	switch wire {
-	case serviceKindMCP, serviceKindPostgres, serviceKindMySQL, serviceKindSSH:
+	case serviceKindMCP, serviceKindPostgres, serviceKindMySQL, serviceKindSSH, serviceKindRedis, serviceKindCockroachDB, serviceKindClickHouse:
 		return wire
 	}
 	return serviceKindHTTP
@@ -153,7 +153,7 @@ func toNativeTarget(kind string, wire *api.AgentVaultNativeTarget) *nativeTarget
 		return nil
 	}
 	// TLS on and verified unless the server says otherwise, so a missing or partial tls object fails closed.
-	target := &nativeTarget{host: wire.Host, port: wire.Port, database: wire.Database, tlsEnabled: true, tlsVerify: true}
+	target := &nativeTarget{host: wire.Host, port: wire.Port, nativePort: wire.NativePort, database: wire.Database, tlsEnabled: true, tlsVerify: true}
 	if wire.TLS != nil {
 		if wire.TLS.Enabled != nil {
 			target.tlsEnabled = *wire.TLS.Enabled

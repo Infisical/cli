@@ -199,3 +199,35 @@ func TestADatabaseTargetKeepsTLSOnUnlessTheServerTurnsItOff(t *testing.T) {
 		}
 	}
 }
+
+func TestTheNewDatabaseTypesResolveAsNativeServices(t *testing.T) {
+	for _, kind := range []string{serviceKindRedis, serviceKindCockroachDB, serviceKindClickHouse} {
+		if got := toServiceKind(kind); got != kind {
+			t.Errorf("%s resolved as %s", kind, got)
+		}
+		if toNativeTarget(kind, &api.AgentVaultNativeTarget{Host: "db.internal", Port: 1}) == nil {
+			t.Errorf("%s got no native target", kind)
+		}
+	}
+}
+
+// The server sends nativePort only for ClickHouse, and null when the service has none.
+func TestANativeTargetReadsClickHousesNativePort(t *testing.T) {
+	for _, tc := range []struct {
+		field string
+		want  int
+	}{
+		{``, 0},
+		{`,"nativePort":null`, 0},
+		{`,"nativePort":9440`, 9440},
+	} {
+		var wire api.AgentVaultNativeTarget
+		if err := json.Unmarshal([]byte(`{"host":"ch.internal","port":8443,"database":"default"`+tc.field+`}`), &wire); err != nil {
+			t.Fatalf("%q: %v", tc.field, err)
+		}
+		target := toNativeTarget(serviceKindClickHouse, &wire)
+		if target == nil || target.port != 8443 || target.nativePort != tc.want {
+			t.Errorf("%q: target %+v, want HTTP port 8443 and native port %d", tc.field, target, tc.want)
+		}
+	}
+}

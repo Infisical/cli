@@ -135,6 +135,8 @@ type AgentVaultNativeTarget struct {
 	Host     string `json:"host"`
 	Port     int    `json:"port"`
 	Database string `json:"database"`
+	// ClickHouse's native protocol port; Port is its HTTP one. Null or absent when the service has none.
+	NativePort int `json:"nativePort,omitempty"`
 	// Nil for SSH.
 	TLS *AgentVaultNativeTLS `json:"tls"`
 }

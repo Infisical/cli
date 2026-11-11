@@ -114,7 +114,16 @@ func TestConnectPrintsALabelledBlockPerService(t *testing.T) {
 			"orders (MySQL)\n  Address:  127.0.0.1:5000\n  Example:  mysql -h 127.0.0.1 -P 5000 -u agent\n"},
 		{agentvault.NativeServiceInfo{Name: "bastion", Type: "ssh"},
 			"bastion (SSH)\n  Address:  127.0.0.1:5000\n  Example:  ssh -p 5000 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null agent@127.0.0.1\n"},
-		{agentvault.NativeServiceInfo{Name: "cache", Type: "redis"}, "cache\n  Address:  127.0.0.1:5000\n"},
+		{agentvault.NativeServiceInfo{Name: "cache", Type: "redis"},
+			"cache (Redis)\n  Address:  127.0.0.1:5000\n  Example:  redis-cli -h 127.0.0.1 -p 5000\n"},
+		{agentvault.NativeServiceInfo{Name: "ledger", Type: "cockroachdb", Database: "defaultdb"},
+			"ledger (CockroachDB)\n  Address:  127.0.0.1:5000\n  Example:  psql \"postgres://agent@127.0.0.1:5000/?sslmode=disable\"\n"},
+		{agentvault.NativeServiceInfo{Name: "events", Type: "clickhouse", Database: "default", HasNativePort: true},
+			"events (ClickHouse)\n  Address:  127.0.0.1:5000\n  Example:  curl 'http://127.0.0.1:5000/?query=SELECT+1'\n" +
+				"            clickhouse-client --host 127.0.0.1 --port 5000\n"},
+		{agentvault.NativeServiceInfo{Name: "events", Type: "clickhouse", Database: "default"},
+			"events (ClickHouse)\n  Address:  127.0.0.1:5000\n  Example:  curl 'http://127.0.0.1:5000/?query=SELECT+1'\n"},
+		{agentvault.NativeServiceInfo{Name: "queue", Type: "kafka"}, "queue\n  Address:  127.0.0.1:5000\n"},
 	} {
 		if got := agentVaultConnectBlock(tc.service, 5000); got != tc.want {
 			t.Errorf("%s: %q, want %q", tc.service.Type, got, tc.want)
@@ -124,7 +133,7 @@ func TestConnectPrintsALabelledBlockPerService(t *testing.T) {
 
 // A database name is the admin's text, and the example is pasted into a shell.
 func TestConnectLeavesTheDatabaseOutOfTheExample(t *testing.T) {
-	for _, serviceType := range []string{"postgres", "mysql"} {
+	for _, serviceType := range []string{"postgres", "mysql", "cockroachdb", "clickhouse"} {
 		block := agentVaultConnectBlock(agentvault.NativeServiceInfo{Name: "db", Type: serviceType, Database: "orders; echo PWNED"}, 5000)
 		if strings.Contains(block, "PWNED") || strings.Contains(block, "orders") {
 			t.Errorf("%s printed the database name: %q", serviceType, block)

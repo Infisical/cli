@@ -200,7 +200,11 @@ func refusalOf(resp *http.Response) error {
 // waitsForClient is true for protocols whose client speaks first. For those a port check that connects and says
 // nothing must not make the proxy log in to the server, so the tunnel opens only once the client sends a byte.
 func waitsForClient(serviceType string) bool {
-	return serviceType == serviceKindPostgres || serviceType == serviceKindSSH
+	switch serviceType {
+	case serviceKindPostgres, serviceKindCockroachDB, serviceKindSSH, serviceKindRedis, serviceKindClickHouse:
+		return true
+	}
+	return false
 }
 
 // ServeLocal accepts local connections on ln and tunnels each to the service until ctx ends. The bytes are never
