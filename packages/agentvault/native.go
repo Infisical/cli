@@ -16,16 +16,21 @@ import (
 	"syscall"
 
 	pamhandlers "github.com/Infisical/infisical-merge/packages/pam/handlers"
+	pamclickhouse "github.com/Infisical/infisical-merge/packages/pam/handlers/clickhouse"
 	pammysql "github.com/Infisical/infisical-merge/packages/pam/handlers/mysql"
+	pamredis "github.com/Infisical/infisical-merge/packages/pam/handlers/redis"
 	pamssh "github.com/Infisical/infisical-merge/packages/pam/handlers/ssh"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 )
 
 const (
-	serviceKindPostgres = "postgres"
-	serviceKindMySQL    = "mysql"
-	serviceKindSSH      = "ssh"
+	serviceKindPostgres    = "postgres"
+	serviceKindMySQL       = "mysql"
+	serviceKindSSH         = "ssh"
+	serviceKindRedis       = "redis"
+	serviceKindCockroachDB = "cockroachdb"
+	serviceKindClickHouse  = "clickhouse"
 
 	credentialSSHKey = "ssh-key"
 
@@ -42,9 +47,11 @@ const (
 
 // Where a database or SSH service's connection goes. The account comes from the service's credential.
 type nativeTarget struct {
-	host     string
-	port     int
-	database string
+	host string
+	port int
+	// ClickHouse's native protocol port, beside its HTTP one in port. 0 when the service has none.
+	nativePort int
+	database   string
 	// The proxy's own leg to the server. Off still uses TLS when a Postgres server offers it, without verifying.
 	tlsEnabled bool
 	tlsVerify  bool
@@ -60,7 +67,11 @@ func (t nativeTarget) addr() string {
 }
 
 func isNativeKind(kind string) bool {
-	return kind == serviceKindPostgres || kind == serviceKindMySQL || kind == serviceKindSSH
+	switch kind {
+	case serviceKindPostgres, serviceKindMySQL, serviceKindSSH, serviceKindRedis, serviceKindCockroachDB, serviceKindClickHouse:
+		return true
+	}
+	return false
 }
 
 func nativeServiceName(hostname string) (string, bool) {
@@ -290,7 +301,8 @@ func serveNative(ctx context.Context, conn net.Conn, svc *resolvedService, tlsCo
 	cred := svc.credential
 
 	switch svc.kind {
-	case serviceKindPostgres:
+	// CockroachDB speaks the Postgres wire protocol, which is how PAM serves it too.
+	case serviceKindPostgres, serviceKindCockroachDB:
 		return pamhandlers.NewPostgresProxy(pamhandlers.PostgresProxyConfig{
 			TargetAddr:     target.addr(),
 			InjectUsername: cred.username,
@@ -331,6 +343,34 @@ func serveNative(ctx context.Context, conn net.Conn, svc *resolvedService, tlsCo
 			}
 		}
 		return pamssh.NewSSHProxy(config).HandleConnection(ctx, conn)
+	case serviceKindRedis:
+		return pamredis.NewRedisProxy(pamredis.RedisProxyConfig{
+			TargetAddr:     target.addr(),
+			InjectUsername: cred.username,
+			InjectPassword: string(cred.password),
+			EnableTLS:      target.tlsEnabled,
+			TLSConfig:      tlsConfig,
+			SessionID:      svc.id,
+			SessionLogger:  logger,
+		}).HandleConnection(ctx, conn)
+	case serviceKindClickHouse:
+		// The handler serves HTTP and native clients on one port, telling them apart by the first byte. An empty
+		// NativeAddr makes it refuse native clients with a ClickHouse error they can show.
+		nativeAddr := ""
+		if target.nativePort != 0 {
+			nativeAddr = net.JoinHostPort(target.host, strconv.Itoa(target.nativePort))
+		}
+		return pamclickhouse.NewClickHouseProxy(pamclickhouse.ClickHouseProxyConfig{
+			TargetAddr:    target.addr(),
+			NativeAddr:    nativeAddr,
+			Username:      cred.username,
+			Password:      string(cred.password),
+			Database:      target.database,
+			EnableTLS:     target.tlsEnabled,
+			TLSConfig:     tlsConfig,
+			SessionID:     svc.id,
+			SessionLogger: logger,
+		}).HandleConnection(ctx, conn)
 	}
 	return fmt.Errorf("service kind %q has no native handler", svc.kind)
 }
@@ -343,6 +383,8 @@ type NativeServiceInfo struct {
 	Name     string `json:"name"`
 	Type     string `json:"type"`
 	Database string `json:"database,omitempty"`
+	// Whether a native ClickHouse client can connect, so `connect` only prints a command that works.
+	HasNativePort bool `json:"hasNativePort,omitempty"`
 }
 
 type NativeServicesResponse struct {
@@ -373,7 +415,12 @@ func (ps *proxyServer) serveNativeServices(w http.ResponseWriter, r *http.Reques
 
 	out := NativeServicesResponse{Services: []NativeServiceInfo{}}
 	for _, svc := range nativeServices(services) {
-		out.Services = append(out.Services, NativeServiceInfo{Name: svc.name, Type: svc.kind, Database: svc.native.database})
+		out.Services = append(out.Services, NativeServiceInfo{
+			Name:          svc.name,
+			Type:          svc.kind,
+			Database:      svc.native.database,
+			HasNativePort: svc.native.nativePort != 0,
+		})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)

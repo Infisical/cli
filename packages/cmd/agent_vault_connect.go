@@ -37,10 +37,10 @@ var agentVaultConnectCmd = &cobra.Command{
 	Long: `Open local ports to the database and SSH services in an Agent Vault session.
 
 Each service gets its own port on 127.0.0.1, and its address and an example command are printed once the port is
-open. Connect your usual client (psql, mysql, ssh) there with any username and no password: each connection is
-tunnelled to the Agent Vault proxy over TLS, and the proxy logs in with the service's account. The ports stay
-open until you stop this command. With one service, --port picks its local port; otherwise the system picks free
-ones. With --all, a service the proxy refuses is skipped and the reason printed.
+open. Connect your usual client (psql, mysql, redis-cli, clickhouse-client, curl, ssh) there with any username and
+no password: each connection is tunnelled to the Agent Vault proxy over TLS, and the proxy logs in with the
+service's account. The ports stay open until you stop this command. With one service, --port picks its local port;
+otherwise the system picks free ones. With --all, a service the proxy refuses is skipped and the reason printed.
 
 The session token and proxy address are read from INFISICAL_AGENT_VAULT_SESSION_TOKEN and
 INFISICAL_AGENT_VAULT_PROXY_ADDRESS, which 'agent-vault run' sets for the agent, or from the flags. When
@@ -261,7 +261,14 @@ func pickAgentVaultConnectServices(available []agentvault.NativeServiceInfo, nam
 	return picked, nil
 }
 
-var agentVaultConnectTypeLabels = map[string]string{"postgres": "PostgreSQL", "mysql": "MySQL", "ssh": "SSH"}
+var agentVaultConnectTypeLabels = map[string]string{
+	"postgres":    "PostgreSQL",
+	"mysql":       "MySQL",
+	"ssh":         "SSH",
+	"redis":       "Redis",
+	"cockroachdb": "CockroachDB",
+	"clickhouse":  "ClickHouse",
+}
 
 // The database is left out of the examples: a Postgres client always gets the service's own database, and a MySQL
 // client starts there unless it names another (it can also switch later), so a name pasted into a shell command
@@ -273,21 +280,29 @@ func agentVaultConnectBlock(service agentvault.NativeServiceInfo, port int) stri
 		title += " (" + label + ")"
 	}
 	block := fmt.Sprintf("%s\n  Address:  127.0.0.1:%d\n", title, port)
-	if example := agentVaultConnectExample(service.Type, port); example != "" {
+	if example := agentVaultConnectExample(service, port); example != "" {
 		block += fmt.Sprintf("  Example:  %s\n", example)
 	}
 	return block
 }
 
-func agentVaultConnectExample(serviceType string, port int) string {
-	switch serviceType {
-	case "postgres":
+func agentVaultConnectExample(service agentvault.NativeServiceInfo, port int) string {
+	switch service.Type {
+	case "postgres", "cockroachdb":
 		return fmt.Sprintf(`psql "postgres://agent@127.0.0.1:%d/?sslmode=disable"`, port)
 	case "mysql":
 		return fmt.Sprintf("mysql -h 127.0.0.1 -P %d -u agent", port)
 	case "ssh":
 		// The proxy presents a new host key on every connection, and the hop is local, so the key isn't checked.
 		return fmt.Sprintf("ssh -p %d -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null agent@127.0.0.1", port)
+	case "redis":
+		return fmt.Sprintf("redis-cli -h 127.0.0.1 -p %d", port)
+	case "clickhouse":
+		example := fmt.Sprintf("curl 'http://127.0.0.1:%d/?query=SELECT+1'", port)
+		if service.HasNativePort {
+			example += fmt.Sprintf("\n            clickhouse-client --host 127.0.0.1 --port %d", port)
+		}
+		return example
 	}
 	return ""
 }

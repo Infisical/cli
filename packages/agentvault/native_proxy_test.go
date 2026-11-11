@@ -15,6 +15,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -112,6 +113,27 @@ func TestTheDoorServesPlainHTTPAndTLSOnOnePort(t *testing.T) {
 	services, err := client.ListNativeServices(context.Background())
 	if err != nil || len(services) != 0 {
 		t.Fatalf("TLS door: services=%v err=%v", services, err)
+	}
+}
+
+func TestTheServiceListSaysWhichClickHouseServicesTakeANativeClient(t *testing.T) {
+	withNative := nativeServiceAt(serviceKindClickHouse, "events", "127.0.0.1:8123")
+	withNative.native.nativePort = 9000
+	_, client, _ := newNativeProxy(t, []*resolvedService{
+		withNative,
+		nativeServiceAt(serviceKindClickHouse, "metrics", "127.0.0.1:8123"),
+	})
+
+	services, err := client.ListNativeServices(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, svc := range services {
+		got[svc.Name] = svc.HasNativePort
+	}
+	if !got["events"] || got["metrics"] || len(got) != 2 {
+		t.Fatalf("hasNativePort by service: %v, want events true and metrics false", got)
 	}
 }
 
@@ -258,34 +280,39 @@ func TestAnInlineServiceWinsOverABundleServiceOfTheSameName(t *testing.T) {
 	}
 }
 
+// CockroachDB speaks the Postgres protocol and goes through the same handler, but its rows carry its own type.
 func TestPostgresThroughTheProxyLogsInAsTheServiceAccountAndIsRecorded(t *testing.T) {
-	upstream := startFakePostgres(t, "agent", "secret")
-	ps, client, _ := newNativeProxy(t, []*resolvedService{nativeServiceAt(serviceKindPostgres, "db", upstream)})
+	for _, kind := range []string{serviceKindPostgres, serviceKindCockroachDB} {
+		t.Run(kind, func(t *testing.T) {
+			upstream := startFakePostgres(t, "agent", "secret")
+			ps, client, _ := newNativeProxy(t, []*resolvedService{nativeServiceAt(kind, "db", upstream)})
 
-	tunnel, err := client.OpenTunnel(context.Background(), "db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tunnel.Close()
-	_ = tunnel.SetDeadline(time.Now().Add(5 * time.Second))
+			tunnel, err := client.OpenTunnel(context.Background(), "db")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tunnel.Close()
+			_ = tunnel.SetDeadline(time.Now().Add(5 * time.Second))
 
-	frontend := pgproto3.NewFrontend(tunnel, tunnel)
-	frontend.Send(&pgproto3.StartupMessage{ProtocolVersion: pgproto3.ProtocolVersionNumber, Parameters: map[string]string{"user": "whoever", "database": "other"}})
-	if err := frontend.Flush(); err != nil {
-		t.Fatal(err)
-	}
-	waitFor[*pgproto3.ReadyForQuery](t, frontend)
-	frontend.Send(&pgproto3.Query{String: "SELECT 1"})
-	if err := frontend.Flush(); err != nil {
-		t.Fatal(err)
-	}
-	waitFor[*pgproto3.ReadyForQuery](t, frontend)
-	frontend.Send(&pgproto3.Terminate{})
-	_ = frontend.Flush()
+			frontend := pgproto3.NewFrontend(tunnel, tunnel)
+			frontend.Send(&pgproto3.StartupMessage{ProtocolVersion: pgproto3.ProtocolVersionNumber, Parameters: map[string]string{"user": "whoever", "database": "other"}})
+			if err := frontend.Flush(); err != nil {
+				t.Fatal(err)
+			}
+			waitFor[*pgproto3.ReadyForQuery](t, frontend)
+			frontend.Send(&pgproto3.Query{String: "SELECT 1"})
+			if err := frontend.Flush(); err != nil {
+				t.Fatal(err)
+			}
+			waitFor[*pgproto3.ReadyForQuery](t, frontend)
+			frontend.Send(&pgproto3.Terminate{})
+			_ = frontend.Flush()
 
-	records := nativeRecords(t, ps, 1)
-	if len(records) != 1 || records[0].Native == nil || records[0].Native.Statement != "SELECT 1" || records[0].Method != "POSTGRES" {
-		t.Fatalf("records = %+v, want one POSTGRES row for SELECT 1", records)
+			records := nativeRecords(t, ps, 1)
+			if len(records) != 1 || records[0].Native == nil || records[0].Native.Statement != "SELECT 1" || records[0].Method != strings.ToUpper(kind) {
+				t.Fatalf("records = %+v, want one %s row for SELECT 1", records, strings.ToUpper(kind))
+			}
+		})
 	}
 }
 
@@ -723,3 +750,243 @@ func startFakeMySQL(t *testing.T) string {
 type quietMySQLHandler struct{ mysqlserver.EmptyHandler }
 
 func (quietMySQLHandler) UseDB(string) error { return nil }
+
+func TestRedisThroughTheProxyLogsInAsTheServiceAccountAndIsRecorded(t *testing.T) {
+	for _, tc := range []struct {
+		username string
+		wantAuth []string
+	}{
+		{"agent", []string{"AUTH", "agent", "secret"}},
+		// Redis's legacy AUTH takes only a password, which is the default user's.
+		{"default", []string{"AUTH", "secret"}},
+	} {
+		t.Run(tc.username, func(t *testing.T) {
+			upstream, auths := startFakeRedis(t)
+			svc := nativeServiceAt(serviceKindRedis, "cache", upstream)
+			svc.credential.username = tc.username
+			ps, client, _ := newNativeProxy(t, []*resolvedService{svc})
+
+			tunnel, err := client.OpenTunnel(context.Background(), "cache")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tunnel.Close()
+			_ = tunnel.SetDeadline(time.Now().Add(5 * time.Second))
+			reader := bufio.NewReader(tunnel)
+
+			// The client's own AUTH is answered by the proxy and never reaches the server.
+			for _, command := range [][]string{{"AUTH", "whoever", "guess"}, {"PING"}} {
+				if _, err := tunnel.Write(redisCommand(command...)); err != nil {
+					t.Fatal(err)
+				}
+				line, err := reader.ReadString('\n')
+				if err != nil {
+					t.Fatalf("%s: %v", command[0], err)
+				}
+				if want := map[string]string{"AUTH": "+OK\r\n", "PING": "+PONG\r\n"}[command[0]]; line != want {
+					t.Fatalf("%s answered %q, want %q", command[0], line, want)
+				}
+			}
+
+			select {
+			case got := <-auths:
+				if strings.Join(got, " ") != strings.Join(tc.wantAuth, " ") {
+					t.Fatalf("the server got %q, want %q", got, tc.wantAuth)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("the proxy never logged in to the server")
+			}
+			select {
+			case got := <-auths:
+				t.Fatalf("the client's AUTH reached the server: %q", got)
+			default:
+			}
+
+			records := nativeRecords(t, ps, 1)
+			if len(records) != 1 || records[0].Native == nil || !strings.Contains(records[0].Native.Statement, "PING") || records[0].Method != "REDIS" {
+				t.Fatalf("records = %+v, want one REDIS row for PING", records)
+			}
+		})
+	}
+}
+
+func redisCommand(args ...string) []byte {
+	var b strings.Builder
+	fmt.Fprintf(&b, "*%d\r\n", len(args))
+	for _, arg := range args {
+		fmt.Fprintf(&b, "$%d\r\n%s\r\n", len(arg), arg)
+	}
+	return []byte(b.String())
+}
+
+// A Redis server that answers AUTH with OK, reporting each to auths, and PING with PONG.
+func startFakeRedis(t *testing.T) (string, <-chan []string) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	auths := make(chan []string, 4)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				reader := bufio.NewReader(conn)
+				for {
+					command, err := readRedisCommand(reader)
+					if err != nil {
+						return
+					}
+					switch strings.ToUpper(command[0]) {
+					case "AUTH":
+						auths <- command
+						_, _ = conn.Write([]byte("+OK\r\n"))
+					case "PING":
+						_, _ = conn.Write([]byte("+PONG\r\n"))
+					default:
+						_, _ = conn.Write([]byte("-ERR unknown command\r\n"))
+					}
+				}
+			}()
+		}
+	}()
+	return ln.Addr().String(), auths
+}
+
+func readRedisCommand(reader *bufio.Reader) ([]string, error) {
+	header, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, err
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(header, "*")))
+	if err != nil || count < 1 {
+		return nil, fmt.Errorf("bad command header %q", header)
+	}
+	command := make([]string, count)
+	for i := range command {
+		lengthLine, err := reader.ReadString('\n')
+		if err != nil {
+			return nil, err
+		}
+		length, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(lengthLine, "$")))
+		if err != nil {
+			return nil, fmt.Errorf("bad bulk length %q", lengthLine)
+		}
+		arg := make([]byte, length+2)
+		if _, err := io.ReadFull(reader, arg); err != nil {
+			return nil, err
+		}
+		command[i] = string(arg[:length])
+	}
+	return command, nil
+}
+
+func TestClickHouseOverHTTPThroughTheProxyLogsInAsTheServiceAccountAndIsRecorded(t *testing.T) {
+	type seen struct{ user, key, database, query string }
+	requests := make(chan seen, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests <- seen{r.Header.Get("X-ClickHouse-User"), r.Header.Get("X-ClickHouse-Key"), r.URL.Query().Get("database"), r.URL.Query().Get("query")}
+		_, _ = io.WriteString(w, "1\n")
+	}))
+	t.Cleanup(upstream.Close)
+	ps, client, _ := newNativeProxy(t, []*resolvedService{nativeServiceAt(serviceKindClickHouse, "events", upstream.Listener.Addr().String())})
+
+	tunnel, err := client.OpenTunnel(context.Background(), "events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tunnel.Close()
+	_ = tunnel.SetDeadline(time.Now().Add(5 * time.Second))
+
+	if _, err := io.WriteString(tunnel, "GET /?query=SELECT+1&user=whoever&database=other HTTP/1.1\r\nHost: x\r\nX-ClickHouse-User: whoever\r\nConnection: close\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(tunnel), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "1\n" {
+		t.Fatalf("answered %d %q", resp.StatusCode, body)
+	}
+
+	if got := <-requests; got != (seen{"agent", "secret", "app", "SELECT 1"}) {
+		t.Fatalf("the server got %+v, want the service's account and database", got)
+	}
+	records := nativeRecords(t, ps, 1)
+	if len(records) != 1 || records[0].Native == nil || records[0].Native.Statement != "SELECT 1" || records[0].Method != "CLICKHOUSE" {
+		t.Fatalf("records = %+v, want one CLICKHOUSE row for SELECT 1", records)
+	}
+}
+
+func TestAClickHouseServiceWithoutANativePortRefusesANativeClient(t *testing.T) {
+	_, client, _ := newNativeProxy(t, []*resolvedService{nativeServiceAt(serviceKindClickHouse, "events", "127.0.0.1:1")})
+
+	tunnel, err := client.OpenTunnel(context.Background(), "events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tunnel.Close()
+	_ = tunnel.SetDeadline(time.Now().Add(5 * time.Second))
+
+	if _, err := tunnel.Write([]byte{0x00}); err != nil {
+		t.Fatal(err)
+	}
+	reply, _ := io.ReadAll(tunnel)
+	if !bytes.Contains(reply, []byte("native port")) {
+		t.Fatalf("a native client got %q, want ClickHouse's error naming the missing native port", reply)
+	}
+}
+
+func TestAClickHouseServicesNativePortReachesTheHandler(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	dialled := make(chan struct{}, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		dialled <- struct{}{}
+		_ = conn.Close()
+	}()
+
+	svc := nativeServiceAt(serviceKindClickHouse, "events", "127.0.0.1:1")
+	svc.native.nativePort = ln.Addr().(*net.TCPAddr).Port
+	_, client, _ := newNativeProxy(t, []*resolvedService{svc})
+	tunnel, err := client.OpenTunnel(context.Background(), "events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tunnel.Close()
+	if _, err := tunnel.Write([]byte{0x00}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-dialled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a native client wasn't sent to the service's native port")
+	}
+}
+
+// A MySQL client waits for the server's greeting, so only its tunnel opens before the client sends a byte.
+func TestOnlyMySQLTunnelsOpenBeforeTheClientSpeaks(t *testing.T) {
+	for _, kind := range []string{serviceKindPostgres, serviceKindCockroachDB, serviceKindRedis, serviceKindClickHouse, serviceKindSSH} {
+		if !waitsForClient(kind) {
+			t.Errorf("%s opens its tunnel before the client speaks, so a port check would log in", kind)
+		}
+	}
+	if waitsForClient(serviceKindMySQL) {
+		t.Error("mysql waits for a client that waits for the server")
+	}
+}

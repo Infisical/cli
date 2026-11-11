@@ -78,6 +78,20 @@ func TestANativeConnectionClosesWhenItsServicePointsElsewhere(t *testing.T) {
 	}
 }
 
+func TestANativeConnectionClosesWhenItsClickHouseNativePortChanges(t *testing.T) {
+	resolver := &stubResolver{}
+	cache, conn := openNativeConn(t, resolver)
+
+	moved := nativeService("db", "db.internal")
+	moved.native.nativePort = 9440
+	setResult(resolver, &resolveResult{SessionID: "s1", Services: []*resolvedService{moved}}, nil)
+	cache.refreshOne(sessionKey(nativeTestToken), nativeTestToken)
+
+	if !closed(conn) {
+		t.Fatal("a connection stayed open after the service's native port changed")
+	}
+}
+
 func TestANativeConnectionStaysOpenWhenOnlyItsPasswordChanges(t *testing.T) {
 	resolver := &stubResolver{}
 	cache, conn := openNativeConn(t, resolver)
@@ -593,7 +607,7 @@ func TestShutdownWaitsForAnSSHChannelsLastLinesOnlyWhenSSHWasOpen(t *testing.T) 
 	nativeSSHLateLineWait = 200 * time.Millisecond
 	t.Cleanup(func() { nativeSSHLateLineWait = old })
 
-	for _, kind := range []string{serviceKindPostgres, serviceKindSSH} {
+	for _, kind := range []string{serviceKindPostgres, serviceKindRedis, serviceKindClickHouse, serviceKindSSH} {
 		resolver := &stubResolver{}
 		svc := nativeService("db", "db.internal")
 		svc.kind = kind
