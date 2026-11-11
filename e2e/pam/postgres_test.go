@@ -211,8 +211,6 @@ func TestPAM_Postgres_ConnectToDatabase(t *testing.T) {
 	playback := WaitForSessionRecording(t, ctx, infra, sessionId)
 	require.Equal(t, "postgres", playback.StorageBackend)
 	recorded := ReadSessionRecording[recordedQuery](t, ctx, infra, sessionId, playback)
-	for _, query := range expected {
-		require.Contains(t, recorded, query)
-	}
+	require.Equal(t, expected, recorded)
 	slog.Info("Postgres session recording verified", "sessionId", sessionId, "entries", len(recorded))
 }

@@ -482,7 +482,6 @@ func EndPamAccess(t *testing.T, infra *PAMTestInfra, pamCmd *helpers.Command) {
 	require.Equal(t, helpers.WaitSuccess, result, "pam access should exit after an interrupt")
 }
 
-// FindPamSessionId returns the ID of the one session opened against the named account.
 func FindPamSessionId(t *testing.T, ctx context.Context, infra *PAMTestInfra, accountName string) string {
 	var list struct {
 		Sessions []struct {
@@ -521,7 +520,6 @@ type SessionPlayback struct {
 	Chunks          []RecordingChunk `json:"chunks"`
 }
 
-// WaitForSessionRecording waits for the session to end with recording chunks stored, and returns the playback the session viewer reads.
 func WaitForSessionRecording(t *testing.T, ctx context.Context, infra *PAMTestInfra, sessionId string) SessionPlayback {
 	defer func() {
 		if t.Failed() {
@@ -558,7 +556,6 @@ func WaitForSessionRecording(t *testing.T, ctx context.Context, infra *PAMTestIn
 	return playback
 }
 
-// ReadSessionRecording downloads, verifies and decrypts each chunk as the session viewer does, returning the recorded events in order.
 func ReadSessionRecording[T any](t *testing.T, ctx context.Context, infra *PAMTestInfra, sessionId string, playback SessionPlayback) []T {
 	sessionKey, err := base64.StdEncoding.DecodeString(playback.SessionKey)
 	require.NoError(t, err)
