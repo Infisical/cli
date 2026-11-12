@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -18,19 +19,18 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
-func TestPAM_Postgres_ConnectToDatabase(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
+const (
+	pgUser     = "pamuser"
+	pgPassword = "pampassword"
+	pgDatabase = "testdb"
+)
 
-	infra := SetupPAMInfra(t, ctx)
+type recordedQuery struct {
+	Input  string `json:"input"`
+	Output string `json:"output"`
+}
 
-	const (
-		pgUser     = "pamuser"
-		pgPassword = "pampassword"
-		pgDatabase = "testdb"
-	)
-
-	// Start PAM-target Postgres via testcontainers
+func startPostgresTarget(t *testing.T, ctx context.Context) (string, int) {
 	pgContainer, err := tcpostgres.Run(ctx, "postgres:16",
 		tcpostgres.WithDatabase(pgDatabase),
 		tcpostgres.WithUsername(pgUser),
@@ -56,17 +56,18 @@ func TestPAM_Postgres_ConnectToDatabase(t *testing.T) {
 	directConn.Close(ctx)
 	slog.Info("Verified PAM Postgres is accessible directly")
 
-	// Get host/port for the PAM account
 	pgHost, err := pgContainer.Host(ctx)
 	require.NoError(t, err)
 	pgPort, err := pgContainer.MappedPort(ctx, "5432")
 	require.NoError(t, err)
+	return pgHost, pgPort.Int()
+}
 
-	// Create folder + template + account (new PAM model)
-	folderName := "pg-folder"
-	accountName := "pg-account"
+func createPostgresPamAccount(t *testing.T, ctx context.Context, infra *PAMTestInfra, prefix, pgHost string, pgPort int) (folderName, accountName string) {
+	folderName = prefix + "-folder"
+	accountName = prefix + "-account"
 	folderId := CreatePamFolder(t, ctx, infra, folderName)
-	templateId := CreatePamTemplate(t, ctx, infra, "pg-template", client.CreatePamAccountTemplateJSONBodyTypePostgres)
+	templateId := CreatePamTemplate(t, ctx, infra, prefix+"-template", client.CreatePamAccountTemplateJSONBodyTypePostgres)
 
 	gatewayId := infra.GatewayId
 	password := pgPassword
@@ -86,7 +87,7 @@ func TestPAM_Postgres_ConnectToDatabase(t *testing.T) {
 				SslRejectUnauthorized bool    `json:"sslRejectUnauthorized"`
 			}{
 				Host:                  pgHost,
-				Port:                  float32(pgPort.Int()),
+				Port:                  float32(pgPort),
 				Database:              pgDatabase,
 				SslEnabled:            false,
 				SslRejectUnauthorized: false,
@@ -103,13 +104,12 @@ func TestPAM_Postgres_ConnectToDatabase(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, acctResp.StatusCode(), "create account: %s", string(acctResp.Body))
 	slog.Info("Created Postgres PAM account")
+	return folderName, accountName
+}
 
-	// Login with provisioned admin user
-	LoginUser(t, ctx, infra)
-
-	// Run pam access <folder>/<account>
+func startPostgresPamAccess(t *testing.T, ctx context.Context, infra *PAMTestInfra, folderName, accountName string) (*helpers.Command, int) {
 	freePort := helpers.GetFreePort()
-	pamCmd := helpers.Command{
+	pamCmd := &helpers.Command{
 		Test:               t,
 		RunMethod:          helpers.RunMethodSubprocess,
 		DisableTempHomeDir: true,
@@ -128,7 +128,7 @@ func TestPAM_Postgres_ConnectToDatabase(t *testing.T) {
 
 	// Wait for proxy to be ready (printed to stdout via fmt.Printf)
 	result := helpers.WaitFor(t, helpers.WaitForOptions{
-		EnsureCmdRunning: &pamCmd,
+		EnsureCmdRunning: pamCmd,
 		Condition: func() helpers.ConditionResult {
 			if strings.Contains(pamCmd.Stdout(), "Proxy Session Started") {
 				return helpers.ConditionSuccess
@@ -137,15 +137,17 @@ func TestPAM_Postgres_ConnectToDatabase(t *testing.T) {
 		},
 	})
 	if result != helpers.WaitSuccess {
-		infra.DumpOutput(&pamCmd)
+		infra.DumpOutput(pamCmd)
 	}
 	require.Equal(t, helpers.WaitSuccess, result, "Database proxy should start successfully")
+	return pamCmd, freePort
+}
 
-	// Connect via pgx to the proxy and run SELECT 1
-	proxyConnStr := fmt.Sprintf("postgres://%s@127.0.0.1:%d/%s?sslmode=disable", pgUser, freePort, pgDatabase)
+func connectPostgresProxy(t *testing.T, ctx context.Context, infra *PAMTestInfra, pamCmd *helpers.Command, port int) *pgx.Conn {
+	proxyConnStr := fmt.Sprintf("postgres://%s@127.0.0.1:%d/%s?sslmode=disable", pgUser, port, pgDatabase)
 	var proxyConn *pgx.Conn
 	connectResult := helpers.WaitFor(t, helpers.WaitForOptions{
-		EnsureCmdRunning: &pamCmd,
+		EnsureCmdRunning: pamCmd,
 		Interval:         2 * time.Second,
 		Timeout:          30 * time.Second,
 		Condition: func() helpers.ConditionResult {
@@ -159,31 +161,51 @@ func TestPAM_Postgres_ConnectToDatabase(t *testing.T) {
 		},
 	})
 	if connectResult != helpers.WaitSuccess {
-		infra.DumpOutput(&pamCmd)
+		infra.DumpOutput(pamCmd)
 	}
 	require.Equal(t, helpers.WaitSuccess, connectResult, "Should connect to database through proxy")
+	return proxyConn
+}
+
+func runQueries(t *testing.T, ctx context.Context, conn *pgx.Conn, queries []recordedQuery) {
+	for _, query := range queries {
+		_, err := conn.Exec(ctx, query.Input)
+		require.NoError(t, err)
+	}
+}
+
+func requirePostgresRecording(t *testing.T, ctx context.Context, infra *PAMTestInfra, sessionId string, expected []recordedQuery) {
+	playback := WaitForSessionRecording(t, ctx, infra, sessionId)
+	require.Equal(t, "postgres", playback.StorageBackend)
+	recorded := ReadSessionRecording[recordedQuery](t, ctx, infra, sessionId, playback)
+	require.Equal(t, expected, recorded)
+	slog.Info("Postgres session recording verified", "sessionId", sessionId, "entries", len(recorded))
+}
+
+func TestPAM_Postgres_ConnectToDatabase(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	infra := SetupPAMInfra(t, ctx)
+	pgHost, pgPort := startPostgresTarget(t, ctx)
+	folderName, accountName := createPostgresPamAccount(t, ctx, infra, "pg", pgHost, pgPort)
+	LoginUser(t, ctx, infra)
+	pamCmd, proxyPort := startPostgresPamAccess(t, ctx, infra, folderName, accountName)
+	proxyConn := connectPostgresProxy(t, ctx, infra, pamCmd, proxyPort)
 	defer proxyConn.Close(ctx)
 
 	var proxyResult int
-	err = proxyConn.QueryRow(ctx, "SELECT 1").Scan(&proxyResult)
+	err := proxyConn.QueryRow(ctx, "SELECT 1").Scan(&proxyResult)
 	require.NoError(t, err)
 	require.Equal(t, 1, proxyResult)
 	slog.Info("SELECT 1 through PAM proxy succeeded")
 
-	type recordedQuery struct {
-		Input  string `json:"input"`
-		Output string `json:"output"`
-	}
-	expected := []recordedQuery{{Input: "SELECT 1", Output: "SELECT 1"}}
-	for _, query := range []recordedQuery{
+	queries := []recordedQuery{
 		{Input: "CREATE TABLE pam_recording (note text)", Output: "CREATE TABLE"},
 		{Input: "INSERT INTO pam_recording VALUES ('recorded through pam')", Output: "INSERT 0 1"},
 		{Input: "SELECT note FROM pam_recording", Output: "SELECT 1"},
-	} {
-		_, err := proxyConn.Exec(ctx, query.Input)
-		require.NoError(t, err)
-		expected = append(expected, query)
 	}
+	runQueries(t, ctx, proxyConn, queries)
 
 	sessionId := FindPamSessionId(t, ctx, infra, accountName)
 
@@ -206,11 +228,88 @@ func TestPAM_Postgres_ConnectToDatabase(t *testing.T) {
 	require.Equal(t, helpers.WaitSuccess, fileResult, "gateway should write the session recording under %s", infra.RecordingPath)
 
 	require.NoError(t, proxyConn.Close(ctx))
-	EndPamAccess(t, infra, &pamCmd)
+	EndPamAccess(t, infra, pamCmd)
 
-	playback := WaitForSessionRecording(t, ctx, infra, sessionId)
-	require.Equal(t, "postgres", playback.StorageBackend)
-	recorded := ReadSessionRecording[recordedQuery](t, ctx, infra, sessionId, playback)
-	require.Equal(t, expected, recorded)
-	slog.Info("Postgres session recording verified", "sessionId", sessionId, "entries", len(recorded))
+	requirePostgresRecording(t, ctx, infra, sessionId,
+		append([]recordedQuery{{Input: "SELECT 1", Output: "SELECT 1"}}, queries...))
+}
+
+func TestPAM_Postgres_RecordingSurvivesGatewayCrash(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	infra := SetupPAMInfra(t, ctx)
+	pgHost, pgPort := startPostgresTarget(t, ctx)
+	folderName, accountName := createPostgresPamAccount(t, ctx, infra, "pg-crash", pgHost, pgPort)
+	LoginUser(t, ctx, infra)
+	pamCmd, proxyPort := startPostgresPamAccess(t, ctx, infra, folderName, accountName)
+	proxyConn := connectPostgresProxy(t, ctx, infra, pamCmd, proxyPort)
+	sessionId := FindPamSessionId(t, ctx, infra, accountName)
+
+	uploaded := []recordedQuery{
+		{Input: "CREATE TABLE crash_recording (note text)", Output: "CREATE TABLE"},
+		{Input: "INSERT INTO crash_recording VALUES ('uploaded before the crash')", Output: "INSERT 0 1"},
+	}
+	runQueries(t, ctx, proxyConn, uploaded)
+	waitForPlayback(t, ctx, infra, sessionId, func(p SessionPlayback) bool { return len(p.Chunks) > 0 })
+
+	// Written to disk but not uploaded when the gateway dies, so the restarted gateway has to send it.
+	onDisk := []recordedQuery{
+		{Input: "INSERT INTO crash_recording VALUES ('on disk when the gateway died')", Output: "INSERT 0 1"},
+	}
+	runQueries(t, ctx, proxyConn, onDisk)
+
+	CrashAndRestartGateway(t, ctx, infra)
+	_ = proxyConn.Close(ctx) // the crash already dropped it
+
+	proxyConn = connectPostgresProxy(t, ctx, infra, pamCmd, proxyPort)
+	afterRestart := []recordedQuery{
+		{Input: "SELECT note FROM crash_recording", Output: "SELECT 2"},
+	}
+	runQueries(t, ctx, proxyConn, afterRestart)
+	require.NoError(t, proxyConn.Close(ctx))
+	EndPamAccess(t, infra, pamCmd)
+
+	requirePostgresRecording(t, ctx, infra, sessionId, slices.Concat(uploaded, onDisk, afterRestart))
+}
+
+func TestPAM_Postgres_RecordingSurvivesRateLimiting(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	infra := SetupPAMInfra(t, ctx, WithGatewayAPIProxy())
+	pgHost, pgPort := startPostgresTarget(t, ctx)
+	folderName, accountName := createPostgresPamAccount(t, ctx, infra, "pg-throttle", pgHost, pgPort)
+	LoginUser(t, ctx, infra)
+	pamCmd, proxyPort := startPostgresPamAccess(t, ctx, infra, folderName, accountName)
+	proxyConn := connectPostgresProxy(t, ctx, infra, pamCmd, proxyPort)
+	sessionId := FindPamSessionId(t, ctx, infra, accountName)
+
+	infra.GatewayAPI.ThrottleChunkUploads(true)
+	throttled := []recordedQuery{
+		{Input: "CREATE TABLE throttled_recording (note text)", Output: "CREATE TABLE"},
+		{Input: "INSERT INTO throttled_recording VALUES ('first upload was rate limited')", Output: "INSERT 0 1"},
+	}
+	runQueries(t, ctx, proxyConn, throttled)
+	result := helpers.WaitFor(t, helpers.WaitForOptions{
+		Timeout:  30 * time.Second,
+		Interval: time.Second,
+		Condition: func() helpers.ConditionResult {
+			if infra.GatewayAPI.RejectedChunkUploads() == 0 {
+				return helpers.ConditionWait
+			}
+			return helpers.ConditionSuccess
+		},
+	})
+	require.Equal(t, helpers.WaitSuccess, result, "gateway should try to upload the recording while the session is open")
+	infra.GatewayAPI.ThrottleChunkUploads(false)
+
+	afterThrottle := []recordedQuery{
+		{Input: "SELECT note FROM throttled_recording", Output: "SELECT 1"},
+	}
+	runQueries(t, ctx, proxyConn, afterThrottle)
+	require.NoError(t, proxyConn.Close(ctx))
+	EndPamAccess(t, infra, pamCmd)
+
+	requirePostgresRecording(t, ctx, infra, sessionId, slices.Concat(throttled, afterThrottle))
 }

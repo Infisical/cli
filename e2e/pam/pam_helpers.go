@@ -11,11 +11,17 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -51,36 +57,49 @@ type PAMTestInfra struct {
 	GatewayId       openapitypes.UUID
 	RelayCmd        *helpers.Command
 	GatewayCmd      *helpers.Command
+	GatewayAPI      *GatewayAPIProxy
 	ProvisionResult *client.ProvisionResult
 	SharedHomeDir   string
 	RecordingPath   string
 }
 
-type SetupPAMOption func(svc *helpers.InfisicalService, extraEnv *[]string)
+type setupPAMConfig struct {
+	backendEnv      []string
+	gatewayAPIProxy bool
+}
+
+type SetupPAMOption func(svc *helpers.InfisicalService, cfg *setupPAMConfig)
 
 const RecordingBucket = "e2e-recordings"
 
 func WithLocalStack() SetupPAMOption {
-	return func(svc *helpers.InfisicalService, extraEnv *[]string) {
+	return func(svc *helpers.InfisicalService, cfg *setupPAMConfig) {
 		infisicalpkg.WithLocalStackService(RecordingBucket)(svc.Stack)
-		*extraEnv = append(*extraEnv,
+		cfg.backendEnv = append(cfg.backendEnv,
 			"AWS_ENDPOINT_URL=http://localstack:4566",
 			fmt.Sprintf("AWS_ENDPOINT_URL_S3=http://%s:4566", infisicalpkg.LocalStackS3Endpoint))
+	}
+}
+
+// WithGatewayAPIProxy sends the gateway's API calls through infra.GatewayAPI.
+func WithGatewayAPIProxy() SetupPAMOption {
+	return func(_ *helpers.InfisicalService, cfg *setupPAMConfig) {
+		cfg.gatewayAPIProxy = true
 	}
 }
 
 func SetupPAMInfra(t *testing.T, ctx context.Context, opts ...SetupPAMOption) *PAMTestInfra {
 	svc := helpers.NewInfisicalService()
 
-	var extraEnv []string
+	var cfg setupPAMConfig
 	for _, opt := range opts {
-		opt(svc, &extraEnv)
+		opt(svc, &cfg)
 	}
 
 	env := append([]string{
 		"ALLOW_INTERNAL_IP_CONNECTIONS=true",
 		"NODE_ENV=test",
-	}, extraEnv...)
+	}, cfg.backendEnv...)
 
 	svc.WithBackendEnvironment(types.NewMappingWithEquals(env)).Up(t, ctx)
 
@@ -118,16 +137,22 @@ func SetupPAMInfra(t *testing.T, ctx context.Context, opts ...SetupPAMOption) *P
 	require.NoError(t, os.MkdirAll(sessionRecordingPath, 0755))
 	gatewayName := helpers.RandomSlug(2)
 	gatewayId, enrollmentToken := CreateGatewayWithEnrollmentToken(t, ctx, svc, gatewayName)
+	gatewayApiUrl := svc.ApiUrl(t)
+	var gatewayAPI *GatewayAPIProxy
+	if cfg.gatewayAPIProxy {
+		gatewayAPI = startGatewayAPIProxy(t, gatewayApiUrl)
+		gatewayApiUrl = gatewayAPI.URL
+	}
 	gatewayCmd := &helpers.Command{
 		Test: t,
 		Args: []string{"gateway", "start", gatewayName,
 			"--enroll-method", "token",
 			"--token", enrollmentToken,
-			"--domain", svc.ApiUrl(t),
+			"--domain", gatewayApiUrl,
 			fmt.Sprintf("--pam-session-recording-path=%s", sessionRecordingPath),
 		},
 		Env: map[string]string{
-			"INFISICAL_API_URL": svc.ApiUrl(t),
+			"INFISICAL_API_URL": gatewayApiUrl,
 		},
 	}
 	gatewayCmd.Start(ctx)
@@ -161,10 +186,87 @@ func SetupPAMInfra(t *testing.T, ctx context.Context, opts ...SetupPAMOption) *P
 		GatewayId:       gatewayId,
 		RelayCmd:        relayCmd,
 		GatewayCmd:      gatewayCmd,
+		GatewayAPI:      gatewayAPI,
 		ProvisionResult: svc.ProvisionResult(),
 		SharedHomeDir:   sharedHomeDir,
 		RecordingPath:   sessionRecordingPath,
 	}
+}
+
+var chunkUploadPath = regexp.MustCompile(`^/api/v1/pam/sessions/[^/]+/chunks(/presigned-put)?$`)
+
+// GatewayAPIProxy forwards the gateway's API calls to the backend and, while throttled, answers its
+// recording chunk uploads the way the backend's rate limiter does.
+type GatewayAPIProxy struct {
+	URL       string
+	throttled atomic.Bool
+	rejected  atomic.Int32
+}
+
+func startGatewayAPIProxy(t *testing.T, apiUrl string) *GatewayAPIProxy {
+	target, err := url.Parse(apiUrl)
+	require.NoError(t, err)
+	forward := &httputil.ReverseProxy{Rewrite: func(r *httputil.ProxyRequest) { r.SetURL(target) }}
+
+	proxy := &GatewayAPIProxy{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !proxy.throttled.Load() || r.Method != http.MethodPost || !chunkUploadPath.MatchString(r.URL.Path) {
+			forward.ServeHTTP(w, r)
+			return
+		}
+		proxy.rejected.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		// The backend sends the seconds left in its one-minute window, so 60 is the longest it asks for.
+		w.Header().Set("Retry-After", "60")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, `{"statusCode":429,"message":"Rate limit exceeded. Please try again in 60 seconds","error":"RateLimitExceeded"}`)
+	}))
+	t.Cleanup(server.Close)
+	proxy.URL = server.URL
+	return proxy
+}
+
+func (p *GatewayAPIProxy) ThrottleChunkUploads(throttled bool) {
+	p.throttled.Store(throttled)
+}
+
+func (p *GatewayAPIProxy) RejectedChunkUploads() int {
+	return int(p.rejected.Load())
+}
+
+// CrashAndRestartGateway kills the gateway without letting it clean up, then starts it again the way a
+// restarted host would, with its recordings and queued chunks still on disk.
+func CrashAndRestartGateway(t *testing.T, ctx context.Context, infra *PAMTestInfra) {
+	crashed := infra.GatewayCmd
+	require.NoError(t, crashed.Cmd().Process.Kill())
+	result := helpers.WaitFor(t, helpers.WaitForOptions{
+		Timeout:  10 * time.Second,
+		Interval: 200 * time.Millisecond,
+		Condition: func() helpers.ConditionResult {
+			if crashed.IsRunning() {
+				return helpers.ConditionWait
+			}
+			return helpers.ConditionSuccess
+		},
+	})
+	require.Equal(t, helpers.WaitSuccess, result, "gateway should exit when killed")
+
+	// Same HOME, because enrollment saved the gateway's access token there and the token can't enroll twice.
+	gatewayCmd := &helpers.Command{
+		Test:               t,
+		RunMethod:          helpers.RunMethodSubprocess,
+		DisableTempHomeDir: true,
+		Args:               crashed.Args,
+		Env:                maps.Clone(crashed.Env),
+	}
+	gatewayCmd.Start(ctx)
+	t.Cleanup(gatewayCmd.Stop)
+	infra.GatewayCmd = gatewayCmd
+	result = helpers.WaitForStderr(t, helpers.WaitForStderrOptions{
+		EnsureCmdRunning: gatewayCmd,
+		ExpectedString:   "Gateway is reachable by Infisical",
+	})
+	require.Equal(t, helpers.WaitSuccess, result, "gateway should come back after a restart")
 }
 
 // postJSON sends an authenticated JSON POST and decodes the response into out. Used for endpoints
@@ -521,6 +623,12 @@ type SessionPlayback struct {
 }
 
 func WaitForSessionRecording(t *testing.T, ctx context.Context, infra *PAMTestInfra, sessionId string) SessionPlayback {
+	return waitForPlayback(t, ctx, infra, sessionId, func(p SessionPlayback) bool {
+		return p.SessionComplete && len(p.Chunks) > 0
+	})
+}
+
+func waitForPlayback(t *testing.T, ctx context.Context, infra *PAMTestInfra, sessionId string, ready func(SessionPlayback) bool) SessionPlayback {
 	defer func() {
 		if t.Failed() {
 			infra.GatewayCmd.DumpOutput()
@@ -546,7 +654,7 @@ func WaitForSessionRecording(t *testing.T, ctx context.Context, infra *PAMTestIn
 			}
 			slog.Info("Waiting for session recording", "sessionId", sessionId,
 				"sessionComplete", playback.SessionComplete, "chunks", len(playback.Chunks))
-			if playback.SessionComplete && len(playback.Chunks) > 0 {
+			if ready(playback) {
 				return helpers.ConditionSuccess
 			}
 			return helpers.ConditionWait
