@@ -1135,6 +1135,18 @@ func TestOnlyTheFirstAnswerInAHookRefusedBatchCarriesTheHooksText(t *testing.T) 
 	}
 }
 
+func TestTheHooksMCPSummaryIsLeftUnparsedForANonUTF8Charset(t *testing.T) {
+	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_file"}}`)
+	utf7 := http.Header{"Content-Type": {"application/json; charset=utf-7"}}
+	if mcp, messages := hookMCPOf(body, false, utf7); mcp.Parsed || len(mcp.Calls) != 0 || messages != nil {
+		t.Fatalf("utf-7 body summarised: %+v", mcp)
+	}
+	plain := http.Header{"Content-Type": {"application/json; charset=utf-8"}}
+	if mcp, _ := hookMCPOf(body, false, plain); !mcp.Parsed || len(mcp.Calls) != 1 || mcp.Calls[0].Tool != "read_file" {
+		t.Fatalf("utf-8 body not summarised: %+v", mcp)
+	}
+}
+
 func TestAHookRefusedBatchGivesTheHooksTextToTheFirstToolCall(t *testing.T) {
 	messages := []jsonrpcMessage{
 		{id: json.RawMessage("1"), mcpCall: mcpCall{Method: "tools/list"}},

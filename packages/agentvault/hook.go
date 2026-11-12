@@ -439,10 +439,11 @@ func hookHeaders(header http.Header) map[string][]string {
 	return out
 }
 
-// The messages in a body the proxy read whole, so a refusal can answer each one.
-func hookMCPOf(prefix []byte, truncated bool) (*hookPayloadMCP, []jsonrpcMessage) {
+// The messages in a body the proxy read whole, so a refusal can answer each one. A body declared in a charset other
+// than UTF-8 is left unparsed, for the reason requestMediaType gives: the server may decode a different tool name.
+func hookMCPOf(prefix []byte, truncated bool, header http.Header) (*hookPayloadMCP, []jsonrpcMessage) {
 	out := &hookPayloadMCP{Calls: []hookMCPCall{}}
-	if truncated {
+	if _, isUTF8 := requestMediaType(header); truncated || !isUTF8 {
 		return out, nil
 	}
 	messages, ok := parseJSONRPCMessages(prefix)
@@ -479,7 +480,7 @@ func (ps *proxyServer) askHook(req *http.Request, t tunnel, svc *resolvedService
 	}
 	var messages []jsonrpcMessage
 	if svc.kind == serviceKindMCP {
-		payload.MCP, messages = hookMCPOf(prefix, truncated)
+		payload.MCP, messages = hookMCPOf(prefix, truncated, req.Header)
 	}
 
 	result := sharedHookClient().ask(req.Context(), svc.hook, &payload)
