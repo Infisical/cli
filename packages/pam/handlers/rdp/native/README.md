@@ -27,6 +27,14 @@ cargo build --release
 
 The static library is output to `target/release/libinfisical_rdp_bridge.a`.
 
+Then remove the LLVM bitcode Rust embeds in it. Since Go 1.26.11, `go build -tags rdp` refuses to link it from `target/release` otherwise (macOS and Linux):
+
+```bash
+./strip-llvm-bitcode.sh target/release
+```
+
+Cross builds linked with `CGO_LDFLAGS=-L target/<triple>/release`, as the release does, don't need it.
+
 ### Cross-compilation
 
 For Linux targets from any host:
