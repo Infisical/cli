@@ -105,6 +105,9 @@ jobs:
       - name: Build Rust RDP bridge
         working-directory: packages/pam/handlers/rdp/native
         run: cargo build --release
+      - name: Strip LLVM bitcode from the RDP bridge
+        working-directory: packages/pam/handlers/rdp/native
+        run: ./strip-llvm-bitcode.sh target/release
       - name: Build the CLI
         run: CGO_ENABLED=1 go build -tags rdp -o infisical-cli
       - name: Install RDP test dependencies
