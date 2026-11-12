@@ -309,15 +309,24 @@ func hookMCPRefusal(text string, messages []jsonrpcMessage, parsed, batch, strea
 		refusal.body = marshalJSONRPC(newJSONRPCError(nil, jsonrpcHookRefused, text))
 		return refusal
 	}
-	responses := make([]any, 0, len(messages))
-	for _, message := range messages {
+	// One answer carries the hook's text, so a long message in a long batch is not copied into every answer. It is
+	// the first tool call's when there is one: clients hand a tool result to the model but may hide an error.
+	carrier := -1
+	for i, message := range messages {
 		if message.id == nil {
 			continue
 		}
-		// Only the first answer carries the hook's text, so a long message in a long batch is not copied into
-		// every answer.
+		if carrier == -1 || (message.Method == mcpMethodToolsCall && messages[carrier].Method != mcpMethodToolsCall) {
+			carrier = i
+		}
+	}
+	responses := make([]any, 0, len(messages))
+	for i, message := range messages {
+		if message.id == nil {
+			continue
+		}
 		msg := text
-		if len(responses) > 0 {
+		if i != carrier {
 			msg = hookBatchRefusedMessage
 		}
 		if message.Method == mcpMethodToolsCall {

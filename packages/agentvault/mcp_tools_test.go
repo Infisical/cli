@@ -1135,6 +1135,18 @@ func TestOnlyTheFirstAnswerInAHookRefusedBatchCarriesTheHooksText(t *testing.T) 
 	}
 }
 
+func TestAHookRefusedBatchGivesTheHooksTextToTheFirstToolCall(t *testing.T) {
+	messages := []jsonrpcMessage{
+		{id: json.RawMessage("1"), mcpCall: mcpCall{Method: "tools/list"}},
+		{id: json.RawMessage("2"), mcpCall: mcpCall{Method: mcpMethodToolsCall, Tool: "merge"}},
+	}
+	refusal := hookDeniedMCPRefusal("Ask Ana first.", messages, true, true, true)
+	want := `[{"jsonrpc":"2.0","id":1,"error":{"code":-31000,"message":"` + hookBatchRefusedMessage + `"}},{"jsonrpc":"2.0","id":2,"result":{"isError":true,"content":[{"type":"text","text":"Ask Ana first."}]}}]`
+	if string(refusal.body) != want {
+		t.Fatalf("body %s", refusal.body)
+	}
+}
+
 func TestAnMCPHookFailureTellsTheClientWhenToRetry(t *testing.T) {
 	fake := newFakeHook(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) })
 	up := newMCPUpstream(t)
