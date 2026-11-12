@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
+	"github.com/Infisical/infisical-merge/packages/pam/session/masking"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
@@ -27,9 +28,9 @@ type SSHProxyConfig struct {
 	InjectCertificate      string
 	SessionID              string
 	SessionLogger          session.SessionLogger
-	BlockedCommandPatterns []*regexp.Regexp // Regex patterns for command blocking (nil = no blocking)
-	OutputMaskingPatterns  []*regexp.Regexp // Regex patterns for output masking (nil = no masking)
-	OnActivity             func()           // Called when channel data flows
+	BlockedCommandPatterns []*regexp.Regexp  // Regex patterns for command blocking (nil = no blocking)
+	OutputMaskingPatterns  []masking.Matcher // Matchers for output masking (nil = no masking)
+	OnActivity             func()            // Called when channel data flows
 }
 
 // SSHProxy handles proxying SSH connections with credential injection

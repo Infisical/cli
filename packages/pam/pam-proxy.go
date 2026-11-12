@@ -271,24 +271,28 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		)
 	}
 
-	var outputPatterns []*regexp.Regexp
+	var outputMatchers []masking.Matcher
 	var outputMasker masking.Masker
 	if credentials.PolicyRules != nil && credentials.PolicyRules.OutputMasking != nil {
-		for i, pattern := range credentials.PolicyRules.OutputMasking.Patterns {
+		rule := credentials.PolicyRules.OutputMasking
+		for i, pattern := range rule.Patterns {
 			re, err := regexp.Compile(pattern)
 			if err != nil {
 				// Fail closed, and keep the pattern out of the error since it can hold the value it masks.
 				return fmt.Errorf("output masking pattern %d does not compile", i+1)
 			}
-			outputPatterns = append(outputPatterns, re)
+			outputMatchers = append(outputMatchers, re)
 		}
-		if credentials.PolicyRules.OutputMasking.AccountCredentials {
+		if rule.AccountCredentials {
 			for _, secret := range masking.CredentialSecrets(credentialValues(credentials)) {
-				outputPatterns = append(outputPatterns, regexp.MustCompile(regexp.QuoteMeta(secret)))
+				outputMatchers = append(outputMatchers, regexp.MustCompile(regexp.QuoteMeta(secret)))
 			}
 		}
-		if len(outputPatterns) > 0 {
-			outputMasker = masking.New(outputPatterns, false, nil, pamConfig.SessionId)
+		if rule.CreditCards {
+			outputMatchers = append(outputMatchers, masking.CardNumbers())
+		}
+		if len(outputMatchers) > 0 {
+			outputMasker = masking.NewMatcherMasker(outputMatchers)
 		}
 	}
 
@@ -442,7 +446,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			SessionID:              pamConfig.SessionId,
 			SessionLogger:          sessionLogger,
 			BlockedCommandPatterns: blockedCommandPatterns,
-			OutputMaskingPatterns:  outputPatterns,
+			OutputMaskingPatterns:  outputMatchers,
 			OnActivity:             pamConfig.OnActivity,
 		}
 		proxy := ssh.NewSSHProxy(sshConfig)

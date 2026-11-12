@@ -3,7 +3,6 @@ package ssh
 import (
 	"bytes"
 	"io"
-	"regexp"
 	"sort"
 	"time"
 
@@ -93,7 +92,7 @@ func (p *SSHProxy) proxyMaskedOutput(src io.Reader, dst io.Writer, sessionID str
 }
 
 // Skips escape sequences when matching so color can't split a value, and keeps them after the placeholder.
-func maskTerminalOutput(patterns []*regexp.Regexp, data []byte) []byte {
+func maskTerminalOutput(patterns []masking.Matcher, data []byte) []byte {
 	plain := make([]byte, 0, len(data))
 	offsets := make([]int, 0, len(data))
 	for i := 0; i < len(data); {

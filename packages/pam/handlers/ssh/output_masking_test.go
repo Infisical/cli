@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Infisical/infisical-merge/packages/pam/session/masking"
 )
 
 type lockedBuffer struct {
@@ -30,7 +32,7 @@ func newOutputMaskingProxy() *SSHProxy {
 	return NewSSHProxy(SSHProxyConfig{
 		SessionID:     "sid",
 		SessionLogger: &recordingLogger{},
-		OutputMaskingPatterns: []*regexp.Regexp{
+		OutputMaskingPatterns: []masking.Matcher{
 			regexp.MustCompile(`token=\w+`),
 			regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`),
 		},

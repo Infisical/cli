@@ -1107,6 +1107,7 @@ type PAMSessionLogMaskingConfig struct {
 type PAMOutputMaskingConfig struct {
 	Patterns           []string `json:"patterns"`
 	AccountCredentials bool     `json:"accountCredentials"`
+	CreditCards        bool     `json:"creditCards"`
 }
 
 type PAMPolicyRules struct {
