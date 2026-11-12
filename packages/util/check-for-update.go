@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -296,6 +297,32 @@ func GetUpdateInstructions() string {
 	return getUpdateInstructions(runtime.GOOS, execPath)
 }
 
+var homebrewTapName = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]*/[a-z0-9][a-z0-9_.-]*$`)
+
+// homebrewFormula names the formula the way `brew upgrade` will act on it. Homebrew skips a formula
+// from a tap the user hasn't trusted when it's named by its short name, but trusts it when it's named
+// in full, so an install from a tap gets its full name. The tap comes from the receipt Homebrew writes
+// next to the binary (Cellar/infisical/<version>/INSTALL_RECEIPT.json).
+func homebrewFormula(execPath string) string {
+	receipt, err := os.ReadFile(filepath.Join(filepath.Dir(filepath.Dir(execPath)), "INSTALL_RECEIPT.json"))
+	if err != nil {
+		return "infisical"
+	}
+	var parsed struct {
+		Source struct {
+			Tap string `json:"tap"`
+		} `json:"source"`
+	}
+	if json.Unmarshal(receipt, &parsed) != nil {
+		return "infisical"
+	}
+	tap := parsed.Source.Tap
+	if tap == "" || tap == "homebrew/core" || !homebrewTapName.MatchString(tap) {
+		return "infisical"
+	}
+	return tap + "/infisical"
+}
+
 func getUpdateInstructions(goos string, execPath string) string {
 	p := strings.ToLower(execPath)
 	isNpm := strings.Contains(p, "node_modules")
@@ -306,7 +333,7 @@ func getUpdateInstructions(goos string, execPath string) string {
 			return "To update, run: npm update -g @infisical/cli"
 		}
 		if strings.Contains(p, "/homebrew/") || strings.Contains(p, "/cellar/") {
-			return "To update, run: brew update && brew upgrade infisical"
+			return "To update, run: brew update && brew upgrade " + homebrewFormula(execPath)
 		}
 		return ""
 	case "windows":

@@ -397,3 +397,35 @@ func TestWriteUpdateCheckCache_AtomicWrite(t *testing.T) {
 		t.Errorf("got permissions %o, want 0600", perm)
 	}
 }
+
+func TestHomebrewUpdateInstructionsNameTheTap(t *testing.T) {
+	keg := func(t *testing.T, receipt string) string {
+		dir := filepath.Join(t.TempDir(), "Cellar", "infisical", "0.45.0")
+		if err := os.MkdirAll(filepath.Join(dir, "bin"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if receipt != "" {
+			if err := os.WriteFile(filepath.Join(dir, "INSTALL_RECEIPT.json"), []byte(receipt), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return filepath.Join(dir, "bin", "infisical")
+	}
+	tests := []struct {
+		name, receipt, want string
+	}{
+		{"infisical tap", `{"source":{"tap":"infisical/get-cli"}}`, "brew update && brew upgrade infisical/get-cli/infisical"},
+		{"homebrew core", `{"source":{"tap":"homebrew/core"}}`, "brew update && brew upgrade infisical"},
+		{"no receipt", "", "brew update && brew upgrade infisical"},
+		{"unreadable receipt", `not json`, "brew update && brew upgrade infisical"},
+		{"no tap in receipt", `{"source":{}}`, "brew update && brew upgrade infisical"},
+		{"unsafe tap name", `{"source":{"tap":"evil/tap; rm -rf ~"}}`, "brew update && brew upgrade infisical"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := getUpdateInstructions("darwin", keg(t, tt.receipt)); got != "To update, run: "+tt.want {
+				t.Errorf("got %q, want %q", got, "To update, run: "+tt.want)
+			}
+		})
+	}
+}
