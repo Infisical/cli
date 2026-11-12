@@ -1106,6 +1106,7 @@ type PAMSessionLogMaskingConfig struct {
 
 type PAMPolicyRules struct {
 	CommandBlocking   *PAMPolicyRuleConfig        `json:"command-blocking,omitempty"`
+	OutputMasking     *PAMPolicyRuleConfig        `json:"output-masking,omitempty"`
 	SessionLogMasking *PAMSessionLogMaskingConfig `json:"session-log-masking,omitempty"`
 }
 
