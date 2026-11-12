@@ -1135,6 +1135,20 @@ func TestOnlyTheFirstAnswerInAHookRefusedBatchCarriesTheHooksText(t *testing.T) 
 	}
 }
 
+func TestAnMCPHookRefusalLogsTheFixedTextNotTheHooksMessage(t *testing.T) {
+	messages := []jsonrpcMessage{{id: json.RawMessage("1"), mcpCall: mcpCall{Method: mcpMethodToolsCall, Tool: "merge"}}}
+	denied := hookDeniedMCPRefusal("Customer Ana Silva's refund needs approval.", messages, true, false, true)
+	if denied.Error() != errHookDenied.Error() {
+		t.Fatalf("deny logs %q", denied.Error())
+	}
+	if !strings.Contains(string(denied.body), "Customer Ana Silva's refund needs approval.") {
+		t.Fatalf("the agent lost the message: %s", denied.body)
+	}
+	if failed := hookFailedMCPRefusal(messages, true, false, true); failed.Error() != errHookFailed.Error() {
+		t.Fatalf("failure logs %q", failed.Error())
+	}
+}
+
 func TestTheHooksMCPSummaryIsLeftUnparsedForANonUTF8Charset(t *testing.T) {
 	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_file"}}`)
 	utf7 := http.Header{"Content-Type": {"application/json; charset=utf-7"}}

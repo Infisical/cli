@@ -303,7 +303,13 @@ func hookFailedMCPRefusal(messages []jsonrpcMessage, parsed, batch, streamable b
 // model to act on. Every other request gets a JSON-RPC error with the same text, and delivery follows
 // unlistedToolRefusal, including on the event stream of a legacy SSE client.
 func hookMCPRefusal(text string, messages []jsonrpcMessage, parsed, batch, streamable bool, decision, code string, status int) *mcpToolRefusal {
-	refusal := &mcpToolRefusal{status: http.StatusOK, reason: text, decision: decision, code: code}
+	// The error is what the request log line records, so it is the same fixed text an HTTP refusal logs: the hook's
+	// message is for the agent, and its reason already goes on the log line.
+	reason := errHookFailed.Error()
+	if code == errorCodeHookDenied {
+		reason = errHookDenied.Error()
+	}
+	refusal := &mcpToolRefusal{status: http.StatusOK, reason: reason, decision: decision, code: code}
 	if !parsed {
 		refusal.status = status
 		refusal.body = marshalJSONRPC(newJSONRPCError(nil, jsonrpcHookRefused, text))
