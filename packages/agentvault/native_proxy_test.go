@@ -723,3 +723,72 @@ func startFakeMySQL(t *testing.T) string {
 type quietMySQLHandler struct{ mysqlserver.EmptyHandler }
 
 func (quietMySQLHandler) UseDB(string) error { return nil }
+
+func hookedNativeService(addr string, hook *serviceHook) *resolvedService {
+	svc := nativeServiceAt(serviceKindPostgres, "db", addr)
+	svc.hook = hook
+	return svc
+}
+
+func TestAProbeDoesNotAskTheHookButAConnectionDoes(t *testing.T) {
+	fake := newFakeHook(t, answerHook(`{"decision":"allow"}`))
+	upstream := startFakePostgres(t, "agent", "secret")
+	_, client, _ := newNativeProxy(t, []*resolvedService{hookedNativeService(upstream, fake.hook())})
+
+	if err := client.Probe(context.Background(), "db"); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(fake.calls()); got != 0 {
+		t.Fatalf("a probe asked the hook %d times", got)
+	}
+
+	tunnel, err := client.OpenTunnel(context.Background(), "db")
+	if err != nil {
+		t.Fatalf("an allowed connection was refused: %v", err)
+	}
+	_ = tunnel.Close()
+	p := fake.only(t).payload(t)
+	host, port, _ := net.SplitHostPort(upstream)
+	if p.Request != nil || p.MCP != nil || p.Connection == nil || *p.Connection != (hookPayloadConnection{Host: host, Port: port, Database: "app"}) ||
+		p.Service.Type != serviceKindPostgres {
+		t.Fatalf("payload = %s", fake.only(t).body)
+	}
+}
+
+func TestAHookRefusalOfAConnectionReachesConnectAndTheSessionLog(t *testing.T) {
+	long := strings.Repeat("<a&b>", 400)
+	for _, tc := range []struct {
+		name     string
+		answer   http.HandlerFunc
+		status   int
+		code     string
+		message  string
+		decision string
+		note     string
+	}{
+		{"deny", answerHook(`{"decision":"deny","message":"Ask Ana first.","reason":"after hours"}`), http.StatusForbidden, errorCodeHookDenied,
+			"Ask Ana first.", decisionBlocked, "The hook refused this connection: after hours"},
+		{"deny without a reason", answerHook(`{"decision":"deny","message":"Ask Ana first."}`), http.StatusForbidden, errorCodeHookDenied,
+			"Ask Ana first.", decisionBlocked, "The hook refused this connection: Ask Ana first."},
+		{"deny with a long message", answerHook(`{"decision":"deny","message":"` + long + `"}`), http.StatusForbidden, errorCodeHookDenied,
+			long[:maxNativeHookMessage], decisionBlocked, ""},
+		{"failure", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) }, http.StatusServiceUnavailable,
+			errorCodeHookFailed, hookFailedConnectionMessage, decisionError, hookFailedConnectionNote},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newFakeHook(t, tc.answer)
+			ps, client, _ := newNativeProxy(t, []*resolvedService{hookedNativeService("127.0.0.1:1", fake.hook())})
+
+			_, err := client.OpenTunnel(context.Background(), "db")
+			var refused *ProxyRefusedError
+			if !errors.As(err, &refused) || refused.Status != tc.status || refused.Code != tc.code || refused.Message != tc.message {
+				t.Fatalf("open: %#v", err)
+			}
+			records := nativeRecords(t, ps, 1)
+			if len(records) != 1 || records[0].Decision != tc.decision || records[0].Hook == nil || records[0].Native == nil ||
+				(tc.note != "" && records[0].Native.Note != tc.note) {
+				t.Fatalf("records = %s", recordJSON(t, records[0]))
+			}
+		})
+	}
+}

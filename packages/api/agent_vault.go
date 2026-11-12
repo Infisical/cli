@@ -122,6 +122,35 @@ type AgentVaultService struct {
 	PersonalValuesMissing bool `json:"personalValuesMissing"`
 	// Any credential field is left to each member. Older servers never send it, which decodes to false.
 	MemberProvided bool `json:"memberProvided"`
+	// Nil for a service sent inline with the session.
+	AccessBundleID *string `json:"accessBundleId"`
+	// Asked before each request, or each database or SSH connection. Nil when the service has none.
+	Hook *AgentVaultHook `json:"hook"`
+}
+
+type AgentVaultHook struct {
+	URL    string `json:"url"`
+	Secret string `json:"secret"`
+}
+
+// Who the session is for, as Infisical recorded it when the session was created. Older servers never send it.
+type AgentVaultResolvedSession struct {
+	Label      *string                      `json:"label"`
+	Actor      AgentVaultSessionActor       `json:"actor"`
+	OnBehalfOf *AgentVaultSessionOnBehalfOf `json:"onBehalfOf"`
+}
+
+type AgentVaultSessionActor struct {
+	Type  string  `json:"type"`
+	ID    string  `json:"id"`
+	Name  string  `json:"name"`
+	Email *string `json:"email"`
+}
+
+type AgentVaultSessionOnBehalfOf struct {
+	ID    string  `json:"id"`
+	Name  string  `json:"name"`
+	Email *string `json:"email"`
 }
 
 // Pointers, so a field the server leaves out is told apart from false and keeps the safe default.
@@ -149,10 +178,11 @@ type ResolveAgentVaultSessionRequest struct {
 }
 
 type ResolveAgentVaultSessionResponse struct {
-	SessionID   string                    `json:"sessionId"`
-	ExpiresAt   string                    `json:"expiresAt"`
-	Services    []AgentVaultService       `json:"services"`
-	SessionLogs AgentVaultSessionLogGrant `json:"sessionLogs"`
+	SessionID   string                     `json:"sessionId"`
+	ExpiresAt   string                     `json:"expiresAt"`
+	Services    []AgentVaultService        `json:"services"`
+	SessionLogs AgentVaultSessionLogGrant  `json:"sessionLogs"`
+	Session     *AgentVaultResolvedSession `json:"session"`
 }
 
 func CallResolveAgentVaultSession(httpClient *resty.Client, sessionToken string, request ResolveAgentVaultSessionRequest) (ResolveAgentVaultSessionResponse, error) {

@@ -1785,3 +1785,16 @@ func TestADrainedRingSlotHoldsNothing(t *testing.T) {
 		}
 	}
 }
+
+func TestAHookOutcomeCountsTowardARecordsSize(t *testing.T) {
+	rec := sessionLogRecord{Method: "GET", Decision: decisionBlocked}
+	without := rec.estimateSize()
+	rec.Hook = &hookOutcome{Decision: hookDeny, Reason: strings.Repeat("r", maxHookReason), DeliveryID: "018f3b4e-2a1c-7d10-9b2e-4c5d6e7f8091"}
+	if got := rec.estimateSize(); got < without+maxHookReason+36 {
+		t.Fatalf("size grew from %d to %d, less than the hook's fields", without, got)
+	}
+	b, _ := json.Marshal(rec.Hook)
+	if string(b) != `{"decision":"deny","reason":"`+strings.Repeat("r", maxHookReason)+`","durationMs":0,"deliveryId":"018f3b4e-2a1c-7d10-9b2e-4c5d6e7f8091"}` {
+		t.Fatalf("hook = %s", b)
+	}
+}

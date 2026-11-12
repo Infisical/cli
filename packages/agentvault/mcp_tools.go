@@ -18,6 +18,8 @@ import (
 const (
 	jsonrpcInvalidRequest = -32600
 	jsonrpcInvalidParams  = -32602
+	// Outside the range JSON-RPC and MCP reserve, which MCP asks of codes it doesn't define.
+	jsonrpcHookRefused = -31000
 
 	// Per message for a JSON response and per event for a stream. Anything larger is passed through as it
 	// came, since a call to a hidden tool is still refused on the way in.
@@ -33,11 +35,14 @@ const (
 	mcpNameHeader   = "Mcp-Name"
 )
 
-// A request the service's tool allowlist refuses, answered by the proxy so the upstream never sees it.
+// A request the service's tool allowlist or hook refuses, answered by the proxy so the upstream never sees it.
 type mcpToolRefusal struct {
 	status int
 	body   []byte
 	reason string
+	// Empty for the allowlist's own refusals, which are blocked and carry no code.
+	decision string
+	code     string
 	// For a legacy SSE client: the refusal can be sent on the event stream the server opened for this POST,
 	// as the server's own answer would be. streamEvent is what goes on it, nil when there is nothing to
 	// answer.
@@ -48,6 +53,9 @@ type mcpToolRefusal struct {
 func (r *mcpToolRefusal) Error() string { return r.reason }
 
 func (r *mcpToolRefusal) write(w http.ResponseWriter) {
+	if r.code != "" {
+		w.Header().Set(HeaderError, r.code)
+	}
 	if len(r.body) > 0 {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Content-Length", strconv.Itoa(len(r.body)))
@@ -65,6 +73,22 @@ type jsonrpcErrorResponse struct {
 type jsonrpcError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+}
+
+type jsonrpcToolErrorResponse struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Result  mcpToolResult   `json:"result"`
+}
+
+type mcpToolResult struct {
+	IsError bool             `json:"isError"`
+	Content []mcpTextContent `json:"content"`
+}
+
+type mcpTextContent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
 }
 
 // Every POST to a service with an allowlist is read here, up to maxToolsAllowlistBody, whether or not session
@@ -261,6 +285,62 @@ func unlistedToolRefusal(svc *resolvedService, tool string, messages []jsonrpcMe
 	return refusal
 }
 
+func hookDeniedMCPRefusal(message string, messages []jsonrpcMessage, parsed, batch, streamable bool) *mcpToolRefusal {
+	return hookMCPRefusal(message, messages, parsed, batch, streamable, decisionBlocked, errorCodeHookDenied, http.StatusForbidden)
+}
+
+func hookFailedMCPRefusal(messages []jsonrpcMessage, parsed, batch, streamable bool) *mcpToolRefusal {
+	return hookMCPRefusal(hookFailedRequestMessage, messages, parsed, batch, streamable, decisionError, errorCodeHookFailed, http.StatusServiceUnavailable)
+}
+
+// A tool call gets a tool result with isError set rather than a JSON-RPC error: MCP clients hand a tool's error
+// result to the model, but many replace a protocol error with a generic one, and the hook's message is for the
+// model to act on. Every other request gets a JSON-RPC error with the same text, and delivery follows
+// unlistedToolRefusal, including on the event stream of a legacy SSE client.
+func hookMCPRefusal(text string, messages []jsonrpcMessage, parsed, batch, streamable bool, decision, code string, status int) *mcpToolRefusal {
+	refusal := &mcpToolRefusal{status: http.StatusOK, reason: text, decision: decision, code: code}
+	if !parsed {
+		refusal.status = status
+		refusal.body = marshalJSONRPC(newJSONRPCError(nil, jsonrpcHookRefused, text))
+		return refusal
+	}
+	responses := make([]any, 0, len(messages))
+	for _, message := range messages {
+		if message.id == nil {
+			continue
+		}
+		if message.Method == mcpMethodToolsCall {
+			responses = append(responses, jsonrpcToolErrorResponse{
+				JSONRPC: "2.0",
+				ID:      message.id,
+				Result:  mcpToolResult{IsError: true, Content: []mcpTextContent{{Type: "text", Text: text}}},
+			})
+			continue
+		}
+		responses = append(responses, newJSONRPCError(message.id, jsonrpcHookRefused, text))
+	}
+
+	switch {
+	case len(responses) == 0 && streamable:
+		refusal.status = http.StatusAccepted
+		return refusal
+	case len(responses) == 0:
+		refusal.body = marshalJSONRPC(newJSONRPCError(nil, jsonrpcHookRefused, text))
+	case batch:
+		refusal.body = marshalJSONRPC(responses)
+	default:
+		refusal.body = marshalJSONRPC(responses[0])
+	}
+	if !streamable {
+		refusal.status = status
+		refusal.overStream = true
+		if len(responses) > 0 {
+			refusal.streamEvent = sseMessageEvent(refusal.body)
+		}
+	}
+	return refusal
+}
+
 func sseMessageEvent(data []byte) []byte {
 	event := make([]byte, 0, len(data)+len("event: message\ndata: \n\n"))
 	event = append(event, "event: message\ndata: "...)
@@ -318,7 +398,8 @@ func streamableHTTPClient(req *http.Request) bool {
 // the legacy transport's results, which arrive on another connection, need no tracking. The proxy drops the
 // agent's Accept-Encoding so Go decompresses the response first; a body compressed anyway, one over the cap,
 // and anything that does not parse pass through untouched. An event stream's filter is returned, so the
-// proxy can also send refusals on it.
+// proxy can also send refusals on it. A nil allowlist hides nothing and only watches an event stream, for a
+// hooked service whose refusals have to reach it.
 func hideUnlistedTools(resp *http.Response, allowed map[string]bool) *sseToolsFilter {
 	if resp.Body == nil || resp.Body == http.NoBody {
 		return nil
@@ -332,7 +413,9 @@ func hideUnlistedTools(resp *http.Response, allowed map[string]bool) *sseToolsFi
 	}
 	switch mediaType {
 	case "application/json":
-		hideUnlistedToolsInJSON(resp, allowed)
+		if allowed != nil {
+			hideUnlistedToolsInJSON(resp, allowed)
+		}
 	case "text/event-stream":
 		filter := newSSEToolsFilter(resp.Body, allowed)
 		resp.Body = filter
@@ -657,6 +740,9 @@ func isBlankSSELine(line []byte) bool {
 // An event whose data is a tools/list result is rebuilt with the filtered data on one data line where the
 // first one was; every other line keeps its place. Any other event is returned as it came.
 func rewriteSSEEvent(event []byte, allowed map[string]bool) []byte {
+	if allowed == nil {
+		return event
+	}
 	lines := splitSSELines(event)
 	var data [][]byte
 	for _, line := range lines {
@@ -783,7 +869,7 @@ func (r *sseStreamRegistry) deliver(session, service string, target *url.URL, re
 	if filter == nil || (refusal.streamEvent != nil && !filter.inject(refusal.streamEvent)) {
 		return refusal
 	}
-	return &mcpToolRefusal{status: http.StatusAccepted, reason: refusal.reason}
+	return &mcpToolRefusal{status: http.StatusAccepted, reason: refusal.reason, decision: refusal.decision, code: refusal.code}
 }
 
 // The URL as the proxy forwards it, so an endpoint the server wrote with or without the default port, or in

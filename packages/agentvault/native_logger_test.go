@@ -23,11 +23,11 @@ func newLoggerUnderTest(t *testing.T) (*nativeSessionLogger, *proxyServer) {
 	ps := &proxyServer{}
 	ps.cache = newSessionCache(grantingResolver{services: []*resolvedService{svc}}, ps.pollInterval)
 	ps.sessionLogs = newSessionLogRecorder("proxy-1", &fakeShipper{})
-	_, grant, err := ps.cache.lookup("agv_logger", nil)
+	found, err := ps.cache.lookup("agv_logger", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newNativeSessionLogger(ps, sessionKey("agv_logger"), grant, svc), ps
+	return newNativeSessionLogger(ps, sessionKey("agv_logger"), found.sessionLog, svc), ps
 }
 
 func loggedRecords(ps *proxyServer) []sessionLogRecord {

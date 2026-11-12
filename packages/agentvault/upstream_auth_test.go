@@ -2,6 +2,7 @@ package agentvault
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -411,7 +412,7 @@ func TestARememberedRefreshFailureExpires(t *testing.T) {
 	resolver := &oauthResolver{err: errors.New("dial tcp: connection refused")}
 	cache := newSessionCache(resolver, func() time.Duration { return time.Minute })
 	resolver.services = []*resolvedService{oauthMCPService("mcp.example", "old-token")}
-	if _, _, err := cache.lookup("tok", nil); err != nil {
+	if _, err := cache.lookup("tok", nil); err != nil {
 		t.Fatal(err)
 	}
 	sent := oauthToken("old-token")
@@ -1388,5 +1389,26 @@ func TestAnMCPEventStreamIsForwardedBeforeItCompletes(t *testing.T) {
 	}
 	if got := len(resolver.refreshCalls()); got != 0 {
 		t.Fatalf("a successful event stream triggered %d refreshes", got)
+	}
+}
+
+func TestAnOAuthResendAsksTheHookOnce(t *testing.T) {
+	fake := newFakeHook(t, answerHook(`{"decision":"allow"}`))
+	resolver := &oauthResolver{issue: oauthToken("new-token"), status: oauthStatusConnected}
+	client, host, up := newOAuthFixture(t, resolver, func(h string) *resolvedService {
+		svc := oauthMCPService(h, "old-token")
+		svc.hook = fake.hook()
+		return svc
+	}, acceptOnly("new-token"))
+
+	resp, body := doWith(t, client, http.MethodPost, fmt.Sprintf("https://%s/mcp", host), "application/json", strings.NewReader(mcpCallBody))
+	if resp.StatusCode != http.StatusOK || body != "ok" {
+		t.Fatalf("the retried request should have succeeded, got %d: %s", resp.StatusCode, body)
+	}
+	if hits := up.recorded(); len(hits) != 2 || hits[1].body != mcpCallBody {
+		t.Fatalf("upstream hits = %+v, want the original and a resend with the same body", hits)
+	}
+	if hit := fake.only(t); bytes.Contains(hit.body, []byte("old-token")) || bytes.Contains(hit.body, []byte("new-token")) {
+		t.Fatalf("a token reached the hook: %s", hit.body)
 	}
 }

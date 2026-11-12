@@ -142,7 +142,8 @@ func (ps *proxyServer) handleNativeConnect(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	services, grant, err := ps.cache.lookup(sessionToken, nil)
+	found, err := ps.cache.lookup(sessionToken, nil)
+	services, grant := found.services, found.sessionLog
 	if err != nil {
 		ps.denyAtGate(w, sessionToken, serviceName+NativeServiceSuffix, NativeServicePort, err)
 		return
@@ -161,7 +162,7 @@ func (ps *proxyServer) handleNativeConnect(w http.ResponseWriter, r *http.Reques
 			ps.refuseNative(w, sessionToken, serviceName, body)
 			return
 		}
-		ps.refuseNativeService(w, sessionToken, grant, svc, body)
+		ps.refuseNativeService(w, sessionToken, grant, svc, serviceRefusal(body))
 	}
 	if svc.personalValuesMissing {
 		refuse(errPersonalValuesMissing(svc).Error())
@@ -199,6 +200,17 @@ func (ps *proxyServer) handleNativeConnect(w http.ResponseWriter, r *http.Reques
 	}
 	defer ps.cache.releaseNative(conn)
 
+	// After every local refusal, so the hook is only asked about a connection the proxy would open, and under the
+	// connection's context, so a revoke during the call cancels it.
+	var hook *hookOutcome
+	if svc.hook != nil {
+		hook = ps.askNativeHook(conn.ctx, svc, found)
+		if hook.Decision != hookAllow {
+			ps.refuseNativeService(w, sessionToken, grant, svc, nativeHookRefusal(hook))
+			return
+		}
+	}
+
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "connection hijacking unsupported", http.StatusInternalServerError)
@@ -220,8 +232,11 @@ func (ps *proxyServer) handleNativeConnect(w http.ResponseWriter, r *http.Reques
 	logger := newNativeSessionLogger(ps, conn.key, grant, svc)
 	defer logger.Close()
 
-	log.Info().Str("service", svc.name).Str("kind", svc.kind).Str("sessionKey", conn.key).
-		Msg("agent-vault: native connection opened")
+	opened := log.Info().Str("service", svc.name).Str("kind", svc.kind).Str("sessionKey", conn.key)
+	if hook != nil {
+		opened = hook.logFields(opened)
+	}
+	opened.Msg("agent-vault: native connection opened")
 	client := &hangUpConn{Conn: clientConn}
 	err = serveNative(conn.ctx, client, svc, tlsConfig, logger)
 	if err != nil && conn.ctx.Err() == nil && !isClientHangUp(err) && !client.hungUp.Load() {
@@ -256,17 +271,42 @@ func (c *hangUpConn) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// What `connect` is told (body) and what the session log row says (note), which differ only for a hook's answer.
+type nativeRefusal struct {
+	decision string
+	status   int
+	code     string
+	body     string
+	note     string
+	hook     *hookOutcome
+}
+
+func serviceRefusal(body string) nativeRefusal {
+	return nativeRefusal{decision: decisionBlocked, status: http.StatusForbidden, code: errorCodeServiceRefused, body: body, note: body}
+}
+
 func (ps *proxyServer) refuseNative(w http.ResponseWriter, sessionToken, serviceName, body string) {
-	log.Warn().Str("service", serviceName).Str("sessionKey", sessionKey(sessionToken)).Str("reason", body).
-		Msg("agent-vault: refused a database or SSH connection")
-	writeProxyError(w, http.StatusForbidden, decisionBlocked, errorCodeServiceRefused, body)
+	ps.writeNativeRefusal(w, sessionToken, serviceName, serviceRefusal(body))
+}
+
+func (ps *proxyServer) writeNativeRefusal(w http.ResponseWriter, sessionToken, serviceName string, refusal nativeRefusal) {
+	event := log.Warn()
+	if refusal.decision == decisionError {
+		event = log.Error()
+	}
+	event = event.Str("service", serviceName).Str("sessionKey", sessionKey(sessionToken)).Str("reason", refusal.body)
+	if refusal.hook != nil {
+		event = refusal.hook.logFields(event)
+	}
+	event.Msg("agent-vault: refused a database or SSH connection")
+	writeProxyError(w, refusal.status, refusal.decision, refusal.code, refusal.body)
 }
 
 // refuseNativeService refuses a connection to a service the session has, and records it so the session log shows
 // the attempt.
-func (ps *proxyServer) refuseNativeService(w http.ResponseWriter, sessionToken string, grant *sessionLogGrant, svc *resolvedService, body string) {
-	newNativeSessionLogger(ps, sessionKey(sessionToken), grant, svc).recordOutcome(decisionBlocked, body)
-	ps.refuseNative(w, sessionToken, svc.name, body)
+func (ps *proxyServer) refuseNativeService(w http.ResponseWriter, sessionToken string, grant *sessionLogGrant, svc *resolvedService, refusal nativeRefusal) {
+	newNativeSessionLogger(ps, sessionKey(sessionToken), grant, svc).recordRefusal(refusal.decision, refusal.note, refusal.hook.sessionLogHook())
+	ps.writeNativeRefusal(w, sessionToken, svc.name, refusal)
 }
 
 func nativeTLSConfig(target nativeTarget) (*tls.Config, error) {

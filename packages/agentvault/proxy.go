@@ -680,8 +680,15 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, t tun
 	code := ""
 	var refusal *mcpToolRefusal
 	switch {
+	case errors.Is(err, errHookDenied):
+		decision, status, code, body = decisionBlocked, http.StatusForbidden, errorCodeHookDenied, outcome.hook.message
+	case errors.Is(err, errHookFailed):
+		decision, status, code, body = decisionError, http.StatusServiceUnavailable, errorCodeHookFailed, hookFailedRequestMessage
 	case errors.As(err, &refusal):
 		decision, status = decisionBlocked, refusal.status
+		if refusal.decision != "" {
+			decision = refusal.decision
+		}
 	case errors.Is(err, errHostBlocked):
 		decision, status, code, body = decisionBlocked, http.StatusForbidden, errorCodeHostNotAllowed, err.Error()
 	case errors.Is(err, errPolicyBlocked):
@@ -728,6 +735,9 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, t tun
 	if matched != nil {
 		event = event.Str("service", matched.name).Str("accessBundle", matched.accessBundleName)
 	}
+	if outcome.hook != nil {
+		event = outcome.hook.logFields(event)
+	}
 	if outcome.brokered && !strings.EqualFold(scheme, "https") {
 		event = event.Bool("plaintext", true)
 	}
@@ -759,6 +769,7 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, t tun
 			AccessBundle: bundle,
 			ServiceType:  serviceType,
 			MCP:          outcome.mcp,
+			Hook:         outcome.hook.sessionLogHook(),
 		})
 	}
 
@@ -828,16 +839,18 @@ type forwardOutcome struct {
 	substituted []string
 	sessionLog  *sessionLogGrant
 	mcp         *mcpDetail
+	hook        *hookOutcome
 }
 
 func (ps *proxyServer) forward(req *http.Request, t tunnel) (*http.Response, *resolvedService, forwardOutcome, error) {
 	scheme, hostname, port, sessionToken := t.scheme, t.hostname, t.port, t.sessionToken
 	var outcome forwardOutcome
 
-	services, grant, err := ps.cache.lookup(sessionToken, nil)
+	found, err := ps.cache.lookup(sessionToken, nil)
 	if err != nil {
 		return nil, nil, outcome, fmt.Errorf("%w: %w", errSessionResolve, err)
 	}
+	services, grant := found.services, found.sessionLog
 	outcome.sessionLog = grant
 
 	// TRACE and TRACK make the upstream reflect the injected credential back in the response body. Upper
@@ -917,6 +930,12 @@ func (ps *proxyServer) forward(req *http.Request, t tunnel) (*http.Response, *re
 			}
 		}
 
+		if matched.hook != nil {
+			if err := ps.askHook(req, t, matched, found, &outcome); err != nil {
+				return nil, matched, outcome, err
+			}
+		}
+
 		// Substitutions first, so an injected real value can never itself be rewritten. The credential last,
 		// so a custom header naming the credential's own header loses rather than replacing the token.
 		substituted, err := applySubstitutions(req, matched.name, matched.substitutions)
@@ -993,7 +1012,7 @@ func (ps *proxyServer) forward(req *http.Request, t tunnel) (*http.Response, *re
 			return nil, matched, outcome, err
 		}
 	}
-	if matched != nil && matched.kind == serviceKindMCP && matched.allowedTools != nil {
+	if matched != nil && matched.kind == serviceKindMCP && (matched.allowedTools != nil || matched.hook != nil) {
 		if stream := hideUnlistedTools(resp, matched.allowedTools); stream != nil {
 			ps.sseStreams.watch(stream, sessionToken, matched.id, *req.URL)
 		}

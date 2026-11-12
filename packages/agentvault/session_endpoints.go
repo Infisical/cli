@@ -100,7 +100,7 @@ func sessionRouteFor(t tunnel, path string) (sessionRoute, bool) {
 // serveSessionEndpoint answers a request for one of the session's endpoints on the session the tunnel carries. The session
 // is checked here rather than at the door, so a refused session's reason arrives as JSON, inside TLS for https.
 func (ps *proxyServer) serveSessionEndpoint(w http.ResponseWriter, r *http.Request, t tunnel, route sessionRoute) {
-	_, grant, err := ps.cache.lookup(t.sessionToken, nil)
+	found, err := ps.cache.lookup(t.sessionToken, nil)
 	if err != nil {
 		refusal := classifyGateRefusal(err)
 		refusal.event.Str("host", t.hostname).Str("sessionKey", sessionKey(t.sessionToken)).Str("decision", refusal.decision).
@@ -114,7 +114,7 @@ func (ps *proxyServer) serveSessionEndpoint(w http.ResponseWriter, r *http.Reque
 	method, path := truncateLogged(r.Method, maxLoggedMethodLen), truncatePath(requestPath(r))
 	log.Info().Str("method", method).Str("host", t.hostname).Str("path", path).Str("decision", decision).
 		Int("status", status).Msg("agent-vault: request")
-	ps.sessionLogs.record(grant, sessionLogRecord{
+	ps.sessionLogs.record(found.sessionLog, sessionLogRecord{
 		Method:   method,
 		Host:     t.hostname,
 		Port:     t.port,

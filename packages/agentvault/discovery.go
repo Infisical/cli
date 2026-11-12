@@ -225,6 +225,9 @@ func writeUncheckedProxyError(w http.ResponseWriter, status int, decision, code,
 func writeProxyErrorAPIURL(w http.ResponseWriter, status int, decision, code, message string, namesAPIURL bool) {
 	w.Header().Set(HeaderDecision, decision)
 	w.Header().Set(HeaderError, code)
+	if code == errorCodeHookFailed {
+		w.Header().Set("Retry-After", "5")
+	}
 	if apiURL := proxyAPIURL(); apiURL != "" && namesAPIURL {
 		w.Header().Set(HeaderAPIURL, apiURL)
 	}
@@ -270,6 +273,8 @@ const (
 	errorCodeInfisicalUnreachable = "infisical_unreachable"
 	errorCodeServiceRefused       = "service_refused"
 	errorCodeTLSRequired          = "tls_required"
+	errorCodeHookDenied           = "hook_denied"
+	errorCodeHookFailed           = "hook_failed"
 )
 
 var proxyErrorHints = map[string]string{
@@ -291,4 +296,8 @@ var proxyErrorHints = map[string]string{
 		"different password or key will not help. " + servicesURLPlaceholder + " lists the session's services and their status.",
 	errorCodeTLSRequired: "This is the Agent Vault proxy: database and SSH services are reached with infisical agent-vault connect, " +
 		"which talks to the proxy over TLS.",
+	errorCodeHookDenied: "This is the Agent Vault proxy, not the API: your organization's hook refused this request. Do what its " +
+		"message says, including whether to try again.",
+	errorCodeHookFailed: "This is the Agent Vault proxy, not the API. Try again in a moment; if it keeps failing, an admin has to " +
+		"check the hook server.",
 }

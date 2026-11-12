@@ -399,3 +399,38 @@ func TestCacheTimesIgnoreTheSleepingClock(t *testing.T) {
 		t.Fatal("a refresh stamps fetchedAt with a monotonic reading")
 	}
 }
+
+func TestTheSessionAHookIsToldAboutIsKeptAndRefreshed(t *testing.T) {
+	label := "Nightly refunds"
+	first := &api.AgentVaultResolvedSession{Label: &label, Actor: api.AgentVaultSessionActor{Type: "machineIdentity", ID: "a-1", Name: "agent"}}
+	svc := serviceWithSecret("v")
+	svc.hook = &serviceHook{secret: []byte("s")}
+	resolver := &stubResolver{result: &resolveResult{SessionID: "s1", Services: []*resolvedService{svc}, Session: first}}
+	cache := newTestCache(resolver)
+
+	found, err := cache.lookup("agv_token", nil)
+	if err != nil || found.session != first || found.sessionID != "s1" || found.services[0].hook != svc.hook {
+		t.Fatalf("lookup = %+v, %v", found, err)
+	}
+
+	second := &api.AgentVaultResolvedSession{Actor: api.AgentVaultSessionActor{Type: "user", ID: "u-1", Name: "Ana"}}
+	resolver.mu.Lock()
+	resolver.result = &resolveResult{SessionID: "s1", Services: []*resolvedService{svc}, Session: second}
+	resolver.mu.Unlock()
+	cache.refresh()
+	if found, _ := cache.lookup("agv_token", nil); found.session != second {
+		t.Fatalf("the refresh kept the old session info: %+v", found.session)
+	}
+}
+
+func TestACredentialSwapKeepsThePolledHook(t *testing.T) {
+	polledHook := &serviceHook{secret: []byte("new")}
+	polled := &resolvedService{id: "svc-1", hostPattern: "h", credential: oauthToken("stale"), hook: polledHook}
+	entry := &sessionEntry{swaps: map[string]*credentialSwap{"svc-1": {
+		installed: oauthToken("fresh"), hostPattern: "h", replaced: map[string]bool{credentialHash(&polled.credential): true}, gen: 2,
+	}}}
+	got := keepNewerSwaps(entry, []*resolvedService{polled}, 1)
+	if string(got[0].credential.value) != "fresh" || got[0].hook != polledHook {
+		t.Fatalf("merged service = %+v", got[0])
+	}
+}

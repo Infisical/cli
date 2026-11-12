@@ -1008,3 +1008,144 @@ func TestARepeatedEndpointKeepsOneRegistration(t *testing.T) {
 		t.Fatalf("the latest endpoint got %d", got.status)
 	}
 }
+
+func hookedMCPService(host string, hook *serviceHook) *resolvedService {
+	svc := mcpService(host)
+	svc.name = "github-mcp"
+	svc.hook = hook
+	return svc
+}
+
+func TestEveryMCPRequestAsksTheHook(t *testing.T) {
+	fake := newFakeHook(t, answerHook(`{"decision":"allow"}`))
+	up := newMCPUpstream(t)
+	client, _ := newMCPRecordingProxy(t, up, []*resolvedService{hookedMCPService(up.host(), fake.hook())})
+
+	for _, body := range []string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`,
+	} {
+		if res := proxiedPost(t, client, up.server.URL+"/mcp", "application/json", body, http.Header{"Accept": {streamableAccept}}); res.status != http.StatusOK {
+			t.Fatalf("status %d", res.status)
+		}
+		if got := <-up.bodies; string(got) != body {
+			t.Fatalf("upstream got %s", got)
+		}
+		<-up.auth
+	}
+	calls := fake.calls()
+	if len(calls) != 2 {
+		t.Fatalf("the hook was asked %d times, want 2", len(calls))
+	}
+	want := &hookPayloadMCP{Calls: []hookMCPCall{{ID: json.RawMessage("2"), Method: "tools/list"}}, Parsed: true}
+	if got := calls[1].payload(t).MCP; !reflect.DeepEqual(got, want) {
+		t.Fatalf("mcp = %+v", got)
+	}
+}
+
+func TestAHookDenialOfAToolCallIsAToolErrorResult(t *testing.T) {
+	fake := newFakeHook(t, answerHook(`{"decision":"deny","message":"Ask Ana first.","reason":"needs approval"}`))
+	up := newMCPUpstream(t)
+	client, log := newMCPRecordingProxy(t, up, []*resolvedService{hookedMCPService(up.host(), fake.hook())})
+
+	body := `{"jsonrpc":"2.0","id":"abc","method":"tools/call","params":{"name":"merge_pull_request","arguments":{}}}`
+	res := proxiedPost(t, client, up.server.URL+"/mcp", "application/json", body, http.Header{"Accept": {streamableAccept}})
+	assertUpstreamSawNothing(t, up)
+	want := `{"jsonrpc":"2.0","id":"abc","result":{"isError":true,"content":[{"type":"text","text":"Ask Ana first."}]}}`
+	if res.status != http.StatusOK || res.body != want {
+		t.Fatalf("status %d body\n%s\nwant\n%s", res.status, res.body, want)
+	}
+	if res.header.Get(HeaderError) != errorCodeHookDenied || res.header.Get(HeaderDecision) != decisionBlocked {
+		t.Fatalf("headers = %v", res.header)
+	}
+	if p := fake.only(t).payload(t).MCP; !reflect.DeepEqual(p.Calls, []hookMCPCall{{ID: json.RawMessage(`"abc"`), Method: "tools/call", Tool: "merge_pull_request"}}) {
+		t.Fatalf("mcp = %+v", p)
+	}
+	rec := drainOneRecord(t, log)
+	if rec.Decision != decisionBlocked || rec.Hook == nil || rec.Hook.Reason != "needs approval" {
+		t.Fatalf("record = %s", recordJSON(t, rec))
+	}
+}
+
+func TestAHookFailureOnAnotherMCPRequestIsAJSONRPCError(t *testing.T) {
+	fake := newFakeHook(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) })
+	up := newMCPUpstream(t)
+	client, log := newMCPRecordingProxy(t, up, []*resolvedService{hookedMCPService(up.host(), fake.hook())})
+
+	res := proxiedPost(t, client, up.server.URL+"/mcp", "application/json", `{"jsonrpc":"2.0","id":7,"method":"tools/list"}`, http.Header{"Accept": {streamableAccept}})
+	assertUpstreamSawNothing(t, up)
+	want := `{"jsonrpc":"2.0","id":7,"error":{"code":-31000,"message":"` + hookFailedRequestMessage + `"}}`
+	if res.status != http.StatusOK || res.body != want {
+		t.Fatalf("status %d body %s", res.status, res.body)
+	}
+	if res.header.Get(HeaderError) != errorCodeHookFailed || res.header.Get(HeaderDecision) != decisionError {
+		t.Fatalf("headers = %v", res.header)
+	}
+	if rec := drainOneRecord(t, log); rec.Decision != decisionError || rec.Hook == nil || rec.Hook.Cause != "status_500" {
+		t.Fatalf("record = %s", recordJSON(t, rec))
+	}
+}
+
+func TestAHookRefusalAnswersEveryIDInABatch(t *testing.T) {
+	fake := newFakeHook(t, answerHook(`{"decision":"deny","message":"no"}`))
+	up := newMCPUpstream(t)
+	client, _ := newMCPRecordingProxy(t, up, []*resolvedService{hookedMCPService(up.host(), fake.hook())})
+
+	batch := `[{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"a"}},{"jsonrpc":"2.0","id":2,"method":"tools/list"},{"jsonrpc":"2.0","method":"notifications/initialized"}]`
+	res := proxiedPost(t, client, up.server.URL+"/mcp", "application/json", batch, http.Header{"Accept": {streamableAccept}})
+	want := `[{"jsonrpc":"2.0","id":1,"result":{"isError":true,"content":[{"type":"text","text":"no"}]}},{"jsonrpc":"2.0","id":2,"error":{"code":-31000,"message":"no"}}]`
+	if res.status != http.StatusOK || res.body != want {
+		t.Fatalf("status %d body %s", res.status, res.body)
+	}
+
+	res = proxiedPost(t, client, up.server.URL+"/mcp", "application/json", `{"jsonrpc":"2.0","method":"notifications/initialized"}`, http.Header{"Accept": {streamableAccept}})
+	if res.status != http.StatusAccepted || res.body != "" {
+		t.Fatalf("a notification got status %d body %s", res.status, res.body)
+	}
+
+	res = proxiedPost(t, client, up.server.URL+"/mcp", "application/json", `{"jsonrpc":`, http.Header{"Accept": {streamableAccept}})
+	if res.status != http.StatusForbidden || res.body != `{"jsonrpc":"2.0","id":null,"error":{"code":-31000,"message":"no"}}` {
+		t.Fatalf("an unreadable body got status %d body %s", res.status, res.body)
+	}
+	assertUpstreamSawNothing(t, up)
+}
+
+func TestAHookRefusalReachesALegacySSEStream(t *testing.T) {
+	var fake *fakeHook
+	fake = newFakeHook(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls := fake.calls()
+		var p hookPayload
+		if json.Unmarshal(calls[len(calls)-1].body, &p) == nil && p.Request != nil && p.Request.Method == http.MethodGet {
+			_, _ = io.WriteString(w, `{"decision":"allow"}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"decision":"deny","message":"Ask Ana first."}`)
+	})
+	upstream, posts := newLegacySSEUpstream(t)
+	host := strings.TrimPrefix(upstream.URL, "https://")
+	_, client := newTLSProxy(t, upstream, fixedResolver{services: []*resolvedService{hookedMCPService(host, fake.hook())}})
+
+	resp, err := client.Get(upstream.URL + "/sse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	stream := bufio.NewReader(resp.Body)
+	if event := readSSEEvent(t, stream); !strings.Contains(event, "/messages?sessionId=abc") {
+		t.Fatalf("endpoint event = %q", event)
+	}
+
+	res := proxiedPost(t, client, upstream.URL+"/messages?sessionId=abc", "application/json", `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"merge"}}`, nil)
+	if res.status != http.StatusAccepted || res.body != "" || res.header.Get(HeaderError) != errorCodeHookDenied {
+		t.Fatalf("status %d body %s headers %v", res.status, res.body, res.header)
+	}
+	event := readSSEEvent(t, stream)
+	if !strings.Contains(event, `"id":4`) || !strings.Contains(event, `"isError":true`) || !strings.Contains(event, "Ask Ana first.") {
+		t.Fatalf("event = %q", event)
+	}
+	select {
+	case got := <-posts:
+		t.Fatalf("the upstream got a refused call: %s", got)
+	default:
+	}
+}

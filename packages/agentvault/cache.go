@@ -63,6 +63,7 @@ type resolvedService struct {
 	id               string
 	name             string
 	kind             string
+	accessBundleID   string
 	accessBundleName string
 	// As Infisical sent it, so a credential refresh can name the destination the rejected token went to.
 	hostPattern  string
@@ -82,6 +83,8 @@ type resolvedService struct {
 	native *nativeTarget
 	// Some credential field comes from each member, so a rejection is theirs to fix rather than an admin's.
 	memberProvided bool
+	// Asked before the credential is attached. Nil when the service has none.
+	hook *serviceHook
 }
 
 // lastSeen and fetchedAt are wall-clock (Round(0)) so time asleep counts toward the grace and idle windows.
@@ -92,8 +95,10 @@ type sessionEntry struct {
 	expiresAt  *time.Time
 	services   []*resolvedService
 	sessionLog *sessionLogGrant
-	lastSeen   time.Time
-	fetchedAt  time.Time
+	// What a hook is told about the session. Nil from servers that don't send it.
+	session   *api.AgentVaultResolvedSession
+	lastSeen  time.Time
+	fetchedAt time.Time
 	// Keyed by service ID. A poll whose resolve began before a swap can return the token that swap replaced,
 	// so the merge consults this to keep the newer one.
 	swaps map[string]*credentialSwap
@@ -245,23 +250,25 @@ func isSessionGone(err error) bool {
 }
 
 func (c *sessionCache) get(sessionToken string) ([]*resolvedService, error) {
-	services, _, err := c.lookup(sessionToken, nil)
-	return services, err
+	found, err := c.lookup(sessionToken, nil)
+	return found.services, err
 }
 
 // getAdmitted is get for a caller that rations lookups of tokens it hasn't seen: admit runs only when Infisical
 // would be asked, so a known session, or one already refused, never spends from the budget.
 func (c *sessionCache) getAdmitted(sessionToken string, admit func() bool) ([]*resolvedService, error) {
-	services, _, err := c.lookup(sessionToken, admit)
-	return services, err
+	found, err := c.lookup(sessionToken, admit)
+	return found.services, err
 }
 
 type cacheLookup struct {
+	sessionID  string
 	services   []*resolvedService
 	sessionLog *sessionLogGrant
+	session    *api.AgentVaultResolvedSession
 }
 
-func (c *sessionCache) lookup(sessionToken string, admit func() bool) ([]*resolvedService, *sessionLogGrant, error) {
+func (c *sessionCache) lookup(sessionToken string, admit func() bool) (cacheLookup, error) {
 	key := sessionKey(sessionToken)
 
 	c.mu.Lock()
@@ -270,22 +277,22 @@ func (c *sessionCache) lookup(sessionToken string, admit func() bool) ([]*resolv
 		if entry.expiresAt != nil && time.Now().After(*entry.expiresAt) {
 			c.forgetLocked(key, true)
 			c.mu.Unlock()
-			return nil, nil, errSessionGone
+			return cacheLookup{}, errSessionGone
 		}
 		// Past the grace window the entry is a miss, so a stalled refresh loop cannot keep an old credential alive.
 		if time.Since(entry.fetchedAt) > c.grace() {
 			c.forgetLocked(key, false)
 		} else {
 			entry.lastSeen = time.Now().Round(0)
-			svcs, grant := entry.services, entry.sessionLog
+			found := cacheLookup{sessionID: entry.sessionID, services: entry.services, sessionLog: entry.sessionLog, session: entry.session}
 			c.mu.Unlock()
-			return svcs, grant, nil
+			return found, nil
 		}
 	}
 	if refused, ok := c.refused[key]; ok {
 		if time.Now().Before(refused.until) {
 			c.mu.Unlock()
-			return nil, nil, refused.err
+			return cacheLookup{}, refused.err
 		}
 		delete(c.refused, key)
 	}
@@ -317,18 +324,18 @@ func (c *sessionCache) lookup(sessionToken string, admit func() bool) ([]*resolv
 			expiresAt:  result.ExpiresAt,
 			services:   result.Services,
 			sessionLog: result.SessionLog,
+			session:    result.Session,
 			lastSeen:   time.Now().Round(0),
 			fetchedAt:  time.Now().Round(0),
 		}
 		c.tokens[key] = sessionToken
 		c.applyNativeLocked(key, result.Services, result.ExpiresAt)
-		return cacheLookup{services: result.Services, sessionLog: result.SessionLog}, nil
+		return cacheLookup{sessionID: result.SessionID, services: result.Services, sessionLog: result.SessionLog, session: result.Session}, nil
 	})
 	if err != nil {
-		return nil, nil, err
+		return cacheLookup{}, err
 	}
-	out := resolved.(cacheLookup)
-	return out.services, out.sessionLog, nil
+	return resolved.(cacheLookup), nil
 }
 
 func (c *sessionCache) evictIfFullLocked() {
@@ -440,6 +447,7 @@ func (c *sessionCache) refreshOne(key, token string) {
 		entry.expiresAt = result.ExpiresAt
 		entry.services = keepNewerSwaps(entry, result.Services, startGen)
 		entry.sessionLog = result.SessionLog
+		entry.session = result.Session
 		entry.fetchedAt = time.Now().Round(0)
 		c.applyNativeLocked(key, entry.services, entry.expiresAt)
 		return
@@ -451,6 +459,7 @@ func (c *sessionCache) refreshOne(key, token string) {
 			expiresAt:  result.ExpiresAt,
 			services:   result.Services,
 			sessionLog: result.SessionLog,
+			session:    result.Session,
 			lastSeen:   time.Now().Round(0),
 			fetchedAt:  time.Now().Round(0),
 		}
