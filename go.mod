@@ -7,7 +7,6 @@ require (
 	github.com/Azure/go-ntlmssp v0.1.1
 	github.com/ClickHouse/ch-go v0.74.0
 	github.com/Masterminds/sprig/v3 v3.3.0
-	github.com/alessio/shellescape v1.4.1
 	github.com/awnumar/memguard v0.23.0
 	github.com/aws/aws-sdk-go-v2 v1.27.2
 	github.com/betterleaks/go-re2 v1.11.0-betterleaks.3
@@ -89,6 +88,7 @@ require (
 	github.com/Masterminds/goutils v1.1.1 // indirect
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect
 	github.com/STARRY-S/zip v0.2.3 // indirect
+	github.com/alessio/shellescape v1.4.1 // indirect
 	github.com/andybalholm/brotli v1.2.8 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20200907205600-7a23bdc65eef // indirect
 	github.com/awnumar/memcall v0.4.0 // indirect
