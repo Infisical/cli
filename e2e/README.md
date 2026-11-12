@@ -214,11 +214,12 @@ go test -v -timeout 5m -count=1 -run TestPAM_Redis/acl-over-ssl github.com/infis
 
 The RDP tests have additional prerequisites beyond the other PAM tests because the CLI must be built with the Rust RDP bridge.
 
-1. Build the Rust RDP bridge:
+1. Build the Rust RDP bridge, then remove the LLVM bitcode Rust embeds in it. Since Go 1.26.11, `go build -tags rdp` refuses to link the bridge otherwise:
 
    ```bash
    cd packages/pam/handlers/rdp/native
    cargo build --release
+   ./strip-llvm-bitcode.sh target/release
    ```
 
 2. Build the CLI with the `rdp` build tag (from the repo root):
