@@ -367,3 +367,15 @@ func TestAConnectWarningIsCleanedBeforeItPrints(t *testing.T) {
 		t.Fatalf("warning %q, want it to start with the service name", got)
 	}
 }
+
+func TestAServiceRefusalCapitalisesItsFirstLetterNotItsFirstByte(t *testing.T) {
+	err := classifyAgentVaultConnectError(&agentvault.ProxyRefusedError{Status: http.StatusForbidden, Message: "élevé privileges are required"}, "p:1")
+	var cliErr *util.CLIError
+	if !errors.As(err, &cliErr) || cliErr.Message != "Élevé privileges are required." {
+		t.Fatalf("got %v", err)
+	}
+	err = classifyAgentVaultConnectError(&agentvault.ProxyRefusedError{Status: http.StatusForbidden}, "p:1")
+	if !errors.As(err, &cliErr) || cliErr.Message != "." {
+		t.Fatalf("an empty message got %v", err)
+	}
+}

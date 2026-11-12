@@ -1093,7 +1093,7 @@ func TestAHookRefusalAnswersEveryIDInABatch(t *testing.T) {
 
 	batch := `[{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"a"}},{"jsonrpc":"2.0","id":2,"method":"tools/list"},{"jsonrpc":"2.0","method":"notifications/initialized"}]`
 	res := proxiedPost(t, client, up.server.URL+"/mcp", "application/json", batch, http.Header{"Accept": {streamableAccept}})
-	want := `[{"jsonrpc":"2.0","id":1,"result":{"isError":true,"content":[{"type":"text","text":"no"}]}},{"jsonrpc":"2.0","id":2,"error":{"code":-31000,"message":"no"}}]`
+	want := `[{"jsonrpc":"2.0","id":1,"result":{"isError":true,"content":[{"type":"text","text":"no"}]}},{"jsonrpc":"2.0","id":2,"error":{"code":-31000,"message":"` + hookBatchRefusedMessage + `"}}]`
 	if res.status != http.StatusOK || res.body != want {
 		t.Fatalf("status %d body %s", res.status, res.body)
 	}
@@ -1108,6 +1108,68 @@ func TestAHookRefusalAnswersEveryIDInABatch(t *testing.T) {
 		t.Fatalf("an unreadable body got status %d body %s", res.status, res.body)
 	}
 	assertUpstreamSawNothing(t, up)
+}
+
+func TestOnlyTheFirstAnswerInAHookRefusedBatchCarriesTheHooksText(t *testing.T) {
+	text := strings.Repeat("x", 1000)
+	messages := make([]jsonrpcMessage, 0, 500)
+	for i := range 500 {
+		message := jsonrpcMessage{id: json.RawMessage(strconv.Itoa(i)), mcpCall: mcpCall{Method: "tools/list"}}
+		if i%2 == 0 {
+			message.Method = mcpMethodToolsCall
+		}
+		messages = append(messages, message)
+	}
+	refusal := hookDeniedMCPRefusal(text, messages, true, true, true)
+	if n := strings.Count(string(refusal.body), text); n != 1 {
+		t.Fatalf("the hook's text appears %d times", n)
+	}
+	if n := strings.Count(string(refusal.body), hookBatchRefusedMessage); n != 499 {
+		t.Fatalf("the batch line appears %d times, want 499", n)
+	}
+	if len(refusal.body) > 100_000 {
+		t.Fatalf("body is %d bytes", len(refusal.body))
+	}
+	if !strings.HasPrefix(string(refusal.body), `[{"jsonrpc":"2.0","id":0,"result":{"isError":true,"content":[{"type":"text","text":"`+text+`"}]}},{"jsonrpc":"2.0","id":1,"error":{"code":-31000,"message":"`+hookBatchRefusedMessage+`"}},{"jsonrpc":"2.0","id":2,"result":{"isError":true,"content":[{"type":"text","text":"`+hookBatchRefusedMessage+`"}]}}`) {
+		t.Fatalf("body starts %s", refusal.body[:min(len(refusal.body), 1500)])
+	}
+}
+
+func TestAnMCPHookFailureTellsTheClientWhenToRetry(t *testing.T) {
+	fake := newFakeHook(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) })
+	up := newMCPUpstream(t)
+	client, _ := newMCPRecordingProxy(t, up, []*resolvedService{hookedMCPService(up.host(), fake.hook())})
+
+	res := proxiedPost(t, client, up.server.URL+"/mcp", "application/json", `{"jsonrpc":`, http.Header{"Accept": {streamableAccept}})
+	assertUpstreamSawNothing(t, up)
+	if res.status != http.StatusServiceUnavailable || res.header.Get(HeaderError) != errorCodeHookFailed {
+		t.Fatalf("status %d headers %v", res.status, res.header)
+	}
+	if got := res.header.Get("Retry-After"); got != hookFailedRetryAfter {
+		t.Fatalf("Retry-After = %q", got)
+	}
+}
+
+func TestAHookedMCPServiceWithoutAnAllowlistStillDropsAcceptEncoding(t *testing.T) {
+	fake := newFakeHook(t, answerHook(`{"decision":"allow"}`))
+	sawEncoding := make(chan string, 1)
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawEncoding <- r.Header.Get("Accept-Encoding")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":3,"result":{}}`)
+	}))
+	t.Cleanup(upstream.Close)
+	host := strings.TrimPrefix(upstream.URL, "https://")
+	_, client := newTLSProxy(t, upstream, fixedResolver{services: []*resolvedService{hookedMCPService(host, fake.hook())}})
+
+	res := proxiedPost(t, client, upstream.URL+"/mcp", "application/json", `{"jsonrpc":"2.0","id":3,"method":"tools/list"}`,
+		http.Header{"Accept": {streamableAccept}, "Accept-Encoding": {"br, deflate"}})
+	if got := <-sawEncoding; got != "gzip" {
+		t.Fatalf("upstream saw Accept-Encoding %q, want the transport's own gzip", got)
+	}
+	if res.status != http.StatusOK {
+		t.Fatalf("status %d body %s", res.status, res.body)
+	}
 }
 
 func TestAHookRefusalReachesALegacySSEStream(t *testing.T) {

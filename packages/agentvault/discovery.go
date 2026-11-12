@@ -222,11 +222,14 @@ func writeUncheckedProxyError(w http.ResponseWriter, status int, decision, code,
 	writeProxyErrorAPIURL(w, status, decision, code, message, false)
 }
 
+// Seconds a client waits before retrying a request the hook couldn't answer.
+const hookFailedRetryAfter = "5"
+
 func writeProxyErrorAPIURL(w http.ResponseWriter, status int, decision, code, message string, namesAPIURL bool) {
 	w.Header().Set(HeaderDecision, decision)
 	w.Header().Set(HeaderError, code)
 	if code == errorCodeHookFailed {
-		w.Header().Set("Retry-After", "5")
+		w.Header().Set("Retry-After", hookFailedRetryAfter)
 	}
 	if apiURL := proxyAPIURL(); apiURL != "" && namesAPIURL {
 		w.Header().Set(HeaderAPIURL, apiURL)

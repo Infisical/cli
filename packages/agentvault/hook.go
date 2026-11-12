@@ -111,7 +111,7 @@ func (o *hookOutcome) sessionLogHook() *hookOutcome {
 	if o == nil || o.Decision == hookAllow {
 		return nil
 	}
-	return o
+	return &hookOutcome{Decision: o.Decision, Reason: o.Reason, Cause: o.Cause, DurationMs: o.DurationMs, DeliveryID: o.DeliveryID}
 }
 
 func (o *hookOutcome) logFields(event *zerolog.Event) *zerolog.Event {
@@ -347,7 +347,7 @@ func cleanHookText(s string, limit int) string {
 	var b strings.Builder
 	for _, r := range strings.ToValidUTF8(s, "") {
 		switch {
-		case r == '\n' || r == '\r' || r == '\t' || r == ' ' || r == ' ':
+		case r == '\n' || r == '\r' || r == '\t' || r == '\u2028' || r == '\u2029':
 			r = ' '
 		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r):
 			continue

@@ -56,6 +56,9 @@ func (r *mcpToolRefusal) write(w http.ResponseWriter) {
 	if r.code != "" {
 		w.Header().Set(HeaderError, r.code)
 	}
+	if r.code == errorCodeHookFailed {
+		w.Header().Set("Retry-After", hookFailedRetryAfter)
+	}
 	if len(r.body) > 0 {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Content-Length", strconv.Itoa(len(r.body)))
@@ -285,6 +288,8 @@ func unlistedToolRefusal(svc *resolvedService, tool string, messages []jsonrpcMe
 	return refusal
 }
 
+const hookBatchRefusedMessage = "This batch was refused by your organization's hook."
+
 func hookDeniedMCPRefusal(message string, messages []jsonrpcMessage, parsed, batch, streamable bool) *mcpToolRefusal {
 	return hookMCPRefusal(message, messages, parsed, batch, streamable, decisionBlocked, errorCodeHookDenied, http.StatusForbidden)
 }
@@ -309,15 +314,21 @@ func hookMCPRefusal(text string, messages []jsonrpcMessage, parsed, batch, strea
 		if message.id == nil {
 			continue
 		}
+		// Only the first answer carries the hook's text, so a long message in a long batch is not copied into
+		// every answer.
+		msg := text
+		if len(responses) > 0 {
+			msg = hookBatchRefusedMessage
+		}
 		if message.Method == mcpMethodToolsCall {
 			responses = append(responses, jsonrpcToolErrorResponse{
 				JSONRPC: "2.0",
 				ID:      message.id,
-				Result:  mcpToolResult{IsError: true, Content: []mcpTextContent{{Type: "text", Text: text}}},
+				Result:  mcpToolResult{IsError: true, Content: []mcpTextContent{{Type: "text", Text: msg}}},
 			})
 			continue
 		}
-		responses = append(responses, newJSONRPCError(message.id, jsonrpcHookRefused, text))
+		responses = append(responses, newJSONRPCError(message.id, jsonrpcHookRefused, msg))
 	}
 
 	switch {

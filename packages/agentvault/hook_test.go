@@ -8,11 +8,13 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -397,5 +399,18 @@ func TestAnHTTPSHookIsVerifiedAgainstTheTrustedRoots(t *testing.T) {
 	pool.AddCert(srv.Certificate())
 	if result := newHookClient(pool).ask(context.Background(), hook, testHookPayload()); result.Decision != hookAllow {
 		t.Fatalf("a trusted certificate gave %+v (%v)", result, result.err)
+	}
+}
+
+func TestTheSessionLogCopyOfAHookOutcomeLeavesOutTheMessage(t *testing.T) {
+	o := &hookOutcome{Decision: hookDeny, Reason: "needs approval", Cause: "", DurationMs: 12, DeliveryID: "d1",
+		message: "Ask Ana first.", err: errors.New("boom"), origin: "https://hook.example"}
+	got := o.sessionLogHook()
+	want := &hookOutcome{Decision: hookDeny, Reason: "needs approval", DurationMs: 12, DeliveryID: "d1"}
+	if got == o || !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v", got)
+	}
+	if (&hookOutcome{Decision: hookAllow}).sessionLogHook() != nil {
+		t.Fatal("an allowed call was recorded")
 	}
 }

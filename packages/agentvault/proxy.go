@@ -975,9 +975,9 @@ func (ps *proxyServer) forward(req *http.Request, t tunnel) (*http.Response, *re
 				)
 			}
 		}
-		if matched.kind == serviceKindMCP && matched.allowedTools != nil {
+		if matched.kind == serviceKindMCP && (matched.allowedTools != nil || matched.hook != nil) {
 			// Go then asks for gzip itself and hands back the response decompressed, so a tools/list result
-			// can be filtered whatever encodings the agent accepts.
+			// can be filtered, and a legacy SSE stream watched, whatever encodings the agent accepts.
 			req.Header.Del("Accept-Encoding")
 		}
 	}
