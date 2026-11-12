@@ -289,38 +289,3 @@ func TestMaskingChecksFunctionCallResults(t *testing.T) {
 		}
 	}
 }
-
-func TestCopiesToClient(t *testing.T) {
-	for sql, want := range map[string]bool{
-		"COPY cards TO STDOUT": true,
-		"copy (select card from cards) to stdout with (format csv)":             true,
-		"SELECT 1; /* note */ COPY cards TO STDOUT; INSERT INTO log VALUES (1)": true,
-		"COPY cards FROM STDIN":                     false,
-		"COPY cards TO '/tmp/cards.csv'":            false,
-		"SELECT 'COPY cards TO STDOUT'":             false,
-		"SELECT E'it\\'s; COPY cards TO STDOUT'":    false,
-		"SELECT $$COPY cards TO STDOUT$$":           false,
-		"SELECT $body$; COPY cards TO STDOUT$body$": false,
-		"SELECT \"COPY x TO STDOUT\" FROM t":        false,
-		"-- COPY cards TO STDOUT\nSELECT 1":         false,
-		"SELECT a$b$c FROM t; COPY cards TO STDOUT": true,
-	} {
-		if got := copiesToClient(sql); got != want {
-			t.Errorf("copiesToClient(%q) = %v, want %v", sql, got, want)
-		}
-	}
-}
-
-func TestMaskingSwapsCopyToClientBeforeItRuns(t *testing.T) {
-	query := rejectCopyToClient(&pgproto3.Query{String: "COPY cards TO STDOUT; INSERT INTO log VALUES (1)"})
-	if q := query.(*pgproto3.Query).String; q != blockedCopyStatement {
-		t.Fatalf("query forwarded as %q", q)
-	}
-	parse := rejectCopyToClient(&pgproto3.Parse{Name: "s1", Query: "COPY cards TO STDOUT"}).(*pgproto3.Parse)
-	if parse.Name != "s1" || parse.Query != blockedCopyStatement {
-		t.Fatalf("parse forwarded as %+v", parse)
-	}
-	if kept := rejectCopyToClient(&pgproto3.Query{String: "SELECT 1"}).(*pgproto3.Query); kept.String != "SELECT 1" {
-		t.Fatalf("plain query rewritten to %q", kept.String)
-	}
-}

@@ -4,9 +4,6 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
-	"regexp"
-	"slices"
-	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session/masking"
 	"github.com/jackc/pgx/v5/pgproto3"
@@ -40,105 +37,6 @@ const (
 
 func (p *PostgresProxy) masking() bool {
 	return p.config.OutputMasker != nil
-}
-
-// Fails on the server, so the batch a COPY to the client sits in aborts and nothing in it commits.
-const blockedCopyStatement = `DO $$ BEGIN RAISE EXCEPTION USING ERRCODE = '42501', ` +
-	`MESSAGE = 'COPY TO STDOUT is blocked because this account masks output, use SELECT instead'; END $$`
-
-var copyToClientPattern = regexp.MustCompile(`(?is)^\s*copy\b.*\bto\s+stdout\b`)
-
-var dollarQuoteTag = regexp.MustCompile(`^\$([A-Za-z_][A-Za-z0-9_]*)?\$`)
-
-func rejectCopyToClient(msg pgproto3.FrontendMessage) pgproto3.FrontendMessage {
-	switch m := msg.(type) {
-	case *pgproto3.Query:
-		if copiesToClient(m.String) {
-			return &pgproto3.Query{String: blockedCopyStatement}
-		}
-	case *pgproto3.Parse:
-		if copiesToClient(m.Query) {
-			return &pgproto3.Parse{Name: m.Name, Query: blockedCopyStatement}
-		}
-	}
-	return msg
-}
-
-func copiesToClient(sql string) bool {
-	return slices.ContainsFunc(strings.Split(blankQuoted(sql), ";"), copyToClientPattern.MatchString)
-}
-
-func blankQuoted(sql string) string {
-	out := []byte(sql)
-	blank := func(from, to int) int {
-		to = min(to, len(out))
-		for k := from; k < to; k++ {
-			out[k] = ' '
-		}
-		return to
-	}
-	for i := 0; i < len(out); {
-		switch {
-		case out[i] == '\'':
-			backslashEscapes := i > 0 && (out[i-1] == 'E' || out[i-1] == 'e')
-			j := i + 1
-			for ; j < len(out); j++ {
-				if backslashEscapes && out[j] == '\\' {
-					j++
-				} else if out[j] == '\'' {
-					if j+1 < len(out) && out[j+1] == '\'' {
-						j++
-						continue
-					}
-					break
-				}
-			}
-			i = blank(i, j+1)
-		case out[i] == '"':
-			j := i + 1
-			for ; j < len(out); j++ {
-				if out[j] == '"' {
-					if j+1 < len(out) && out[j+1] == '"' {
-						j++
-						continue
-					}
-					break
-				}
-			}
-			i = blank(i, j+1)
-		case out[i] == '-' && i+1 < len(out) && out[i+1] == '-':
-			j := bytes.IndexByte(out[i:], '\n')
-			if j < 0 {
-				j = len(out) - i
-			}
-			i = blank(i, i+j)
-		case out[i] == '/' && i+1 < len(out) && out[i+1] == '*':
-			depth, j := 1, i+2
-			for ; j < len(out) && depth > 0; j++ {
-				if out[j] == '/' && j+1 < len(out) && out[j+1] == '*' {
-					depth, j = depth+1, j+1
-				} else if out[j] == '*' && j+1 < len(out) && out[j+1] == '/' {
-					depth, j = depth-1, j+1
-				}
-			}
-			i = blank(i, j)
-		case out[i] == '$' && (i == 0 || !isIdentifierByte(out[i-1])):
-			tag := dollarQuoteTag.Find(out[i:])
-			if tag == nil {
-				i++
-				continue
-			}
-			end := bytes.Index(out[i+len(tag):], tag)
-			if end < 0 {
-				i = blank(i, len(out))
-				continue
-			}
-			i = blank(i, i+len(tag)+end+len(tag))
-		default:
-			i++
-		}
-	}
-	return string(out)
 }
 
 // Each Execute gets a portal Describe sent ahead of it, so its rows always follow a RowDescription.
@@ -310,10 +208,6 @@ func keepsValidJSON(column pgColumnFormat, masked []byte) bool {
 		return json.Valid(masked)
 	}
 	return true
-}
-
-func isIdentifierByte(b byte) bool {
-	return b == '_' || b == '$' || (b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || b >= 0x80
 }
 
 // Severity, code and source location come from the server, and clients act on them.
