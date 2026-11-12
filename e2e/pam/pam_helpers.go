@@ -81,7 +81,6 @@ func WithLocalStack() SetupPAMOption {
 	}
 }
 
-// WithGatewayAPIProxy sends the gateway's API calls through infra.GatewayAPI.
 func WithGatewayAPIProxy() SetupPAMOption {
 	return func(_ *helpers.InfisicalService, cfg *setupPAMConfig) {
 		cfg.gatewayAPIProxy = true
@@ -144,7 +143,8 @@ func SetupPAMInfra(t *testing.T, ctx context.Context, opts ...SetupPAMOption) *P
 		gatewayApiUrl = gatewayAPI.URL
 	}
 	gatewayCmd := &helpers.Command{
-		Test: t,
+		Test:      t,
+		RunMethod: helpers.RunMethodSubprocess,
 		Args: []string{"gateway", "start", gatewayName,
 			"--enroll-method", "token",
 			"--token", enrollmentToken,
@@ -195,8 +195,7 @@ func SetupPAMInfra(t *testing.T, ctx context.Context, opts ...SetupPAMOption) *P
 
 var chunkUploadPath = regexp.MustCompile(`^/api/v1/pam/sessions/[^/]+/chunks(/presigned-put)?$`)
 
-// GatewayAPIProxy forwards the gateway's API calls to the backend and, while throttled, answers its
-// recording chunk uploads the way the backend's rate limiter does.
+// Tests can't lower the backend's write limit, which comes from the license plan, so this answers chunk uploads with the 429 it would send.
 type GatewayAPIProxy struct {
 	URL       string
 	throttled atomic.Bool
@@ -234,8 +233,6 @@ func (p *GatewayAPIProxy) RejectedChunkUploads() int {
 	return int(p.rejected.Load())
 }
 
-// CrashAndRestartGateway kills the gateway without letting it clean up, then starts it again the way a
-// restarted host would, with its recordings and queued chunks still on disk.
 func CrashAndRestartGateway(t *testing.T, ctx context.Context, infra *PAMTestInfra) {
 	crashed := infra.GatewayCmd
 	require.NoError(t, crashed.Cmd().Process.Kill())
