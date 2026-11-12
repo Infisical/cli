@@ -282,6 +282,11 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			}
 			outputPatterns = append(outputPatterns, re)
 		}
+		if credentials.PolicyRules.OutputMasking.AccountCredentials {
+			for _, secret := range masking.CredentialSecrets(credentialValues(credentials)) {
+				outputPatterns = append(outputPatterns, regexp.MustCompile(regexp.QuoteMeta(secret)))
+			}
+		}
 		if len(outputPatterns) > 0 {
 			outputMasker = masking.New(outputPatterns, false, nil, pamConfig.SessionId)
 		}
