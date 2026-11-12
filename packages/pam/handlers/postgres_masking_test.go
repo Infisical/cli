@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/binary"
 	"regexp"
 	"testing"
 
@@ -287,5 +288,21 @@ func TestMaskingChecksFunctionCallResults(t *testing.T) {
 		if got := forwarded[0].(*pgproto3.FunctionCallResponse).Result; got != nil {
 			t.Fatalf("function result %q forwarded as %q, want NULL", result, got)
 		}
+	}
+}
+
+func TestMaskingSurvivesAMalformedBinaryArray(t *testing.T) {
+	header := make([]byte, 20)
+	binary.BigEndian.PutUint32(header[0:], 1)
+	binary.BigEndian.PutUint32(header[8:], pgtype.Int4OID)
+	binary.BigEndian.PutUint32(header[12:], 1)
+	binary.BigEndian.PutUint32(header[16:], 1)
+
+	p := newMaskingProxy()
+	_, forwarded := relay(p,
+		[]pgproto3.FrontendMessage{&pgproto3.Execute{}, &pgproto3.Sync{}},
+		[]pgproto3.BackendMessage{rowDescription(1, pgtype.Int4ArrayOID), dataRow(header)})
+	if len(forwarded) != 1 {
+		t.Fatalf("forwarded %d messages, want the row", len(forwarded))
 	}
 }

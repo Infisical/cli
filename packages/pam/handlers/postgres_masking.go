@@ -136,7 +136,14 @@ func (p *PostgresProxy) maskServerMessage(msg pgproto3.BackendMessage) pgproto3.
 }
 
 // Matches the content a client reads out of a value, so binary encoding or bytea's hex can't hide a match.
-func (p *PostgresProxy) matchText(column pgColumnFormat, value []byte) []byte {
+func (p *PostgresProxy) matchText(column pgColumnFormat, value []byte) (text []byte) {
+	// pgx panics on some malformed values, and a panic here would take down the whole gateway.
+	defer func() {
+		if recover() != nil {
+			text = value
+		}
+	}()
+
 	isBytea := column.typeOID == pgtype.ByteaOID || column.typeOID == pgtype.ByteaArrayOID
 	if pgTextTypes[column.typeOID] || (!column.binary && !isBytea) {
 		return value
@@ -159,8 +166,8 @@ func (p *PostgresProxy) matchText(column pgColumnFormat, value []byte) []byte {
 	if content, ok := appendContent(nil, decoded); ok {
 		return content
 	}
-	if text, err := p.typeMap.Encode(column.typeOID, pgtype.TextFormatCode, decoded, nil); err == nil {
-		return text
+	if encoded, err := p.typeMap.Encode(column.typeOID, pgtype.TextFormatCode, decoded, nil); err == nil {
+		return encoded
 	}
 	return value
 }
