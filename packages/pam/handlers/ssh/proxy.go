@@ -56,7 +56,6 @@ type channelState struct {
 	outputParser      *terminalTranscript        // Renders the output stream into displayed lines
 	outputChannelType session.SessionChannelType // Channel type for buffered output
 	outputPending     atomic.Int64               // Rendered length of the line still on screen
-	outputHeld        atomic.Int64               // Output held back for masking, not yet rendered
 }
 
 func newChannelState() *channelState {
@@ -696,8 +695,8 @@ func (p *SSHProxy) flushInputBufferUnsafe(sessionID string, chState *channelStat
 	switch {
 	case onScreen > chState.echoBaseline:
 		// Echoed while typing, so that line is the record.
-	case pasted || chState.outputHeld.Load() > 0:
-		// Delivered ahead of any echo, or the echo is still held for masking; the next committed line decides.
+	case pasted:
+		// Delivered ahead of any echo; the next committed line decides.
 		chState.pendingEcho.hold(command, channel, onScreen)
 	default:
 		p.flushOutputBuffer(sessionID, chState)

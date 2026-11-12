@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"bytes"
-	"encoding/hex"
 	"encoding/json"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session/masking"
@@ -118,14 +117,7 @@ func (p *PostgresProxy) maskServerMessage(msg pgproto3.BackendMessage) pgproto3.
 			Message:  "Replication is blocked because this account masks output",
 		}
 	case *pgproto3.FunctionCallResponse:
-		// The result's type isn't sent, so a hex bytea result is matched as the bytes it encodes.
-		text := m.Result
-		if hexText, ok := bytes.CutPrefix(m.Result, []byte(`\x`)); ok {
-			if decoded, err := hex.DecodeString(string(hexText)); err == nil {
-				text = decoded
-			}
-		}
-		if masked := masker.Mask(text); !bytes.Equal(masked, text) {
+		if masked := masker.Mask(m.Result); !bytes.Equal(masked, m.Result) {
 			m.Result = nil
 		}
 	case *pgproto3.NotificationResponse:

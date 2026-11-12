@@ -77,7 +77,6 @@ func (p *SSHProxy) proxyMaskedOutput(src io.Reader, dst io.Writer, sessionID str
 				return err
 			}
 			pending = append(pending[:0], pending[cut:]...)
-			chState.outputHeld.Store(int64(len(pending)))
 			if c.err == io.EOF {
 				return nil
 			}
@@ -89,7 +88,6 @@ func (p *SSHProxy) proxyMaskedOutput(src io.Reader, dst io.Writer, sessionID str
 				return err
 			}
 			pending = pending[:0]
-			chState.outputHeld.Store(0)
 		}
 	}
 }
@@ -145,31 +143,19 @@ func maskTerminalOutput(patterns []*regexp.Regexp, data []byte) []byte {
 	return append(out, data[last:]...)
 }
 
+// Only CSI sequences (color, cursor) are skipped whole, so a title's or link's text is still matched.
 func escapeLength(data []byte, i int) int {
 	j := i + 1
 	if j >= len(data) {
 		return 1
 	}
-	switch data[j] {
-	case '[':
-		j++
-		for j < len(data) && data[j] >= 0x20 && data[j] <= 0x3f {
-			j++
-		}
-		if j < len(data) && data[j] >= 0x40 && data[j] <= 0x7e {
-			j++
-		}
-		return j - i
-	case ']', 'P', 'X', '^', '_':
-		for j++; j < len(data); j++ {
-			if data[j] == 0x07 {
-				return j + 1 - i
-			}
-			if data[j] == 0x1b && j+1 < len(data) && data[j+1] == '\\' {
-				return j + 2 - i
-			}
-		}
-		return len(data) - i
+	if data[j] != '[' {
+		return 2
 	}
-	return 2
+	for j++; j < len(data) && data[j] >= 0x20 && data[j] <= 0x3f; j++ {
+	}
+	if j < len(data) && data[j] >= 0x40 && data[j] <= 0x7e {
+		j++
+	}
+	return j - i
 }

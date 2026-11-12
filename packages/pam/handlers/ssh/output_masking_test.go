@@ -4,12 +4,9 @@ import (
 	"bytes"
 	"io"
 	"regexp"
-	"strings"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/Infisical/infisical-merge/packages/pam/session"
 )
 
 type lockedBuffer struct {
@@ -94,42 +91,18 @@ func TestMaskedOutputMatchesThroughColorCodes(t *testing.T) {
 	}
 }
 
-func TestMaskedOutputDoesNotRecordAHeldEchoTwice(t *testing.T) {
-	logger := &recordingLogger{}
-	proxy := NewSSHProxy(SSHProxyConfig{
-		SessionID:             "sid",
-		SessionLogger:         logger,
-		OutputMaskingPatterns: []*regexp.Regexp{regexp.MustCompile(`token=\w+`)},
-	})
-	chState := newChannelState()
-	chState.channelType = session.SessionChannelShell
-	chState.inputChannelType = session.SessionChannelShell
-
+func TestMaskedOutputMatchesInsideTerminalTitles(t *testing.T) {
 	src, w := io.Pipe()
-	done := make(chan error, 1)
-	go func() { done <- proxy.proxyData(src, io.Discard, "server→client", "sid", false, chState) }()
+	out := &lockedBuffer{}
+	go func() {
+		_, _ = w.Write([]byte("\x1b]0;token=abcd123\x07\n"))
+		_ = w.Close()
+	}()
 
-	_, _ = w.Write([]byte("$ "))
-	time.Sleep(4 * maskedOutputQuietPeriod)
-	proxy.bufferInput([]byte("ls"), "sid", session.SessionChannelShell, chState)
-	_, _ = w.Write([]byte("ls"))
-	time.Sleep(maskedOutputQuietPeriod / 5)
-	proxy.bufferInput([]byte{0x0D}, "sid", session.SessionChannelShell, chState)
-	_, _ = w.Write([]byte("\r\nfile.txt\r\n$ "))
-	_ = w.Close()
-	if err := <-done; err != nil {
+	if err := newOutputMaskingProxy().proxyData(src, out, "server→client", "sid", false, newChannelState()); err != nil {
 		t.Fatal(err)
 	}
-
-	recorded := 0
-	logger.mutex.Lock()
-	for _, event := range logger.events {
-		if strings.Contains(string(event.Data), "ls") {
-			recorded++
-		}
-	}
-	logger.mutex.Unlock()
-	if recorded != 1 {
-		t.Fatalf("command recorded %d times, want once: %+v", recorded, logger.events)
+	if got, want := out.String(), "\x1b]0;[MASKED]\x07\n"; got != want {
+		t.Fatalf("client saw %q, want %q", got, want)
 	}
 }

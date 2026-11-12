@@ -282,7 +282,7 @@ func TestMaskingMatchesByteaContent(t *testing.T) {
 
 func TestMaskingChecksFunctionCallResults(t *testing.T) {
 	p := newMaskingProxy()
-	for _, result := range [][]byte{[]byte("a secret"), []byte(`\x6120736563726574`)} {
+	for _, result := range [][]byte{[]byte("a secret"), []byte("card 4111111111111111")} {
 		_, forwarded := relay(p, nil, []pgproto3.BackendMessage{&pgproto3.FunctionCallResponse{Result: result}})
 		if got := forwarded[0].(*pgproto3.FunctionCallResponse).Result; got != nil {
 			t.Fatalf("function result %q forwarded as %q, want NULL", result, got)
