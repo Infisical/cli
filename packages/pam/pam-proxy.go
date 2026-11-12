@@ -272,8 +272,17 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 	}
 
 	var outputMasker masking.Masker
-	if credentials.PolicyRules != nil {
-		if patterns := compilePolicyPatterns(rulePatterns(credentials.PolicyRules.OutputMasking), pamConfig.SessionId, "output-masking"); len(patterns) > 0 {
+	if credentials.PolicyRules != nil && credentials.PolicyRules.OutputMasking != nil {
+		var patterns []*regexp.Regexp
+		for _, pattern := range credentials.PolicyRules.OutputMasking.Patterns {
+			re, err := regexp.Compile(pattern)
+			if err != nil {
+				// Masking less than the policy asks for would show the user what it was meant to hide.
+				return fmt.Errorf("output masking pattern %q does not compile: %w", pattern, err)
+			}
+			patterns = append(patterns, re)
+		}
+		if len(patterns) > 0 {
 			outputMasker = masking.New(patterns, false, nil, pamConfig.SessionId)
 		}
 	}

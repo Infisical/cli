@@ -2,9 +2,7 @@ package handlers
 
 import (
 	"bytes"
-	"encoding/binary"
-	"net/netip"
-	"strconv"
+	"encoding/json"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session/masking"
 	"github.com/jackc/pgx/v5/pgproto3"
@@ -62,7 +60,6 @@ func (p *PostgresProxy) trackDescribe(msg pgproto3.FrontendMessage) *pgproto3.De
 func (p *PostgresProxy) maskServerMessage(msg pgproto3.BackendMessage) pgproto3.BackendMessage {
 	if _, ok := msg.(*pgproto3.ReadyForQuery); ok {
 		p.discarding = false
-		p.maskingCopy = false
 		p.popThroughSync()
 		return msg
 	}
@@ -90,15 +87,16 @@ func (p *PostgresProxy) maskServerMessage(msg pgproto3.BackendMessage) pgproto3.
 			if i < len(p.rowColumns) {
 				column = p.rowColumns[i]
 			}
+			isText := pgTextTypes[column.typeOID]
 			text := value
-			if column.binary {
-				text = binaryValueText(column.typeOID, value)
+			if column.binary && !isText {
+				text = p.binaryValueText(column.typeOID, value)
 			}
 			masked := masker.Mask(text)
 			if bytes.Equal(masked, text) {
 				continue
 			}
-			if pgTextTypes[column.typeOID] {
+			if isText && keepsValidJSON(column, masked) {
 				m.Values[i] = masked
 			} else {
 				// A placeholder would not decode as this column's type.
@@ -106,16 +104,21 @@ func (p *PostgresProxy) maskServerMessage(msg pgproto3.BackendMessage) pgproto3.
 			}
 		}
 	case *pgproto3.CopyOutResponse:
-		if m.OverallFormat == 0 {
-			p.maskingCopy = true
-			return msg
+		// COPY escapes its fields (CSV doubles quotes, text escapes control characters), so a pattern can
+		// miss a value there that it matches in a row.
+		p.discarding = true
+		return &pgproto3.ErrorResponse{
+			Severity: "ERROR",
+			Code:     "42501",
+			Message:  "COPY TO STDOUT is blocked because this account masks output, use SELECT instead",
 		}
-		return p.blockCopy()
 	case *pgproto3.CopyBothResponse:
-		return p.blockCopy()
-	case *pgproto3.CopyData:
-		if p.maskingCopy {
-			m.Data = masker.Mask(m.Data)
+		// A replication stream never reaches ReadyForQuery, so only ending the connection stops it.
+		p.closeAfterReply = true
+		return &pgproto3.ErrorResponse{
+			Severity: "FATAL",
+			Code:     "42501",
+			Message:  "Replication is blocked because this account masks output",
 		}
 	case *pgproto3.FunctionCallResponse:
 		if masked := masker.Mask(m.Result); !bytes.Equal(masked, m.Result) {
@@ -131,30 +134,39 @@ func (p *PostgresProxy) maskServerMessage(msg pgproto3.BackendMessage) pgproto3.
 	return msg
 }
 
-// Binary COPY rows have no text to match, so they cannot be masked.
-func (p *PostgresProxy) blockCopy() pgproto3.BackendMessage {
-	p.discarding = true
-	return &pgproto3.ErrorResponse{
-		Severity: "ERROR",
-		Code:     "42501",
-		Message:  "Binary COPY and replication are blocked because this account masks output, use COPY in text or CSV format instead",
+// A binary value is matched as the text a text-format client would see, so a card number in a numeric
+// column is caught whichever format was asked for. A type pgx can't decode is matched as its raw bytes.
+func (p *PostgresProxy) binaryValueText(typeOID uint32, value []byte) []byte {
+	if p.typeMap == nil {
+		p.typeMap = pgtype.NewMap()
 	}
+	dataType, ok := p.typeMap.TypeForOID(typeOID)
+	if !ok {
+		return value
+	}
+	decoded, err := dataType.Codec.DecodeValue(p.typeMap, typeOID, pgtype.BinaryFormatCode, value)
+	if err != nil || decoded == nil {
+		return value
+	}
+	text, err := p.typeMap.Encode(typeOID, pgtype.TextFormatCode, decoded, nil)
+	if err != nil {
+		return value
+	}
+	return text
 }
 
-// Binary integers and addresses are matched as the text a text-format client would see, so a card
-// number in a bigint column or an address in an inet column is caught whichever format was asked for.
-func binaryValueText(typeOID uint32, value []byte) []byte {
-	switch {
-	case typeOID == pgtype.Int8OID && len(value) == 8:
-		return strconv.AppendInt(nil, int64(binary.BigEndian.Uint64(value)), 10)
-	case typeOID == pgtype.Int4OID && len(value) == 4:
-		return strconv.AppendInt(nil, int64(int32(binary.BigEndian.Uint32(value))), 10)
-	case (typeOID == pgtype.InetOID || typeOID == pgtype.CIDROID) && len(value) > 4 && int(value[3]) == len(value)-4:
-		if addr, ok := netip.AddrFromSlice(value[4:]); ok {
-			return []byte(addr.String())
+// A match inside a JSON number or key leaves a placeholder the client can't parse.
+func keepsValidJSON(column pgColumnFormat, masked []byte) bool {
+	switch column.typeOID {
+	case pgtype.JSONOID:
+		return json.Valid(masked)
+	case pgtype.JSONBOID:
+		if column.binary && len(masked) > 0 {
+			masked = masked[1:] // binary jsonb leads with a version byte
 		}
+		return json.Valid(masked)
 	}
-	return value
+	return true
 }
 
 func maskStrings(masker masking.Masker, fields ...*string) {

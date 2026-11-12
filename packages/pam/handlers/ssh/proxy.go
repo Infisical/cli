@@ -1,6 +1,7 @@
 package ssh
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -534,6 +535,10 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 
 // proxyData proxies data between channels with optional logging
 func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, sessionID string, logInput bool, chState *channelState) error {
+	if !logInput && p.config.OutputMasker != nil {
+		return p.proxyMaskedOutput(src, dst, sessionID, chState)
+	}
+
 	buf := make([]byte, 32*1024) // 32KB buffer
 
 	// Flush any remaining buffers on exit
@@ -561,11 +566,6 @@ func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, ses
 			channelType := chState.channelType
 			chState.mutex.Unlock()
 
-			data := buf[:n]
-			if !logInput && !isBinary && p.config.OutputMasker != nil {
-				data = p.config.OutputMasker.Mask(data)
-			}
-
 			if isBinary && sftpParser != nil && logInput {
 				// Parse SFTP packets from client->server direction to extract file operations
 				operations := sftpParser.Parse(buf[:n])
@@ -592,16 +592,16 @@ func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, ses
 				if logInput {
 					p.bufferInput(buf[:n], sessionID, channelType, chState)
 				} else {
-					p.bufferOutput(data, sessionID, channelType, chState)
+					p.bufferOutput(buf[:n], sessionID, channelType, chState)
 				}
 			}
 
 			// Write to destination
-			written, writeErr := dst.Write(data)
+			written, writeErr := dst.Write(buf[:n])
 			if writeErr != nil {
 				return writeErr
 			}
-			if written != len(data) {
+			if written != n {
 				return io.ErrShortWrite
 			}
 		}
@@ -611,6 +611,87 @@ func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, ses
 				return nil
 			}
 			return err
+		}
+	}
+}
+
+// How long a partial line waits for the rest of its output before it is masked and sent as is.
+const maskedOutputQuietPeriod = 25 * time.Millisecond
+
+// A line longer than this is masked and sent before its end arrives, to bound what one channel holds.
+const maxHeldOutput = 64 * 1024
+
+// proxyMaskedOutput masks output a line at a time, so a value split across reads is still matched whole.
+// A partial line is held until the rest arrives or the stream goes quiet, which keeps prompts and echo flowing.
+func (p *SSHProxy) proxyMaskedOutput(src io.Reader, dst io.Writer, sessionID string, chState *channelState) error {
+	defer p.flushOutputBuffer(sessionID, chState)
+
+	type chunk struct {
+		data []byte
+		err  error
+	}
+	reads := make(chan chunk)
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		for {
+			buf := make([]byte, 32*1024)
+			n, err := src.Read(buf)
+			select {
+			case reads <- chunk{buf[:n], err}:
+			case <-done:
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	emit := func(data []byte) error {
+		if len(data) == 0 {
+			return nil
+		}
+		masked := p.config.OutputMasker.Mask(data)
+		chState.mutex.Lock()
+		channelType := chState.channelType
+		chState.mutex.Unlock()
+		p.bufferOutput(masked, sessionID, channelType, chState)
+		_, err := dst.Write(masked)
+		return err
+	}
+
+	var pending []byte
+	for {
+		var quiet <-chan time.Time
+		if len(pending) > 0 {
+			quiet = time.After(maskedOutputQuietPeriod)
+		}
+		select {
+		case c := <-reads:
+			if len(c.data) > 0 && p.config.OnActivity != nil {
+				p.config.OnActivity()
+			}
+			pending = append(pending, c.data...)
+			cut := bytes.LastIndexAny(pending, "\r\n") + 1
+			if c.err != nil || len(pending)-cut > maxHeldOutput {
+				cut = len(pending)
+			}
+			if err := emit(pending[:cut]); err != nil {
+				return err
+			}
+			pending = append(pending[:0], pending[cut:]...)
+			if c.err == io.EOF {
+				return nil
+			}
+			if c.err != nil {
+				return c.err
+			}
+		case <-quiet:
+			if err := emit(pending); err != nil {
+				return err
+			}
+			pending = pending[:0]
 		}
 	}
 }
