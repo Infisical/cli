@@ -215,6 +215,26 @@ func TestAHookRedirectIsNotFollowed(t *testing.T) {
 	}
 }
 
+func TestAHookRedirectToABadURLLogsNoTarget(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "/tok-in-redirect/%zz?x=tok-in-query")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL + "/hook")
+
+	result := newHookClient(nil).ask(context.Background(), &serviceHook{url: u, secret: []byte(testHookSecret)}, testHookPayload())
+	if result.Decision != hookFailed || result.Cause != hookCauseRedirect {
+		t.Fatalf("outcome = %+v (%v)", result, result.err)
+	}
+	var out bytes.Buffer
+	logger := zerolog.New(&out)
+	result.logFields(logger.Error()).Msg("agent-vault: request")
+	if strings.Contains(out.String(), "tok-in-redirect") || strings.Contains(out.String(), "tok-in-query") {
+		t.Fatalf("the redirect target reached the log: %s", out.String())
+	}
+}
+
 func TestHookAnswersThatAreNotAllowOrDenyFail(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

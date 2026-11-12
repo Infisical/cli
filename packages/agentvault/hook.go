@@ -334,6 +334,10 @@ func hookTransportCause(ctx context.Context, err error) (string, error) {
 	if errors.As(err, &urlErr) {
 		err = urlErr.Err
 	}
+	// Go parses a redirect's Location before CheckRedirect runs, and quotes it when it can't.
+	if strings.HasPrefix(err.Error(), "failed to parse Location header") {
+		return hookCauseRedirect, errors.New("it answered with a redirect, which the proxy doesn't follow")
+	}
 	var netErr net.Error
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
 		return hookCauseTimeout, err
