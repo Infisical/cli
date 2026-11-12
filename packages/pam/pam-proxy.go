@@ -271,19 +271,19 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		)
 	}
 
+	var outputPatterns []*regexp.Regexp
 	var outputMasker masking.Masker
 	if credentials.PolicyRules != nil && credentials.PolicyRules.OutputMasking != nil {
-		var patterns []*regexp.Regexp
-		for _, pattern := range credentials.PolicyRules.OutputMasking.Patterns {
+		for i, pattern := range credentials.PolicyRules.OutputMasking.Patterns {
 			re, err := regexp.Compile(pattern)
 			if err != nil {
-				// Masking less than the policy asks for would show the user what it was meant to hide.
-				return fmt.Errorf("output masking pattern %q does not compile: %w", pattern, err)
+				// Fail closed, and keep the pattern out of the error since it can hold the value it masks.
+				return fmt.Errorf("output masking pattern %d does not compile", i+1)
 			}
-			patterns = append(patterns, re)
+			outputPatterns = append(outputPatterns, re)
 		}
-		if len(patterns) > 0 {
-			outputMasker = masking.New(patterns, false, nil, pamConfig.SessionId)
+		if len(outputPatterns) > 0 {
+			outputMasker = masking.New(outputPatterns, false, nil, pamConfig.SessionId)
 		}
 	}
 
@@ -437,7 +437,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			SessionID:              pamConfig.SessionId,
 			SessionLogger:          sessionLogger,
 			BlockedCommandPatterns: blockedCommandPatterns,
-			OutputMasker:           outputMasker,
+			OutputMaskingPatterns:  outputPatterns,
 			OnActivity:             pamConfig.OnActivity,
 		}
 		proxy := ssh.NewSSHProxy(sshConfig)

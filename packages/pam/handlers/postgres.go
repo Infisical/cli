@@ -690,6 +690,7 @@ func (p *PostgresProxy) proxyClientToServer(clientBackend *pgproto3.Backend, ser
 		p.trackClientMessage(msg)
 
 		if p.masking() {
+			msg = rejectCopyToClient(msg)
 			if describe := p.trackDescribe(msg); describe != nil {
 				serverFrontend.Send(describe)
 			}

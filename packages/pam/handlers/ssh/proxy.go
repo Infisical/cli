@@ -1,7 +1,6 @@
 package ssh
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -13,7 +12,6 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
-	"github.com/Infisical/infisical-merge/packages/pam/session/masking"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
@@ -30,7 +28,7 @@ type SSHProxyConfig struct {
 	SessionID              string
 	SessionLogger          session.SessionLogger
 	BlockedCommandPatterns []*regexp.Regexp // Regex patterns for command blocking (nil = no blocking)
-	OutputMasker           masking.Masker   // Applied to output before the user sees it (nil = no masking)
+	OutputMaskingPatterns  []*regexp.Regexp // Regex patterns for output masking (nil = no masking)
 	OnActivity             func()           // Called when channel data flows
 }
 
@@ -58,6 +56,7 @@ type channelState struct {
 	outputParser      *terminalTranscript        // Renders the output stream into displayed lines
 	outputChannelType session.SessionChannelType // Channel type for buffered output
 	outputPending     atomic.Int64               // Rendered length of the line still on screen
+	outputHeld        atomic.Int64               // Output held back for masking, not yet rendered
 }
 
 func newChannelState() *channelState {
@@ -259,7 +258,7 @@ func (p *SSHProxy) handleChannel(ctx context.Context, newChannel ssh.NewChannel,
 		Msg("← CLIENT new channel request")
 
 	// A forwarded connection carries another protocol, which masking would corrupt rather than redact.
-	if p.config.OutputMasker != nil && channelType != "session" {
+	if p.masksOutput() && channelType != "session" {
 		newChannel.Reject(ssh.Prohibited, "port forwarding is blocked because this account masks output")
 		return
 	}
@@ -404,7 +403,7 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 
 					// Determine the type of operation
 					isSCP := strings.HasPrefix(command, "scp ")
-					if isSCP && p.config.OutputMasker != nil {
+					if isSCP && p.masksOutput() {
 						p.rejectUnmaskableTransfer(req, sessionID)
 						continue
 					}
@@ -473,7 +472,7 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 						Str("subsystem", subsystem).
 						Msg("SSH subsystem requested")
 
-					if subsystem == "sftp" && p.config.OutputMasker != nil {
+					if subsystem == "sftp" && p.masksOutput() {
 						p.rejectUnmaskableTransfer(req, sessionID)
 						continue
 					}
@@ -535,7 +534,7 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 
 // proxyData proxies data between channels with optional logging
 func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, sessionID string, logInput bool, chState *channelState) error {
-	if !logInput && p.config.OutputMasker != nil {
+	if !logInput && p.masksOutput() {
 		return p.proxyMaskedOutput(src, dst, sessionID, chState)
 	}
 
@@ -611,87 +610,6 @@ func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, ses
 				return nil
 			}
 			return err
-		}
-	}
-}
-
-// How long a partial line waits for the rest of its output before it is masked and sent as is.
-const maskedOutputQuietPeriod = 25 * time.Millisecond
-
-// A line longer than this is masked and sent before its end arrives, to bound what one channel holds.
-const maxHeldOutput = 64 * 1024
-
-// proxyMaskedOutput masks output a line at a time, so a value split across reads is still matched whole.
-// A partial line is held until the rest arrives or the stream goes quiet, which keeps prompts and echo flowing.
-func (p *SSHProxy) proxyMaskedOutput(src io.Reader, dst io.Writer, sessionID string, chState *channelState) error {
-	defer p.flushOutputBuffer(sessionID, chState)
-
-	type chunk struct {
-		data []byte
-		err  error
-	}
-	reads := make(chan chunk)
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		for {
-			buf := make([]byte, 32*1024)
-			n, err := src.Read(buf)
-			select {
-			case reads <- chunk{buf[:n], err}:
-			case <-done:
-				return
-			}
-			if err != nil {
-				return
-			}
-		}
-	}()
-
-	emit := func(data []byte) error {
-		if len(data) == 0 {
-			return nil
-		}
-		masked := p.config.OutputMasker.Mask(data)
-		chState.mutex.Lock()
-		channelType := chState.channelType
-		chState.mutex.Unlock()
-		p.bufferOutput(masked, sessionID, channelType, chState)
-		_, err := dst.Write(masked)
-		return err
-	}
-
-	var pending []byte
-	for {
-		var quiet <-chan time.Time
-		if len(pending) > 0 {
-			quiet = time.After(maskedOutputQuietPeriod)
-		}
-		select {
-		case c := <-reads:
-			if len(c.data) > 0 && p.config.OnActivity != nil {
-				p.config.OnActivity()
-			}
-			pending = append(pending, c.data...)
-			cut := bytes.LastIndexAny(pending, "\r\n") + 1
-			if c.err != nil || len(pending)-cut > maxHeldOutput {
-				cut = len(pending)
-			}
-			if err := emit(pending[:cut]); err != nil {
-				return err
-			}
-			pending = append(pending[:0], pending[cut:]...)
-			if c.err == io.EOF {
-				return nil
-			}
-			if c.err != nil {
-				return c.err
-			}
-		case <-quiet:
-			if err := emit(pending); err != nil {
-				return err
-			}
-			pending = pending[:0]
 		}
 	}
 }
@@ -778,8 +696,8 @@ func (p *SSHProxy) flushInputBufferUnsafe(sessionID string, chState *channelStat
 	switch {
 	case onScreen > chState.echoBaseline:
 		// Echoed while typing, so that line is the record.
-	case pasted:
-		// Delivered ahead of any echo; the next committed line decides.
+	case pasted || chState.outputHeld.Load() > 0:
+		// Delivered ahead of any echo, or the echo is still held for masking; the next committed line decides.
 		chState.pendingEcho.hold(command, channel, onScreen)
 	default:
 		p.flushOutputBuffer(sessionID, chState)

@@ -15,7 +15,6 @@ func newMaskingProxy() *PostgresProxy {
 	})
 }
 
-// relay feeds the client messages, then the server's replies, and returns what reaches the client.
 func relay(p *PostgresProxy, client []pgproto3.FrontendMessage, server []pgproto3.BackendMessage) (int, []pgproto3.BackendMessage) {
 	injected := 0
 	for _, msg := range client {
@@ -234,5 +233,94 @@ func TestMaskingCoversProtocolMetadata(t *testing.T) {
 	}
 	if n := forwarded[4].(*pgproto3.NotificationResponse); n.Channel != "[MASKED]" || n.Payload != "[MASKED]" {
 		t.Fatalf("notification %+v", n)
+	}
+}
+
+func TestMaskingMatchesByteaContent(t *testing.T) {
+	typeMap := pgtype.NewMap()
+	encode := func(oid uint32, format int16, value any) []byte {
+		encoded, err := typeMap.Encode(oid, format, value, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return encoded
+	}
+
+	for _, c := range []struct {
+		name   string
+		oid    uint32
+		format int16
+		value  []byte
+	}{
+		{"binary bytea", pgtype.ByteaOID, 1, encode(pgtype.ByteaOID, 1, []byte("a secret"))},
+		{"hex bytea", pgtype.ByteaOID, 0, encode(pgtype.ByteaOID, 0, []byte("a secret"))},
+		{"binary bytea array", pgtype.ByteaArrayOID, 1, encode(pgtype.ByteaArrayOID, 1, [][]byte{[]byte("x"), []byte("secret")})},
+		{"text bytea array", pgtype.ByteaArrayOID, 0, encode(pgtype.ByteaArrayOID, 0, [][]byte{[]byte("secret")})},
+		{"binary text array", pgtype.TextArrayOID, 1, encode(pgtype.TextArrayOID, 1, []string{"x", "secret"})},
+		{"binary bigint array", pgtype.Int8ArrayOID, 1, encode(pgtype.Int8ArrayOID, 1, []int64{4111111111111111})},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := newMaskingProxy()
+			_, forwarded := relay(p,
+				[]pgproto3.FrontendMessage{&pgproto3.Execute{}, &pgproto3.Sync{}},
+				[]pgproto3.BackendMessage{rowDescription(c.format, c.oid), dataRow(c.value)})
+			if value := forwarded[0].(*pgproto3.DataRow).Values[0]; value != nil {
+				t.Fatalf("forwarded %q, want NULL", value)
+			}
+		})
+	}
+
+	p := newMaskingProxy()
+	plain := encode(pgtype.ByteaOID, 0, []byte("nothing to hide"))
+	_, forwarded := relay(p,
+		[]pgproto3.FrontendMessage{&pgproto3.Execute{}, &pgproto3.Sync{}},
+		[]pgproto3.BackendMessage{rowDescription(0, pgtype.ByteaOID), dataRow(plain)})
+	if value := forwarded[0].(*pgproto3.DataRow).Values[0]; string(value) != string(plain) {
+		t.Fatalf("unmatched bytea forwarded as %q, want %q", value, plain)
+	}
+}
+
+func TestMaskingChecksFunctionCallResults(t *testing.T) {
+	p := newMaskingProxy()
+	for _, result := range [][]byte{[]byte("a secret"), []byte(`\x6120736563726574`)} {
+		_, forwarded := relay(p, nil, []pgproto3.BackendMessage{&pgproto3.FunctionCallResponse{Result: result}})
+		if got := forwarded[0].(*pgproto3.FunctionCallResponse).Result; got != nil {
+			t.Fatalf("function result %q forwarded as %q, want NULL", result, got)
+		}
+	}
+}
+
+func TestCopiesToClient(t *testing.T) {
+	for sql, want := range map[string]bool{
+		"COPY cards TO STDOUT": true,
+		"copy (select card from cards) to stdout with (format csv)":             true,
+		"SELECT 1; /* note */ COPY cards TO STDOUT; INSERT INTO log VALUES (1)": true,
+		"COPY cards FROM STDIN":                     false,
+		"COPY cards TO '/tmp/cards.csv'":            false,
+		"SELECT 'COPY cards TO STDOUT'":             false,
+		"SELECT E'it\\'s; COPY cards TO STDOUT'":    false,
+		"SELECT $$COPY cards TO STDOUT$$":           false,
+		"SELECT $body$; COPY cards TO STDOUT$body$": false,
+		"SELECT \"COPY x TO STDOUT\" FROM t":        false,
+		"-- COPY cards TO STDOUT\nSELECT 1":         false,
+		"SELECT a$b$c FROM t; COPY cards TO STDOUT": true,
+	} {
+		if got := copiesToClient(sql); got != want {
+			t.Errorf("copiesToClient(%q) = %v, want %v", sql, got, want)
+		}
+	}
+}
+
+func TestMaskingSwapsCopyToClientBeforeItRuns(t *testing.T) {
+	query := rejectCopyToClient(&pgproto3.Query{String: "COPY cards TO STDOUT; INSERT INTO log VALUES (1)"})
+	if q := query.(*pgproto3.Query).String; q != blockedCopyStatement {
+		t.Fatalf("query forwarded as %q", q)
+	}
+	parse := rejectCopyToClient(&pgproto3.Parse{Name: "s1", Query: "COPY cards TO STDOUT"}).(*pgproto3.Parse)
+	if parse.Name != "s1" || parse.Query != blockedCopyStatement {
+		t.Fatalf("parse forwarded as %+v", parse)
+	}
+	if kept := rejectCopyToClient(&pgproto3.Query{String: "SELECT 1"}).(*pgproto3.Query); kept.String != "SELECT 1" {
+		t.Fatalf("plain query rewritten to %q", kept.String)
 	}
 }

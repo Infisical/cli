@@ -2,14 +2,17 @@ package handlers
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
+	"regexp"
+	"slices"
+	"strings"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session/masking"
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// Values of these types are plain text in both wire formats, so a match is replaced in place.
 var pgTextTypes = map[uint32]bool{
 	pgtype.TextOID:    true,
 	pgtype.VarcharOID: true,
@@ -26,7 +29,7 @@ type pgColumnFormat struct {
 	binary  bool
 }
 
-// Who receives the RowDescription or NoData answering a Describe; the server answers in request order.
+// The server answers Describes in request order, so a queue of these says whose answer each one is.
 type describeSource int
 
 const (
@@ -37,6 +40,105 @@ const (
 
 func (p *PostgresProxy) masking() bool {
 	return p.config.OutputMasker != nil
+}
+
+// Fails on the server, so the batch a COPY to the client sits in aborts and nothing in it commits.
+const blockedCopyStatement = `DO $$ BEGIN RAISE EXCEPTION USING ERRCODE = '42501', ` +
+	`MESSAGE = 'COPY TO STDOUT is blocked because this account masks output, use SELECT instead'; END $$`
+
+var copyToClientPattern = regexp.MustCompile(`(?is)^\s*copy\b.*\bto\s+stdout\b`)
+
+var dollarQuoteTag = regexp.MustCompile(`^\$([A-Za-z_][A-Za-z0-9_]*)?\$`)
+
+func rejectCopyToClient(msg pgproto3.FrontendMessage) pgproto3.FrontendMessage {
+	switch m := msg.(type) {
+	case *pgproto3.Query:
+		if copiesToClient(m.String) {
+			return &pgproto3.Query{String: blockedCopyStatement}
+		}
+	case *pgproto3.Parse:
+		if copiesToClient(m.Query) {
+			return &pgproto3.Parse{Name: m.Name, Query: blockedCopyStatement}
+		}
+	}
+	return msg
+}
+
+func copiesToClient(sql string) bool {
+	return slices.ContainsFunc(strings.Split(blankQuoted(sql), ";"), copyToClientPattern.MatchString)
+}
+
+func blankQuoted(sql string) string {
+	out := []byte(sql)
+	blank := func(from, to int) int {
+		to = min(to, len(out))
+		for k := from; k < to; k++ {
+			out[k] = ' '
+		}
+		return to
+	}
+	for i := 0; i < len(out); {
+		switch {
+		case out[i] == '\'':
+			backslashEscapes := i > 0 && (out[i-1] == 'E' || out[i-1] == 'e')
+			j := i + 1
+			for ; j < len(out); j++ {
+				if backslashEscapes && out[j] == '\\' {
+					j++
+				} else if out[j] == '\'' {
+					if j+1 < len(out) && out[j+1] == '\'' {
+						j++
+						continue
+					}
+					break
+				}
+			}
+			i = blank(i, j+1)
+		case out[i] == '"':
+			j := i + 1
+			for ; j < len(out); j++ {
+				if out[j] == '"' {
+					if j+1 < len(out) && out[j+1] == '"' {
+						j++
+						continue
+					}
+					break
+				}
+			}
+			i = blank(i, j+1)
+		case out[i] == '-' && i+1 < len(out) && out[i+1] == '-':
+			j := bytes.IndexByte(out[i:], '\n')
+			if j < 0 {
+				j = len(out) - i
+			}
+			i = blank(i, i+j)
+		case out[i] == '/' && i+1 < len(out) && out[i+1] == '*':
+			depth, j := 1, i+2
+			for ; j < len(out) && depth > 0; j++ {
+				if out[j] == '/' && j+1 < len(out) && out[j+1] == '*' {
+					depth, j = depth+1, j+1
+				} else if out[j] == '*' && j+1 < len(out) && out[j+1] == '/' {
+					depth, j = depth-1, j+1
+				}
+			}
+			i = blank(i, j)
+		case out[i] == '$' && (i == 0 || !isIdentifierByte(out[i-1])):
+			tag := dollarQuoteTag.Find(out[i:])
+			if tag == nil {
+				i++
+				continue
+			}
+			end := bytes.Index(out[i+len(tag):], tag)
+			if end < 0 {
+				i = blank(i, len(out))
+				continue
+			}
+			i = blank(i, i+len(tag)+end+len(tag))
+		default:
+			i++
+		}
+	}
+	return string(out)
 }
 
 // Each Execute gets a portal Describe sent ahead of it, so its rows always follow a RowDescription.
@@ -56,7 +158,6 @@ func (p *PostgresProxy) trackDescribe(msg pgproto3.FrontendMessage) *pgproto3.De
 	return nil
 }
 
-// maskServerMessage returns the message to relay, or nil to drop it.
 func (p *PostgresProxy) maskServerMessage(msg pgproto3.BackendMessage) pgproto3.BackendMessage {
 	if _, ok := msg.(*pgproto3.ReadyForQuery); ok {
 		p.discarding = false
@@ -90,10 +191,7 @@ func (p *PostgresProxy) maskServerMessage(msg pgproto3.BackendMessage) pgproto3.
 				column = p.rowColumns[i]
 			}
 			isText := pgTextTypes[column.typeOID]
-			text := value
-			if column.binary && !isText {
-				text = p.binaryValueText(column.typeOID, value)
-			}
+			text := p.matchText(column, value)
 			masked := masker.Mask(text)
 			if bytes.Equal(masked, text) {
 				continue
@@ -106,8 +204,7 @@ func (p *PostgresProxy) maskServerMessage(msg pgproto3.BackendMessage) pgproto3.
 			}
 		}
 	case *pgproto3.CopyOutResponse:
-		// COPY escapes its fields (CSV doubles quotes, text escapes control characters), so a pattern can
-		// miss a value there that it matches in a row.
+		// COPY escapes its fields, so patterns can miss values in it.
 		p.discarding = true
 		return &pgproto3.ErrorResponse{
 			Severity: "ERROR",
@@ -123,7 +220,14 @@ func (p *PostgresProxy) maskServerMessage(msg pgproto3.BackendMessage) pgproto3.
 			Message:  "Replication is blocked because this account masks output",
 		}
 	case *pgproto3.FunctionCallResponse:
-		if masked := masker.Mask(m.Result); !bytes.Equal(masked, m.Result) {
+		// The result's type isn't sent, so a hex bytea result is matched as the bytes it encodes.
+		text := m.Result
+		if hexText, ok := bytes.CutPrefix(m.Result, []byte(`\x`)); ok {
+			if decoded, err := hex.DecodeString(string(hexText)); err == nil {
+				text = decoded
+			}
+		}
+		if masked := masker.Mask(text); !bytes.Equal(masked, text) {
 			m.Result = nil
 		}
 	case *pgproto3.NotificationResponse:
@@ -141,28 +245,60 @@ func (p *PostgresProxy) maskServerMessage(msg pgproto3.BackendMessage) pgproto3.
 	return msg
 }
 
-// A binary value is matched as the text a text-format client would see, so a card number in a numeric
-// column is caught whichever format was asked for. A type pgx can't decode is matched as its raw bytes.
-func (p *PostgresProxy) binaryValueText(typeOID uint32, value []byte) []byte {
+// Matches the content a client reads out of a value, so binary encoding or bytea's hex can't hide a match.
+func (p *PostgresProxy) matchText(column pgColumnFormat, value []byte) []byte {
+	isBytea := column.typeOID == pgtype.ByteaOID || column.typeOID == pgtype.ByteaArrayOID
+	if pgTextTypes[column.typeOID] || (!column.binary && !isBytea) {
+		return value
+	}
 	if p.typeMap == nil {
 		p.typeMap = pgtype.NewMap()
 	}
-	dataType, ok := p.typeMap.TypeForOID(typeOID)
+	dataType, ok := p.typeMap.TypeForOID(column.typeOID)
 	if !ok {
 		return value
 	}
-	decoded, err := dataType.Codec.DecodeValue(p.typeMap, typeOID, pgtype.BinaryFormatCode, value)
+	format := int16(pgtype.TextFormatCode)
+	if column.binary {
+		format = pgtype.BinaryFormatCode
+	}
+	decoded, err := dataType.Codec.DecodeValue(p.typeMap, column.typeOID, format, value)
 	if err != nil || decoded == nil {
 		return value
 	}
-	text, err := p.typeMap.Encode(typeOID, pgtype.TextFormatCode, decoded, nil)
-	if err != nil {
-		return value
+	if content, ok := appendContent(nil, decoded); ok {
+		return content
 	}
-	return text
+	if text, err := p.typeMap.Encode(column.typeOID, pgtype.TextFormatCode, decoded, nil); err == nil {
+		return text
+	}
+	return value
 }
 
-// A match inside a JSON number or key leaves a placeholder the client can't parse.
+func appendContent(buf []byte, value any) ([]byte, bool) {
+	switch v := value.(type) {
+	case []byte:
+		return append(buf, v...), true
+	case string:
+		return append(buf, v...), true
+	case []any:
+		for i, element := range v {
+			if i > 0 {
+				buf = append(buf, '\n')
+			}
+			if element == nil {
+				continue
+			}
+			var ok bool
+			if buf, ok = appendContent(buf, element); !ok {
+				return nil, false
+			}
+		}
+		return buf, true
+	}
+	return nil, false
+}
+
 func keepsValidJSON(column pgColumnFormat, masked []byte) bool {
 	switch column.typeOID {
 	case pgtype.JSONOID:
@@ -176,8 +312,11 @@ func keepsValidJSON(column pgColumnFormat, masked []byte) bool {
 	return true
 }
 
-// Masks every field a query can fill (RAISE ... USING sets them freely); severity, code and source
-// location come from the server and clients act on them.
+func isIdentifierByte(b byte) bool {
+	return b == '_' || b == '$' || (b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || b >= 0x80
+}
+
+// Severity, code and source location come from the server, and clients act on them.
 func maskErrorFields(masker masking.Masker, e *pgproto3.ErrorResponse) {
 	maskStrings(masker, &e.Message, &e.Detail, &e.Hint, &e.Where, &e.InternalQuery, &e.SchemaName, &e.TableName,
 		&e.ColumnName, &e.DataTypeName, &e.ConstraintName)
@@ -208,7 +347,7 @@ func (p *PostgresProxy) answerDescribe(msg pgproto3.BackendMessage) pgproto3.Bac
 	return msg
 }
 
-// popThroughSync drops what the batch ending at this ReadyForQuery left unanswered, as after an error.
+// After an error the server skips the rest of the batch, so its pending answers never arrive.
 func (p *PostgresProxy) popThroughSync() {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
