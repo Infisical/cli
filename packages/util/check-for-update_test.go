@@ -423,7 +423,7 @@ func TestHomebrewUpdateInstructionsNameTheTap(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := getUpdateInstructions("darwin", keg(t, tt.receipt)); got != "To update, run: "+tt.want {
+			if got := getUpdateInstructions("darwin", filepath.ToSlash(keg(t, tt.receipt))); got != "To update, run: "+tt.want {
 				t.Errorf("got %q, want %q", got, "To update, run: "+tt.want)
 			}
 		})
