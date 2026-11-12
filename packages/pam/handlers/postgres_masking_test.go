@@ -208,3 +208,31 @@ func TestMaskingRefusesCopyAndReplication(t *testing.T) {
 		t.Fatalf("replication reply %+v, closeAfterReply %v", forwarded[0], p.closeAfterReply)
 	}
 }
+
+func TestMaskingCoversProtocolMetadata(t *testing.T) {
+	p := newMaskingProxy()
+	_, forwarded := relay(p,
+		[]pgproto3.FrontendMessage{&pgproto3.Query{String: "SELECT set_config('application_name', card::text, false) FROM cards"}},
+		[]pgproto3.BackendMessage{
+			&pgproto3.RowDescription{Fields: []pgproto3.FieldDescription{{Name: []byte("4111111111111111"), DataTypeOID: pgtype.TextOID}}},
+			&pgproto3.ParameterStatus{Name: "application_name", Value: "4111111111111111"},
+			&pgproto3.ParameterStatus{Name: "server_version", Value: "16.4"},
+			&pgproto3.ErrorResponse{Severity: "ERROR", Code: "P0001", Message: "raised", ColumnName: "secret", ConstraintName: "secret"},
+			&pgproto3.NotificationResponse{Channel: "secret", Payload: "secret"},
+		})
+	if name := string(forwarded[0].(*pgproto3.RowDescription).Fields[0].Name); name != "[MASKED]" {
+		t.Fatalf("column name %q", name)
+	}
+	if value := forwarded[1].(*pgproto3.ParameterStatus).Value; value != "[MASKED]" {
+		t.Fatalf("application_name %q", value)
+	}
+	if value := forwarded[2].(*pgproto3.ParameterStatus).Value; value != "16.4" {
+		t.Fatalf("server_version %q", value)
+	}
+	if e := forwarded[3].(*pgproto3.ErrorResponse); e.ColumnName != "[MASKED]" || e.ConstraintName != "[MASKED]" || e.Code != "P0001" {
+		t.Fatalf("error fields %+v", e)
+	}
+	if n := forwarded[4].(*pgproto3.NotificationResponse); n.Channel != "[MASKED]" || n.Payload != "[MASKED]" {
+		t.Fatalf("notification %+v", n)
+	}
+}

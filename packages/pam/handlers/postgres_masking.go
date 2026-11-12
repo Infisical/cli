@@ -71,8 +71,10 @@ func (p *PostgresProxy) maskServerMessage(msg pgproto3.BackendMessage) pgproto3.
 	switch m := msg.(type) {
 	case *pgproto3.RowDescription:
 		p.rowColumns = p.rowColumns[:0]
-		for _, field := range m.Fields {
+		for i, field := range m.Fields {
 			p.rowColumns = append(p.rowColumns, pgColumnFormat{field.DataTypeOID, field.Format == pgtype.BinaryFormatCode})
+			// Dynamic SQL behind a cursor can name a column after a value.
+			m.Fields[i].Name = masker.Mask(field.Name)
 		}
 		return p.answerDescribe(msg)
 	case *pgproto3.NoData:
@@ -125,11 +127,16 @@ func (p *PostgresProxy) maskServerMessage(msg pgproto3.BackendMessage) pgproto3.
 			m.Result = nil
 		}
 	case *pgproto3.NotificationResponse:
-		m.Payload = masker.MaskString(m.Payload)
+		maskStrings(masker, &m.Channel, &m.Payload)
+	case *pgproto3.ParameterStatus:
+		// The one reported parameter a query can set to arbitrary text, through set_config.
+		if m.Name == "application_name" {
+			m.Value = masker.MaskString(m.Value)
+		}
 	case *pgproto3.ErrorResponse:
-		maskStrings(masker, &m.Message, &m.Detail, &m.Hint, &m.Where)
+		maskErrorFields(masker, m)
 	case *pgproto3.NoticeResponse:
-		maskStrings(masker, &m.Message, &m.Detail, &m.Hint, &m.Where)
+		maskErrorFields(masker, (*pgproto3.ErrorResponse)(m))
 	}
 	return msg
 }
@@ -167,6 +174,16 @@ func keepsValidJSON(column pgColumnFormat, masked []byte) bool {
 		return json.Valid(masked)
 	}
 	return true
+}
+
+// Masks every field a query can fill (RAISE ... USING sets them freely); severity, code and source
+// location come from the server and clients act on them.
+func maskErrorFields(masker masking.Masker, e *pgproto3.ErrorResponse) {
+	maskStrings(masker, &e.Message, &e.Detail, &e.Hint, &e.Where, &e.InternalQuery, &e.SchemaName, &e.TableName,
+		&e.ColumnName, &e.DataTypeName, &e.ConstraintName)
+	for key, value := range e.UnknownFields {
+		e.UnknownFields[key] = masker.MaskString(value)
+	}
 }
 
 func maskStrings(masker masking.Masker, fields ...*string) {
