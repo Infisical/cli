@@ -94,6 +94,7 @@ type proxyServer struct {
 	ca          *caManager
 	cache       *sessionCache
 	sessionLogs *sessionLogRecorder
+	usage       *usageReporter
 	transport   http.RoundTripper
 	// SOCKS5 traffic that no service names goes out through this one, which refuses private destinations
 	// when it dials. Its own pool, so it never reuses a connection the unchecked transport opened.
@@ -223,6 +224,10 @@ func classifyGateRefusal(err error) gateRefusal {
 	if isProxyTokenRejected(err) {
 		return gateRefusal{log.Error().Err(err), decisionError, http.StatusServiceUnavailable, errorCodeProxyRevoked, proxyRevokedBody,
 			"agent-vault: refused, Infisical rejected this proxy's token"}
+	}
+	if isNotOnPlan(err) {
+		return gateRefusal{log.Warn(), decisionBlocked, http.StatusForbidden, errorCodeNotOnPlan, notOnPlanRefusal,
+			"agent-vault: refused, Agent Vault isn't on this organization's plan"}
 	}
 	if isSessionGone(err) {
 		return gateRefusal{log.Warn(), decisionBlocked, http.StatusForbidden, errorCodeSessionInvalid, sessionInvalidRefusal,
@@ -703,6 +708,8 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, t tun
 		decision, status, code, body = decisionBlocked, http.StatusForbidden, errorCodePrivateDestination, errPrivateDestination.Error()
 	case isProxyTokenRejected(err):
 		decision, status, code, body = decisionError, http.StatusServiceUnavailable, errorCodeProxyRevoked, proxyRevokedBody
+	case isNotOnPlan(err):
+		decision, status, code, body = decisionBlocked, http.StatusForbidden, errorCodeNotOnPlan, notOnPlanRefusal
 	case isSessionGone(err):
 		decision, status, code, body = decisionBlocked, http.StatusForbidden, errorCodeSessionInvalid, sessionInvalidRefusal
 	case errors.Is(err, errSessionResolve):
@@ -713,6 +720,9 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, t tun
 		decision, status = decisionBrokered, resp.StatusCode
 	default:
 		status = resp.StatusCode
+	}
+	if decision == decisionBrokered {
+		ps.usage.add(1)
 	}
 
 	event := log.Debug()

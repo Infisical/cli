@@ -393,6 +393,7 @@ func serve(opts Options, s startup) error {
 		return err
 	}
 	ps.sessionLogs = newSessionLogRecorder(state.ProxyID, shipper)
+	ps.usage = newUsageReporter(sendUsageReports(opts.ProxyToken))
 
 	// Port 0 is not "unset": it is the ordinary ask for any free port, so it is never substituted.
 	listenAddr := net.JoinHostPort(opts.ListenHost, strconv.Itoa(opts.Port))
@@ -455,6 +456,7 @@ func serve(opts Options, s startup) error {
 	fatal := make(chan error, 1)
 	go ps.pollLoop(st, stop, fatal)
 	go ps.sessionLogs.run(stop)
+	go ps.usage.run(stop)
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- front.Serve(limited) }()
@@ -522,6 +524,7 @@ func serve(opts Options, s startup) error {
 		close(stop)
 		closeSocks()
 		ps.cache.closeNative(nativeShutdownWait)
+		ps.usage.close()
 		closeSessionLogs()
 		ps.cache.close()
 		if errors.Is(err, http.ErrServerClosed) {
@@ -539,6 +542,7 @@ func serve(opts Options, s startup) error {
 		defer cancel()
 		_ = front.Shutdown(ctx)
 		ps.cache.closeNative(nativeShutdownWait)
+		ps.usage.close()
 		closeSessionLogs()
 		ps.cache.close()
 		return fmt.Errorf("the SOCKS5 listener stopped: %w", err)
@@ -550,6 +554,7 @@ func serve(opts Options, s startup) error {
 		defer cancel()
 		_ = front.Shutdown(ctx)
 		ps.cache.closeNative(nativeShutdownWait)
+		ps.usage.close()
 		closeSessionLogs()
 		ps.cache.close()
 		return nil
@@ -560,6 +565,7 @@ func serve(opts Options, s startup) error {
 		defer cancel()
 		_ = front.Shutdown(ctx)
 		ps.cache.closeNative(nativeShutdownWait)
+		ps.usage.close()
 		closeSessionLogs()
 		ps.cache.close()
 		return err

@@ -283,9 +283,13 @@ const (
 	errorCodeTLSRequired          = "tls_required"
 	errorCodeHookDenied           = "hook_denied"
 	errorCodeHookFailed           = "hook_failed"
+	errorCodeNotOnPlan            = "plan_required"
 )
 
 var proxyErrorHints = map[string]string{
+	errorCodeNotOnPlan: "This is the Agent Vault proxy, not the API: Agent Vault isn't on this organization's plan, so every " +
+		"request is refused. Tell the user an organization admin can add it in Infisical under Billing; nothing in this " +
+		"environment can fix it.",
 	errorCodeSessionInvalid: "This is the Agent Vault proxy, not the API: the session this agent runs on has expired or been revoked, " +
 		"or it belongs to a different Agent Vault project than this proxy, so every request is refused. The user has to start a new " +
 		"session, or use a proxy in the session's project; nothing in this environment can fix it.",

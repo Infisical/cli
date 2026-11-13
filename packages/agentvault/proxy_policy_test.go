@@ -526,6 +526,7 @@ func newHookedPolicyFixture(t *testing.T, fake *fakeHook) (*proxyServer, *http.C
 	ps, client := newTLSProxy(t, upstream, grantingResolver{services: []*resolvedService{svc}})
 	ps.opts.ProxyID = "proxy-1"
 	ps.sessionLogs = newSessionLogRecorder("proxy-1", &fakeShipper{})
+	ps.usage = newUsageReporter((&recordingSender{}).send)
 	return ps, client, host, hits
 }
 
@@ -590,6 +591,9 @@ func TestAnAllowedRequestIsSentWithItsCredentialAndTheHookSawOnlyTheAgentsReques
 	if rec := drainOneRecord(t, ps.sessionLogs); rec.Hook != nil || rec.Decision != decisionBrokered {
 		t.Fatalf("an allowed request's record = %s", recordJSON(t, rec))
 	}
+	if got := ps.usage.brokered.Load(); got != 1 {
+		t.Fatalf("a brokered request counted %d times for billing, want 1", got)
+	}
 }
 
 func TestAHookDenialReachesTheAgent(t *testing.T) {
@@ -607,6 +611,10 @@ func TestAHookDenialReachesTheAgent(t *testing.T) {
 	refusal := decodeProxyError(t, body)
 	if refusal.Error != errorCodeHookDenied || refusal.Message != "Asked Ana, retry in a minute." || refusal.Hint != proxyErrorHints[errorCodeHookDenied] {
 		t.Fatalf("body = %s", body)
+	}
+
+	if got := ps.usage.brokered.Load(); got != 0 {
+		t.Fatalf("a request the hook denied counted %d times for billing, want 0", got)
 	}
 
 	rec := drainOneRecord(t, ps.sessionLogs)
