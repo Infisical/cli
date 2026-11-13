@@ -878,6 +878,9 @@ func (ps *proxyServer) forward(req *http.Request, t tunnel) (*http.Response, *re
 	// A credential that cannot be refreshed, injected into an MCP request: an upstream 401 then means the
 	// stored credential is wrong, which the agent cannot fix by logging in itself.
 	staticMCP := false
+	// Decided from the agent's own Accept, before a custom header or the credential can replace it, so it agrees
+	// with how a hook refusal is delivered.
+	watchHookStream := false
 
 	if cfg.blocksOffBundle(matched, hostname, port) {
 		return nil, nil, outcome, fmt.Errorf("no service covers host %q: %w", hostname, errHostBlocked)
@@ -914,6 +917,7 @@ func (ps *proxyServer) forward(req *http.Request, t tunnel) (*http.Response, *re
 	}
 
 	if matched != nil {
+		watchHookStream = watchesHookStream(matched, req)
 		// Before anything is injected, so the names it records can only have come from the agent. Parsed
 		// only for a session log or a tool allowlist; with neither the body is still buffered for an OAuth
 		// credential, so a rejected token's request can be sent again.
@@ -975,7 +979,7 @@ func (ps *proxyServer) forward(req *http.Request, t tunnel) (*http.Response, *re
 				)
 			}
 		}
-		if matched.kind == serviceKindMCP && (matched.allowedTools != nil || watchesHookStream(matched, req)) {
+		if matched.kind == serviceKindMCP && (matched.allowedTools != nil || watchHookStream) {
 			// Go then asks for gzip itself and hands back the response decompressed, so a tools/list result
 			// can be filtered, and a legacy SSE stream watched, whatever encodings the agent accepts.
 			req.Header.Del("Accept-Encoding")
@@ -1012,7 +1016,7 @@ func (ps *proxyServer) forward(req *http.Request, t tunnel) (*http.Response, *re
 			return nil, matched, outcome, err
 		}
 	}
-	if matched != nil && matched.kind == serviceKindMCP && (matched.allowedTools != nil || watchesHookStream(matched, req)) {
+	if matched != nil && matched.kind == serviceKindMCP && (matched.allowedTools != nil || watchHookStream) {
 		if stream := hideUnlistedTools(resp, matched.allowedTools); stream != nil {
 			ps.sseStreams.watch(stream, sessionToken, matched.id, *req.URL)
 		}

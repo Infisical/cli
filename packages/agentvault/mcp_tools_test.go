@@ -1188,6 +1188,42 @@ func TestAnMCPHookFailureTellsTheClientWhenToRetry(t *testing.T) {
 	}
 }
 
+func TestAHookRefusalReachesALegacySSEStreamWhenTheServiceSetsAccept(t *testing.T) {
+	var fake *fakeHook
+	fake = newFakeHook(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls := fake.calls()
+		var p hookPayload
+		if json.Unmarshal(calls[len(calls)-1].body, &p) == nil && p.Request != nil && p.Request.Method == http.MethodGet {
+			_, _ = io.WriteString(w, `{"decision":"allow"}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"decision":"deny","message":"Ask Ana first."}`)
+	})
+	upstream, _ := newLegacySSEUpstream(t)
+	host := strings.TrimPrefix(upstream.URL, "https://")
+	svc := hookedMCPService(host, fake.hook())
+	svc.customHeaders = []customHeader{{name: "Accept", value: []byte(streamableAccept)}}
+	_, client := newTLSProxy(t, upstream, fixedResolver{services: []*resolvedService{svc}})
+
+	resp, err := client.Get(upstream.URL + "/sse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	stream := bufio.NewReader(resp.Body)
+	if event := readSSEEvent(t, stream); !strings.Contains(event, "/messages?sessionId=abc") {
+		t.Fatalf("endpoint event = %q", event)
+	}
+
+	res := proxiedPost(t, client, upstream.URL+"/messages?sessionId=abc", "application/json", `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"merge"}}`, nil)
+	if res.status != http.StatusAccepted || res.header.Get(HeaderError) != errorCodeHookDenied {
+		t.Fatalf("status %d body %s headers %v", res.status, res.body, res.header)
+	}
+	if event := readSSEEvent(t, stream); !strings.Contains(event, "Ask Ana first.") {
+		t.Fatalf("event = %q", event)
+	}
+}
+
 func TestAHookedMCPServiceWithoutAnAllowlistDropsAcceptEncodingOnlyForLegacyClients(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
