@@ -56,6 +56,14 @@ func (m *credentialMasker) Mask(data []byte) []byte {
 	return []byte(masked)
 }
 
+// CredentialSecrets is what newCredentialMasker would redact, for callers that match with patterns.
+func CredentialSecrets(values []string) []string {
+	if m := newCredentialMasker(values); m != nil {
+		return m.secrets
+	}
+	return nil
+}
+
 // newCredentialMasker returns nil when nothing is worth redacting, so callers can skip the stage.
 func newCredentialMasker(values []string) *credentialMasker {
 	seen := make(map[string]struct{}, len(values))

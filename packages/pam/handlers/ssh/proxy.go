@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
+	"github.com/Infisical/infisical-merge/packages/pam/session/masking"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
@@ -27,8 +28,9 @@ type SSHProxyConfig struct {
 	InjectCertificate      string
 	SessionID              string
 	SessionLogger          session.SessionLogger
-	BlockedCommandPatterns []*regexp.Regexp // Regex patterns for command blocking (nil = no blocking)
-	OnActivity             func()           // Called when channel data flows
+	BlockedCommandPatterns []*regexp.Regexp  // Regex patterns for command blocking (nil = no blocking)
+	OutputMaskingPatterns  []masking.Matcher // Matchers for output masking (nil = no masking)
+	OnActivity             func()            // Called when channel data flows
 }
 
 // SSHProxy handles proxying SSH connections with credential injection
@@ -255,6 +257,12 @@ func (p *SSHProxy) handleChannel(ctx context.Context, newChannel ssh.NewChannel,
 		Str("channelType", channelType).
 		Msg("← CLIENT new channel request")
 
+	// A forwarded connection carries another protocol, which masking would corrupt rather than redact.
+	if p.masksOutput() && channelType != "session" {
+		newChannel.Reject(ssh.Prohibited, "port forwarding is blocked because this account masks output")
+		return
+	}
+
 	// Open corresponding channel on server
 	serverChannel, serverRequests, err := serverConn.OpenChannel(channelType, newChannel.ExtraData())
 	if err != nil {
@@ -395,6 +403,10 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 
 					// Determine the type of operation
 					isSCP := strings.HasPrefix(command, "scp ")
+					if isSCP && p.masksOutput() {
+						p.rejectUnmaskableTransfer(req, sessionID)
+						continue
+					}
 					chState.mutex.Lock()
 					if isSCP {
 						// Mark this channel as binary so we don't log the raw file data
@@ -460,6 +472,11 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 						Str("subsystem", subsystem).
 						Msg("SSH subsystem requested")
 
+					if subsystem == "sftp" && p.masksOutput() {
+						p.rejectUnmaskableTransfer(req, sessionID)
+						continue
+					}
+
 					// Log SFTP sessions and set up SFTP parser for file operation logging
 					if subsystem == "sftp" {
 						chState.mutex.Lock()
@@ -517,6 +534,10 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 
 // proxyData proxies data between channels with optional logging
 func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, sessionID string, logInput bool, chState *channelState) error {
+	if !logInput && p.masksOutput() {
+		return p.proxyMaskedOutput(src, dst, sessionID, chState)
+	}
+
 	buf := make([]byte, 32*1024) // 32KB buffer
 
 	// Flush any remaining buffers on exit
@@ -735,6 +756,14 @@ func (p *SSHProxy) logOutputLines(sessionID string, chState *channelState, lines
 		if unechoed, ok := chState.pendingEcho.settle(line); ok {
 			p.logInputCommand(sessionID, unechoed)
 		}
+	}
+}
+
+// File transfers carry raw bytes that masking would corrupt rather than redact.
+func (p *SSHProxy) rejectUnmaskableTransfer(req *ssh.Request, sessionID string) {
+	log.Warn().Str("sessionID", sessionID).Str("requestType", req.Type).Msg("Blocked file transfer on an account with output masking")
+	if req.WantReply {
+		req.Reply(false, nil)
 	}
 }
 

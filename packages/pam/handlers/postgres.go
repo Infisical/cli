@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -17,7 +18,9 @@ import (
 	"time"
 
 	session "github.com/Infisical/infisical-merge/packages/pam/session"
+	"github.com/Infisical/infisical-merge/packages/pam/session/masking"
 	"github.com/jackc/pgx/v5/pgproto3"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/pbkdf2" // TODO: Remove this once we update to go 1.25.1 or later where it's already in the standard library
 )
@@ -31,6 +34,7 @@ type PostgresProxyConfig struct {
 	TLSConfig      *tls.Config
 	SessionID      string
 	SessionLogger  session.SessionLogger
+	OutputMasker   masking.Masker
 }
 
 type PostgresProxy struct {
@@ -39,6 +43,12 @@ type PostgresProxy struct {
 	pendingRequests    map[string]*PendingRequest
 	preparedStatements map[string]string
 	activePortal       string
+
+	describes       []describeSource
+	rowColumns      []pgColumnFormat
+	typeMap         *pgtype.Map
+	discarding      bool
+	closeAfterReply bool
 }
 
 type PendingRequest struct {
@@ -679,6 +689,11 @@ func (p *PostgresProxy) proxyClientToServer(clientBackend *pgproto3.Backend, ser
 
 		p.trackClientMessage(msg)
 
+		if p.masking() {
+			if describe := p.trackDescribe(msg); describe != nil {
+				serverFrontend.Send(describe)
+			}
+		}
 		serverFrontend.Send(msg)
 		err = serverFrontend.Flush()
 		if err != nil {
@@ -696,12 +711,22 @@ func (p *PostgresProxy) proxyServerToClient(serverFrontend *pgproto3.Frontend, c
 			return
 		}
 
+		if p.masking() {
+			if msg = p.maskServerMessage(msg); msg == nil {
+				continue
+			}
+		}
+
 		p.trackServerMessage(msg)
 
 		clientBackend.Send(msg)
 		err = clientBackend.Flush()
 		if err != nil {
 			errChan <- err
+			return
+		}
+		if p.closeAfterReply {
+			errChan <- errors.New("replication refused because the account masks output")
 			return
 		}
 	}

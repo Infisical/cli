@@ -1104,8 +1104,15 @@ type PAMSessionLogMaskingConfig struct {
 	BuiltInDetection bool     `json:"builtInDetection"`
 }
 
+type PAMOutputMaskingConfig struct {
+	Patterns           []string `json:"patterns"`
+	AccountCredentials bool     `json:"accountCredentials"`
+	CreditCards        bool     `json:"creditCards"`
+}
+
 type PAMPolicyRules struct {
 	CommandBlocking   *PAMPolicyRuleConfig        `json:"command-blocking,omitempty"`
+	OutputMasking     *PAMOutputMaskingConfig     `json:"output-masking,omitempty"`
 	SessionLogMasking *PAMSessionLogMaskingConfig `json:"session-log-masking,omitempty"`
 }
 

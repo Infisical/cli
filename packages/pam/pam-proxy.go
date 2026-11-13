@@ -271,6 +271,31 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		)
 	}
 
+	var outputMatchers []masking.Matcher
+	var outputMasker masking.Masker
+	if credentials.PolicyRules != nil && credentials.PolicyRules.OutputMasking != nil {
+		rule := credentials.PolicyRules.OutputMasking
+		for i, pattern := range rule.Patterns {
+			re, err := regexp.Compile(pattern)
+			if err != nil {
+				// Fail closed, and keep the pattern out of the error since it can hold the value it masks.
+				return fmt.Errorf("output masking pattern %d does not compile", i+1)
+			}
+			outputMatchers = append(outputMatchers, re)
+		}
+		if rule.AccountCredentials {
+			for _, secret := range masking.CredentialSecrets(credentialValues(credentials)) {
+				outputMatchers = append(outputMatchers, regexp.MustCompile(regexp.QuoteMeta(secret)))
+			}
+		}
+		if rule.CreditCards {
+			outputMatchers = append(outputMatchers, masking.CardNumbers())
+		}
+		if len(outputMatchers) > 0 {
+			outputMasker = masking.NewMatcherMasker(outputMatchers)
+		}
+	}
+
 	sessionLogger, err := session.NewSessionLogger(pamConfig.SessionId, encryptionKey, pamConfig.ExpiryTime, pamConfig.ResourceType, masker)
 	if err != nil {
 		return fmt.Errorf("failed to create session logger: %w", err)
@@ -334,6 +359,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			TLSConfig:      tlsConfig,
 			SessionID:      pamConfig.SessionId,
 			SessionLogger:  sessionLogger,
+			OutputMasker:   outputMasker,
 		}
 		proxy := handlers.NewPostgresProxy(proxyConfig)
 		log.Info().
@@ -420,6 +446,7 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			SessionID:              pamConfig.SessionId,
 			SessionLogger:          sessionLogger,
 			BlockedCommandPatterns: blockedCommandPatterns,
+			OutputMaskingPatterns:  outputMatchers,
 			OnActivity:             pamConfig.OnActivity,
 		}
 		proxy := ssh.NewSSHProxy(sshConfig)
