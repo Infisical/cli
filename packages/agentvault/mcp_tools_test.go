@@ -1188,25 +1188,36 @@ func TestAnMCPHookFailureTellsTheClientWhenToRetry(t *testing.T) {
 	}
 }
 
-func TestAHookedMCPServiceWithoutAnAllowlistStillDropsAcceptEncoding(t *testing.T) {
-	fake := newFakeHook(t, answerHook(`{"decision":"allow"}`))
-	sawEncoding := make(chan string, 1)
-	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		sawEncoding <- r.Header.Get("Accept-Encoding")
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":3,"result":{}}`)
-	}))
-	t.Cleanup(upstream.Close)
-	host := strings.TrimPrefix(upstream.URL, "https://")
-	_, client := newTLSProxy(t, upstream, fixedResolver{services: []*resolvedService{hookedMCPService(host, fake.hook())}})
+func TestAHookedMCPServiceWithoutAnAllowlistDropsAcceptEncodingOnlyForLegacyClients(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		accept string
+		want   string
+	}{
+		{"streamable HTTP keeps the agent's encodings", streamableAccept, "br, deflate"},
+		{"legacy SSE gets the transport's own gzip", "application/json", "gzip"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newFakeHook(t, answerHook(`{"decision":"allow"}`))
+			sawEncoding := make(chan string, 1)
+			upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				sawEncoding <- r.Header.Get("Accept-Encoding")
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":3,"result":{}}`)
+			}))
+			t.Cleanup(upstream.Close)
+			host := strings.TrimPrefix(upstream.URL, "https://")
+			_, client := newTLSProxy(t, upstream, fixedResolver{services: []*resolvedService{hookedMCPService(host, fake.hook())}})
 
-	res := proxiedPost(t, client, upstream.URL+"/mcp", "application/json", `{"jsonrpc":"2.0","id":3,"method":"tools/list"}`,
-		http.Header{"Accept": {streamableAccept}, "Accept-Encoding": {"br, deflate"}})
-	if got := <-sawEncoding; got != "gzip" {
-		t.Fatalf("upstream saw Accept-Encoding %q, want the transport's own gzip", got)
-	}
-	if res.status != http.StatusOK {
-		t.Fatalf("status %d body %s", res.status, res.body)
+			res := proxiedPost(t, client, upstream.URL+"/mcp", "application/json", `{"jsonrpc":"2.0","id":3,"method":"tools/list"}`,
+				http.Header{"Accept": {tc.accept}, "Accept-Encoding": {"br, deflate"}})
+			if got := <-sawEncoding; got != tc.want {
+				t.Fatalf("upstream saw Accept-Encoding %q, want %q", got, tc.want)
+			}
+			if res.status != http.StatusOK {
+				t.Fatalf("status %d body %s", res.status, res.body)
+			}
+		})
 	}
 }
 

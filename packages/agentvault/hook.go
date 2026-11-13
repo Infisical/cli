@@ -364,6 +364,7 @@ func cleanHookText(s string, limit int) string {
 	return strings.TrimSpace(b.String())
 }
 
+// Cut on a character boundary, so the text stays valid.
 func capText(s string, limit int) string {
 	if len(s) <= limit {
 		return s

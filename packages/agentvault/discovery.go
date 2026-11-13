@@ -225,12 +225,17 @@ func writeUncheckedProxyError(w http.ResponseWriter, status int, decision, code,
 // Seconds a client waits before retrying a request the hook couldn't answer.
 const hookFailedRetryAfter = "5"
 
+// Shared by every refusal writer, so the same code always carries the same headers.
+func setRetryAfter(h http.Header, code string) {
+	if code == errorCodeHookFailed {
+		h.Set("Retry-After", hookFailedRetryAfter)
+	}
+}
+
 func writeProxyErrorAPIURL(w http.ResponseWriter, status int, decision, code, message string, namesAPIURL bool) {
 	w.Header().Set(HeaderDecision, decision)
 	w.Header().Set(HeaderError, code)
-	if code == errorCodeHookFailed {
-		w.Header().Set("Retry-After", hookFailedRetryAfter)
-	}
+	setRetryAfter(w.Header(), code)
 	if apiURL := proxyAPIURL(); apiURL != "" && namesAPIURL {
 		w.Header().Set(HeaderAPIURL, apiURL)
 	}

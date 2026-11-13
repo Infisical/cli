@@ -389,12 +389,8 @@ func appendCapped(dst *string, s string, max int, truncated *bool) {
 		return
 	}
 	if len(s) > room {
-		// Cut on a character boundary, so the record stays valid text.
-		for room > 0 && !utf8.RuneStart(s[room]) {
-			room--
-		}
 		// A copy, or the kept prefix would hold the whole original in memory while the spool counts only the prefix.
-		s = strings.Clone(s[:room])
+		s = strings.Clone(capText(s, room))
 		*truncated = true
 	}
 	*dst += s

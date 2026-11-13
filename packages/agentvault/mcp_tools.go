@@ -56,9 +56,7 @@ func (r *mcpToolRefusal) write(w http.ResponseWriter) {
 	if r.code != "" {
 		w.Header().Set(HeaderError, r.code)
 	}
-	if r.code == errorCodeHookFailed {
-		w.Header().Set("Retry-After", hookFailedRetryAfter)
-	}
+	setRetryAfter(w.Header(), r.code)
 	if len(r.body) > 0 {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Content-Length", strconv.Itoa(len(r.body)))
@@ -142,7 +140,7 @@ func checkToolAllowlist(svc *resolvedService, req *http.Request, logging bool) (
 	if logging {
 		detail = mcpDetailOf(messages)
 	}
-	batch := bytes.HasPrefix(bytes.TrimSpace(body), []byte("["))
+	batch := isBatch(body)
 	if routingHeaders && !routingHeadersMatch(req.Header, messages, batch) {
 		return detail, unreadableToolsRequest(svc.name)
 	}
@@ -402,6 +400,12 @@ func newJSONRPCError(id json.RawMessage, code int, message string) jsonrpcErrorR
 func marshalJSONRPC(v any) []byte {
 	b, _ := encodeJSON(v)
 	return b
+}
+
+// Only a legacy SSE client reads a hook's refusal from its event stream; a Streamable HTTP client gets it as the
+// answer to its POST, so its streams need no watching.
+func watchesHookStream(svc *resolvedService, req *http.Request) bool {
+	return svc.hook != nil && !streamableHTTPClient(req)
 }
 
 func streamableHTTPClient(req *http.Request) bool {
