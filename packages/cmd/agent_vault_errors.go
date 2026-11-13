@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/Infisical/infisical-merge/packages/agentvault"
 	"github.com/Infisical/infisical-merge/packages/api"
@@ -232,7 +234,8 @@ func classifyAgentVaultConnectError(err error, proxyAddr string) error {
 	}
 	if errors.As(err, &refused) {
 		message := strings.TrimSuffix(refused.Message, ".") + "."
-		return &util.CLIError{Code: errCodeServiceRefused, Cause: err, Message: strings.ToUpper(message[:1]) + message[1:]}
+		first, size := utf8.DecodeRuneInString(message)
+		return &util.CLIError{Code: errCodeServiceRefused, Cause: err, Message: string(unicode.ToUpper(first)) + message[size:]}
 	}
 	return &util.CLIError{Code: errCodeProxyUnreachable, Cause: err,
 		Message: fmt.Sprintf("The connection to the Agent Vault proxy at %s failed: %s.", proxyAddr, strings.TrimSuffix(err.Error(), "."))}

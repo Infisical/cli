@@ -2,16 +2,21 @@ package agentvault
 
 import (
 	"bytes"
+	"compress/gzip"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -495,5 +500,210 @@ func TestAnInjectedMethodOverrideCannotOutrankTheAllowlist(t *testing.T) {
 	got := decodeEcho(t, body)
 	if v := got.Headers["X-Http-Method-Override"]; len(v) > 0 {
 		t.Fatalf("the service's own header reached the upstream as %v, so the allowlist can be outranked", v)
+	}
+}
+
+// An echoing TLS upstream that counts what reaches it, behind a proxy whose one service has a hook and carries a
+// credential, a custom header and a substitution, none of which the hook may see.
+func newHookedPolicyFixture(t *testing.T, fake *fakeHook) (*proxyServer, *http.Client, string, *atomic.Int64) {
+	t.Helper()
+	hits := &atomic.Int64{}
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(echoed{Method: r.Method, Path: r.URL.EscapedPath(), Query: r.URL.RawQuery, Headers: r.Header, Body: string(body)})
+	}))
+	t.Cleanup(upstream.Close)
+	host := strings.TrimPrefix(upstream.URL, "https://")
+
+	svc := policyService(host, nil, nil, []customHeader{{name: "X-Tenant", value: []byte("tenant-value-secret")}},
+		[]substitution{{placeholder: "{{KEY}}", surfaces: map[string]bool{surfaceBody: true, surfaceHeader: true}, value: []byte("substituted-value-secret")}})
+	svc.id, svc.accessBundleID = "svc-1", "bundle-1"
+	svc.credential = credential{kind: credentialBearer, headerName: "Authorization", headerPrefix: "Bearer", value: []byte("credential-value-secret")}
+	svc.hook = fake.hook()
+
+	ps, client := newTLSProxy(t, upstream, grantingResolver{services: []*resolvedService{svc}})
+	ps.opts.ProxyID = "proxy-1"
+	ps.sessionLogs = newSessionLogRecorder("proxy-1", &fakeShipper{})
+	return ps, client, host, hits
+}
+
+func doHooked(t *testing.T, client *http.Client, method, target string, body io.Reader, header http.Header) (*http.Response, string) {
+	t.Helper()
+	req, err := http.NewRequest(method, target, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, values := range header {
+		req.Header[name] = values
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	payload, _ := io.ReadAll(resp.Body)
+	return resp, strings.TrimSpace(string(payload))
+}
+
+func TestAnAllowedRequestIsSentWithItsCredentialAndTheHookSawOnlyTheAgentsRequest(t *testing.T) {
+	fake := newFakeHook(t, answerHook(`{"decision":"allow"}`))
+	ps, client, host, _ := newHookedPolicyFixture(t, fake)
+
+	resp, body := doHooked(t, client, http.MethodPost, "https://"+host+"/v1/Refunds?limit=2", strings.NewReader("amount={{KEY}}"),
+		http.Header{"Content-Type": {"application/x-www-form-urlencoded"}, "X-Agent": {"a", "b"}, "X-Key": {"{{KEY}}"}})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	}
+	got := decodeEcho(t, body)
+	if got.Headers["Authorization"][0] != "Bearer credential-value-secret" || got.Body != "amount=substituted-value-secret" {
+		t.Fatalf("the upstream got %+v", got)
+	}
+
+	hit := fake.only(t)
+	for _, secret := range []string{"credential-value-secret", "tenant-value-secret", "substituted-value-secret"} {
+		if bytes.Contains(hit.body, []byte(secret)) {
+			t.Fatalf("the hook payload holds %q: %s", secret, hit.body)
+		}
+	}
+	p := hit.payload(t)
+	_, port, _ := strings.Cut(host, ":")
+	want := hookPayloadRequest{Method: "POST", Scheme: "https", Host: "127.0.0.1", Port: port, Path: "/v1/Refunds", Query: "limit=2",
+		Body: "amount={{KEY}}", BodyEncoding: "utf8"}
+	gotReq := *p.Request
+	gotReq.Headers = nil
+	if !reflect.DeepEqual(gotReq, want) {
+		t.Fatalf("request = %+v, want %+v", gotReq, want)
+	}
+	if h := p.Request.Headers; strings.Join(h["x-agent"], ",") != "a,b" || h["x-key"][0] != "{{KEY}}" || h["proxy-authorization"] != nil || h["authorization"] != nil || h["x-tenant"] != nil {
+		t.Fatalf("headers = %v", h)
+	}
+	if p.Version != "1" || p.Proxy.ID != "proxy-1" || p.Session.ID != "s1" || p.MCP != nil || p.Connection != nil {
+		t.Fatalf("payload = %s", hit.body)
+	}
+	if p.Service != (hookPayloadService{ID: "svc-1", Name: "github", Type: "http", AccessBundle: p.Service.AccessBundle}) ||
+		p.Service.AccessBundle == nil || *p.Service.AccessBundle != (hookPayloadBundle{ID: "bundle-1", Name: "bundle"}) {
+		t.Fatalf("service = %s", hit.body)
+	}
+
+	if rec := drainOneRecord(t, ps.sessionLogs); rec.Hook != nil || rec.Decision != decisionBrokered {
+		t.Fatalf("an allowed request's record = %s", recordJSON(t, rec))
+	}
+}
+
+func TestAHookDenialReachesTheAgent(t *testing.T) {
+	fake := newFakeHook(t, answerHook(`{"decision":"deny","message":"Asked Ana, retry in a minute.","reason":"over budget"}`))
+	ps, client, host, hits := newHookedPolicyFixture(t, fake)
+	logs := captureLogs(t)
+
+	resp, body := doHooked(t, client, http.MethodGet, "https://"+host+"/v1/charges", nil, nil)
+	if resp.StatusCode != http.StatusForbidden || hits.Load() != 0 {
+		t.Fatalf("status %d, upstream hits %d: %s", resp.StatusCode, hits.Load(), body)
+	}
+	if resp.Header.Get(HeaderDecision) != decisionBlocked || resp.Header.Get(HeaderError) != errorCodeHookDenied {
+		t.Fatalf("headers = %v", resp.Header)
+	}
+	refusal := decodeProxyError(t, body)
+	if refusal.Error != errorCodeHookDenied || refusal.Message != "Asked Ana, retry in a minute." || refusal.Hint != proxyErrorHints[errorCodeHookDenied] {
+		t.Fatalf("body = %s", body)
+	}
+
+	rec := drainOneRecord(t, ps.sessionLogs)
+	if rec.Decision != decisionBlocked || rec.Status != http.StatusForbidden || rec.Hook == nil || rec.Hook.Decision != hookDeny ||
+		rec.Hook.Reason != "over budget" || rec.Hook.DeliveryID == "" {
+		t.Fatalf("record = %s", recordJSON(t, rec))
+	}
+	line := logs.String()
+	if !strings.Contains(line, `"hook":"deny"`) || !strings.Contains(line, `"hookReason":"over budget"`) || !strings.Contains(line, `"deliveryId":"`+rec.Hook.DeliveryID+`"`) ||
+		!strings.Contains(line, `"hookMs":`) || !strings.Contains(line, `"hookUrl":"`+fake.server.URL+`"`) || strings.Contains(line, "/agent-vault/hook") {
+		t.Fatalf("log = %s", line)
+	}
+}
+
+func TestAHookDenialWithNoMessageGetsTheDefault(t *testing.T) {
+	fake := newFakeHook(t, answerHook(`{"decision":"deny"}`))
+	_, client, host, _ := newHookedPolicyFixture(t, fake)
+	_, body := doHooked(t, client, http.MethodGet, "https://"+host+"/", nil, nil)
+	if refusal := decodeProxyError(t, body); refusal.Message != hookDeniedRequestMessage {
+		t.Fatalf("body = %s", body)
+	}
+}
+
+func TestEveryHookFailureRefusesTheRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		answer http.HandlerFunc
+		cause  string
+	}{
+		{"server error", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadGateway) }, "status_502"},
+		{"redirect", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/x", http.StatusFound) }, hookCauseRedirect},
+		{"not JSON", answerHook(`ok`), hookCauseInvalidJSON},
+		{"bad decision", answerHook(`{"decision":"yes"}`), hookCauseBadDecision},
+		{"too large", answerHook(strings.Repeat(" ", maxHookAnswer+1)), hookCauseTooLarge},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newFakeHook(t, tc.answer)
+			ps, client, host, hits := newHookedPolicyFixture(t, fake)
+			resp, body := doHooked(t, client, http.MethodPost, "https://"+host+"/", strings.NewReader("x"), nil)
+			if resp.StatusCode != http.StatusServiceUnavailable || hits.Load() != 0 {
+				t.Fatalf("status %d, upstream hits %d", resp.StatusCode, hits.Load())
+			}
+			if resp.Header.Get("Retry-After") != "5" || resp.Header.Get(HeaderError) != errorCodeHookFailed || resp.Header.Get(HeaderDecision) != decisionError {
+				t.Fatalf("headers = %v", resp.Header)
+			}
+			var fields map[string]any
+			_ = json.Unmarshal([]byte(body), &fields)
+			if len(fields) != 3 || fields["error"] != errorCodeHookFailed || fields["message"] != hookFailedRequestMessage || fields["hint"] != proxyErrorHints[errorCodeHookFailed] {
+				t.Fatalf("body = %s", body)
+			}
+			rec := drainOneRecord(t, ps.sessionLogs)
+			if rec.Decision != decisionError || rec.Hook == nil || rec.Hook.Decision != hookFailed || rec.Hook.Cause != tc.cause {
+				t.Fatalf("record = %s", recordJSON(t, rec))
+			}
+		})
+	}
+}
+
+func TestLargeAndCompressedBodiesReachTheHookCutAndTheUpstreamWhole(t *testing.T) {
+	fake := newFakeHook(t, answerHook(`{"decision":"allow"}`))
+	_, client, host, _ := newHookedPolicyFixture(t, fake)
+
+	big := strings.Repeat("é", 1<<20)
+	resp, body := doHooked(t, client, http.MethodPost, "https://"+host+"/upload", strings.NewReader(big), nil)
+	if resp.StatusCode != http.StatusOK || decodeEcho(t, body).Body != big {
+		t.Fatalf("status %d, the upstream did not get the whole 2 MB body", resp.StatusCode)
+	}
+	p := fake.only(t).payload(t).Request
+	if !p.BodyTruncated || p.BodyEncoding != "utf8" || len(p.Body) != maxHookBodyPrefix || !utf8.ValidString(p.Body) {
+		t.Fatalf("truncated %v, encoding %s, %d bytes", p.BodyTruncated, p.BodyEncoding, len(p.Body))
+	}
+
+	var zipped bytes.Buffer
+	zw := gzip.NewWriter(&zipped)
+	_, _ = zw.Write([]byte("compressed body"))
+	_ = zw.Close()
+	resp, _ = doHooked(t, client, http.MethodPost, "https://"+host+"/upload", bytes.NewReader(zipped.Bytes()), http.Header{"Content-Encoding": {"gzip"}})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	calls := fake.calls()
+	p = calls[len(calls)-1].payload(t).Request
+	if decoded, _ := base64.StdEncoding.DecodeString(p.Body); p.BodyEncoding != "base64" || p.BodyTruncated || !bytes.Equal(decoded, zipped.Bytes()) {
+		t.Fatalf("a gzip body reached the hook as %s %q", p.BodyEncoding, p.Body)
+	}
+}
+
+func TestTheProxysOwnRefusalsComeBeforeTheHook(t *testing.T) {
+	fake := newFakeHook(t, answerHook(`{"decision":"allow"}`))
+	ps, client, host, _ := newHookedPolicyFixture(t, fake)
+	services, _ := ps.cache.get("agv_tok")
+	services[0].allowedMethods = toMethodSet([]string{"GET"})
+
+	if resp, _ := doHooked(t, client, http.MethodDelete, "https://"+host+"/", nil, nil); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	if got := len(fake.calls()); got != 0 {
+		t.Fatalf("the hook was asked about a request the policy refused (%d calls)", got)
 	}
 }

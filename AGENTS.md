@@ -36,6 +36,10 @@ Short commands use `Telemetry.CaptureEvent`, which flushes before exiting. Use `
 
 Never write: narration restating the next line; section headers inside a function; change history; references to plans, tickets, PRs, or reviewers; docstrings restating the signature; commented-out code.
 
+### Agent Vault hooks
+
+A service can have a hook (`packages/agentvault/hook.go`): the customer's server, which the proxy asks before it brokers. Every request to a hooked HTTP or MCP service asks it, in `forward()` after the proxy's own checks (policy, plain-HTTP refusals, tool allowlist) and before substitutions, custom headers and the credential, so the payload only ever holds what the agent sent. A database or SSH service asks once per connection, after `registerNative` and before the tunnel opens. It fails closed: anything but an `allow` or `deny` answer within 3 seconds refuses the request, and a hook Infisical sent that the proxy can't use stays a hook that always fails, never no hook. Keep any new path that attaches a credential behind the same call, and never log the hook URL beyond `scheme://host`.
+
 ## Issue and PR guidelines
 
 - Never create a GitHub issue.

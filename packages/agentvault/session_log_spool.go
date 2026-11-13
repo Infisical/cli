@@ -32,6 +32,8 @@ type sessionLogRecord struct {
 	ServiceType *string       `json:"serviceType"`
 	MCP         *mcpDetail    `json:"mcp,omitempty"`
 	Native      *nativeDetail `json:"native,omitempty"`
+	// Set when the service's hook refused the request or failed to answer. Never the payload sent to it.
+	Hook *hookOutcome `json:"hook,omitempty"`
 
 	at time.Time
 	// An estimate of the record's size, so the spool can budget memory as well as rows.
@@ -53,6 +55,9 @@ func (rec *sessionLogRecord) estimateSize() int {
 	}
 	if n := rec.Native; n != nil {
 		size += len(n.Statement) + len(n.Command) + len(n.Stdin) + len(n.File) + len(n.Result) + len(n.Output) + len(n.Note)
+	}
+	if h := rec.Hook; h != nil {
+		size += 64 + len(h.Decision) + len(h.Reason) + len(h.Cause) + len(h.DeliveryID)
 	}
 	return size
 }

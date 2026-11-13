@@ -23,6 +23,7 @@ type resolveResult struct {
 	ExpiresAt  *time.Time
 	Services   []*resolvedService
 	SessionLog *sessionLogGrant
+	Session    *api.AgentVaultResolvedSession
 }
 
 const sessionLogKeyBytes = 32
@@ -73,6 +74,7 @@ func (r *infisicalResolver) resolve(sessionToken string, held *sessionLogGrant) 
 			id:                    wire.ID,
 			name:                  wire.Name,
 			kind:                  kind,
+			accessBundleID:        derefString(wire.AccessBundleID),
 			accessBundleName:      wire.AccessBundleName,
 			hostPattern:           wire.HostPattern,
 			hostPatterns:          hostPatterns,
@@ -85,6 +87,7 @@ func (r *infisicalResolver) resolve(sessionToken string, held *sessionLogGrant) 
 			substitutions:         toSubstitutions(wire.Substitutions),
 			personalValuesMissing: wire.PersonalValuesMissing,
 			memberProvided:        wire.MemberProvided,
+			hook:                  toServiceHook(wire.Hook),
 		})
 	}
 
@@ -93,6 +96,7 @@ func (r *infisicalResolver) resolve(sessionToken string, held *sessionLogGrant) 
 		ExpiresAt:  expiresAt,
 		Services:   services,
 		SessionLog: toSessionLogGrant(res.SessionID, res.SessionLogs, held),
+		Session:    res.Session,
 	}, nil
 }
 
@@ -136,6 +140,13 @@ func toSessionLogGrant(sessionID string, wire api.AgentVaultSessionLogGrant, hel
 	}
 
 	return newSessionLogGrant(sessionID, key)
+}
+
+func derefString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // Anything unrecognised is http, so a newer backend's type is brokered the way this proxy already knows how.

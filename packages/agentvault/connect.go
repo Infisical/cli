@@ -184,7 +184,7 @@ func (c *ConnectClient) connect(ctx context.Context, service string, probe bool)
 }
 
 func refusalOf(resp *http.Response) error {
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
 	message := strings.TrimSpace(string(body))
 	// The proxy's refusal carries its text in a JSON body; a proxy too old to send one wrote the text itself.
 	var coded proxyErrorBody

@@ -881,3 +881,21 @@ func TestSocks5BrokersARequestToAnIPv6Target(t *testing.T) {
 		t.Fatalf("status=%d body=%s, want the injected credential", status, body)
 	}
 }
+
+func TestTheSocks5DoorAsksTheHook(t *testing.T) {
+	fake := newFakeHook(t, answerHook(`{"decision":"deny","message":"not over socks5"}`))
+	var f *socks5Fixture
+	f = newSocks5Fixture(t, resolverFunc(func() (*resolveResult, error) {
+		svc := bearerService("127.0.0.1:" + strconv.Itoa(int(f.upstreamPort(t))))
+		svc.hook = fake.hook()
+		return &resolveResult{SessionID: "s1", Services: []*resolvedService{svc}}, nil
+	}), nil)
+
+	status, body := f.get(t, "127.0.0.1", f.upstreamPort(t))
+	if status != http.StatusForbidden || !strings.Contains(body, "not over socks5") || f.hits.Load() != 0 {
+		t.Fatalf("status=%d body=%s upstream hits=%d", status, body, f.hits.Load())
+	}
+	if p := fake.only(t).payload(t).Request; p == nil || p.Path != "/x" {
+		t.Fatalf("request = %+v", p)
+	}
+}
