@@ -408,7 +408,8 @@ type ListAgentVaultSessionSkillsResponse struct {
 	Skills []AgentVaultSessionSkill `json:"skills"`
 }
 
-// Infisical caps one skill at 1 MB, but not how many a session can reach.
+// Infisical caps one skill at 1 MB, and a session at 25 skills through its access bundle and 20 it names, while the
+// skills sent with it share one 2 MB request.
 const agentVaultSessionSkillsResponseLimit = 64 << 20
 
 // CallListAgentVaultSessionSkills asks Infisical for the session's skills. includeBuiltin=false leaves out the built-in
