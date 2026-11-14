@@ -474,7 +474,7 @@ func TestAMemberProvidedRejectionTellsTheMemberWhatToFix(t *testing.T) {
 		}, acceptOnly("nothing"))
 
 		resp, body := doWith(t, client, http.MethodPost, fmt.Sprintf("https://%s/mcp", host), "application/json", strings.NewReader(mcpCallBody))
-		assertUpstreamAuthFailed(t, resp, body, `{"error":"upstream_auth_failed","message":"The linear service rejected your credential. Update your personal value on access bundle \"bundle\" in Infisical Agent Vault."}`)
+		assertUpstreamAuthFailed(t, resp, body, `{"error":"upstream_auth_failed","message":"The linear service rejected your credential. Update your personal value for it under Services in Infisical Agent Vault."}`)
 	})
 
 	t.Run("oauth needs reauthorization", func(t *testing.T) {
@@ -486,7 +486,7 @@ func TestAMemberProvidedRejectionTellsTheMemberWhatToFix(t *testing.T) {
 		}, acceptOnly("nothing"))
 
 		resp, body := doWith(t, client, http.MethodGet, fmt.Sprintf("https://%s/mcp", host), "", nil)
-		assertUpstreamAuthFailed(t, resp, body, `{"error":"upstream_auth_failed","message":"Reconnect your account for the linear service on access bundle \"bundle\" in Infisical Agent Vault."}`)
+		assertUpstreamAuthFailed(t, resp, body, `{"error":"upstream_auth_failed","message":"Reconnect your account for the linear service under Services in Infisical Agent Vault."}`)
 	})
 }
 

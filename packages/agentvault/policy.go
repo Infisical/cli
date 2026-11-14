@@ -22,7 +22,7 @@ func errPersonalValuesMissing(svc *resolvedService) error {
 	if svc.native != nil {
 		what = "username or password"
 	}
-	return fmt.Errorf("service %q needs your own %s, which isn't set up yet: %w. Set it up on access bundle %q in Infisical Agent Vault, or for a machine identity, start the session on behalf of a user who has set it up. It can take a few minutes to apply.", svc.name, what, errPolicyBlocked, svc.accessBundleName)
+	return fmt.Errorf("service %q needs your own %s, which isn't set up yet: %w. Set it up under Services in Infisical Agent Vault, or for a machine identity, start the session on behalf of a user who has set it up. It can take a few minutes to apply.", svc.name, what, errPolicyBlocked)
 }
 
 func checkServicePolicy(svc *resolvedService, req *http.Request) error {
