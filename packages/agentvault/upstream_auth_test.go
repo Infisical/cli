@@ -389,6 +389,27 @@ func TestARefreshThatEndsTheSessionIsAnsweredAsARevokedSession(t *testing.T) {
 	}
 }
 
+func TestARefreshRefusedForTheFreeLimitIsAnsweredWithTheServersMessage(t *testing.T) {
+	const message = "This organization used its 5,000 free Agent Vault requests this month. An admin with billing access can add a card in Usage & Billing, or the limit resets on Dec 1."
+	resolver := &oauthResolver{err: &api.APIError{StatusCode: http.StatusBadRequest, Name: freeLimitReachedName, ErrorMessage: message}}
+	client, host, up := newOAuthFixture(t, resolver, func(h string) *resolvedService { return oauthMCPService(h, "old-token") }, acceptOnly("new-token"))
+
+	for range 2 {
+		resp, body := doWith(t, client, http.MethodGet, fmt.Sprintf("https://%s/mcp", host), "", nil)
+		refusal := decodeProxyError(t, body)
+		if resp.StatusCode != http.StatusForbidden || refusal.Error != errorCodeFreeLimitReached || refusal.Message != message {
+			t.Fatalf("got %d: %s, want 403 %s with the server's message", resp.StatusCode, body, errorCodeFreeLimitReached)
+		}
+	}
+	// The second request is refused from the cache, without reaching the upstream or Infisical.
+	if got := len(up.recorded()); got != 1 {
+		t.Fatalf("upstream saw %d requests, want 1", got)
+	}
+	if got := len(resolver.refreshCalls()); got != 1 {
+		t.Fatalf("refresh called %d times, want 1", got)
+	}
+}
+
 func TestRefreshEndedSessionLeavesA404AsACredentialFailure(t *testing.T) {
 	for _, tc := range []struct {
 		err  error
@@ -397,6 +418,7 @@ func TestRefreshEndedSessionLeavesA404AsACredentialFailure(t *testing.T) {
 		{errSessionGone, true},
 		{&api.APIError{StatusCode: http.StatusUnauthorized, Name: infisicalUnauthorizedName}, true},
 		{&api.APIError{StatusCode: http.StatusUnauthorized, Name: proxyTokenRejectedName}, true},
+		{&api.APIError{StatusCode: http.StatusBadRequest, Name: freeLimitReachedName}, true},
 		{&api.APIError{StatusCode: http.StatusNotFound, Name: infisicalNotFoundName}, false},
 		{&api.APIError{StatusCode: http.StatusUnauthorized}, false},
 		{&refreshNotRecoveredError{status: oauthStatusNeedsReauthorization}, false},

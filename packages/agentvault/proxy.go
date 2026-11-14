@@ -225,9 +225,9 @@ func classifyGateRefusal(err error) gateRefusal {
 		return gateRefusal{log.Error().Err(err), decisionError, http.StatusServiceUnavailable, errorCodeProxyRevoked, proxyRevokedBody,
 			"agent-vault: refused, Infisical rejected this proxy's token"}
 	}
-	if isNotOnPlan(err) {
-		return gateRefusal{log.Warn(), decisionBlocked, http.StatusForbidden, errorCodeNotOnPlan, notOnPlanRefusal,
-			"agent-vault: refused, Agent Vault isn't on this organization's plan"}
+	if isFreeLimitReached(err) {
+		return gateRefusal{log.Warn(), decisionBlocked, http.StatusForbidden, errorCodeFreeLimitReached, freeLimitReachedBody(err),
+			"agent-vault: refused, this organization used its free Agent Vault requests for this month"}
 	}
 	if isSessionGone(err) {
 		return gateRefusal{log.Warn(), decisionBlocked, http.StatusForbidden, errorCodeSessionInvalid, sessionInvalidRefusal,
@@ -708,8 +708,8 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, t tun
 		decision, status, code, body = decisionBlocked, http.StatusForbidden, errorCodePrivateDestination, errPrivateDestination.Error()
 	case isProxyTokenRejected(err):
 		decision, status, code, body = decisionError, http.StatusServiceUnavailable, errorCodeProxyRevoked, proxyRevokedBody
-	case isNotOnPlan(err):
-		decision, status, code, body = decisionBlocked, http.StatusForbidden, errorCodeNotOnPlan, notOnPlanRefusal
+	case isFreeLimitReached(err):
+		decision, status, code, body = decisionBlocked, http.StatusForbidden, errorCodeFreeLimitReached, freeLimitReachedBody(err)
 	case isSessionGone(err):
 		decision, status, code, body = decisionBlocked, http.StatusForbidden, errorCodeSessionInvalid, sessionInvalidRefusal
 	case errors.Is(err, errSessionResolve):
