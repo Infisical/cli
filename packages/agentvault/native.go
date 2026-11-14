@@ -228,6 +228,8 @@ func (ps *proxyServer) handleNativeConnect(w http.ResponseWriter, r *http.Reques
 	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
 		return
 	}
+	// Billed once per connection: the credential is attached once, however many queries or commands follow.
+	ps.usage.add(1)
 
 	logger := newNativeSessionLogger(ps, conn.key, grant, svc)
 	defer logger.Close()

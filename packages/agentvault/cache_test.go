@@ -248,6 +248,35 @@ func TestARejectedProxyTokenDropsTheSessionButIsNotASessionVerdict(t *testing.T)
 	}
 }
 
+func TestAFreeLimitRefusalDropsTheSessionAtOnceAndIsNotASessionVerdict(t *testing.T) {
+	err := &api.APIError{StatusCode: 400, Name: freeLimitReachedName, ErrorMessage: "This organization used its 5,000 free Agent Vault requests this month."}
+	if isSessionGone(err) || isProxyTokenRejected(err) {
+		t.Fatal("a free limit refusal was read as the session or the proxy being gone")
+	}
+
+	resolver := &stubResolver{result: &resolveResult{SessionID: "s1", Services: []*resolvedService{serviceWithSecret("v")}}}
+	cache := newTestCache(resolver)
+	if _, e := cache.get("tok"); e != nil {
+		t.Fatal(e)
+	}
+	resolver.err = err
+	cache.refresh()
+	if _, e := cache.get("tok"); !isFreeLimitReached(e) {
+		t.Fatalf("the credential kept flowing after the org used its free requests: %v", e)
+	}
+}
+
+func TestAFreeLimitRefusalIsNotReResolvedEveryRequest(t *testing.T) {
+	resolver := &stubResolver{err: &api.APIError{StatusCode: 400, Name: freeLimitReachedName}}
+	cache := newTestCache(resolver)
+	for i := 0; i < 20; i++ {
+		_, _ = cache.get("agv_tok")
+	}
+	if got := resolver.callCount(); got != 1 {
+		t.Fatalf("20 requests from an org past its free requests made %d resolves, want 1", got)
+	}
+}
+
 func TestAnUnnamed401StillEndsTheSession(t *testing.T) {
 	if !isSessionGone(&api.APIError{StatusCode: 401, Name: "UnauthorizedError", ErrorMessage: "Session revoked"}) {
 		t.Fatal("a plain 401 from an older server must still end the session")

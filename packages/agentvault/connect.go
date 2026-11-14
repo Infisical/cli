@@ -43,6 +43,8 @@ func (e *ProxyRefusedError) Error() string { return e.Message }
 
 const sessionInvalidRefusal = "the session is no longer valid, or it belongs to a different Agent Vault project than this proxy"
 
+const freeLimitReachedRefusal = "This organization used its free Agent Vault requests for this month"
+
 // SessionInvalid is true when the proxy refused because the session itself can't be used any more. A service refusal
 // is the same 403, so the code tells them apart.
 func (e *ProxyRefusedError) SessionInvalid() bool {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/go-resty/resty/v2"
@@ -258,6 +259,28 @@ func CallReportAgentVaultServiceMissingScopes(httpClient *resty.Client, sessionT
 	}
 	if response.IsError() {
 		return NewAPIErrorWithResponse("CallReportAgentVaultServiceMissingScopes", response, nil)
+	}
+	return nil
+}
+
+type ReportAgentVaultUsageRequest struct {
+	ReportID string    `json:"reportId"`
+	EndedAt  time.Time `json:"endedAt"`
+	Brokered int64     `json:"brokered"`
+}
+
+func CallReportAgentVaultUsage(httpClient *resty.Client, request ReportAgentVaultUsageRequest) error {
+	response, err := httpClient.
+		R().
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/agent-vault/proxy/usage", config.INFISICAL_URL))
+
+	if err != nil {
+		return NewGenericRequestError("CallReportAgentVaultUsage", err)
+	}
+	if response.IsError() {
+		return NewAPIErrorWithResponse("CallReportAgentVaultUsage", response, nil)
 	}
 	return nil
 }

@@ -225,6 +225,25 @@ func isProxyTokenRejected(err error) bool {
 	return errors.As(err, &apiErr) && apiErr.Name == proxyTokenRejectedName
 }
 
+// The name the server puts on a refusal because the org used its free Agent Vault requests for the month. Not a
+// verdict on the session or the proxy: the proxy keeps running and brokers again once the org adds a card or the
+// month resets.
+const freeLimitReachedName = "AgentVaultFreeLimitReached"
+
+func isFreeLimitReached(err error) bool {
+	var apiErr *api.APIError
+	return errors.As(err, &apiErr) && apiErr.Name == freeLimitReachedName
+}
+
+// The server's message names the limit and the day it resets, so the agent gets it when there is one.
+func freeLimitReachedBody(err error) string {
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) && apiErr.ErrorMessage != "" {
+		return apiErr.ErrorMessage
+	}
+	return freeLimitReachedRefusal
+}
+
 // The names on Infisical's own 404s and 401s. A route miss, a middlebox or an auth proxy in front of Infisical
 // answers under another name or none.
 const (
@@ -307,7 +326,7 @@ func (c *sessionCache) lookup(sessionToken string, admit func() bool) (cacheLook
 		if err != nil {
 			// A rejected proxy token is remembered too: the poll loop exits after two such heartbeats, but
 			// until then every agent request would otherwise cost a resolve.
-			if isSessionGone(err) || isProxyTokenRejected(err) {
+			if isSessionGone(err) || isProxyTokenRejected(err) || isFreeLimitReached(err) {
 				c.mu.Lock()
 				c.rememberRefusalLocked(key, err)
 				c.forgetLocked(key, true)
@@ -508,7 +527,7 @@ func (c *sessionCache) handleRefreshFailure(key string, err error) {
 	entry, ok := c.entries[key]
 	if !ok {
 		// A pinned session whose entry is gone is still polled, and a verdict on it still ends its connections.
-		if c.pinnedLocked(key) && (isProxyTokenRejected(err) || isSessionGone(err)) {
+		if c.pinnedLocked(key) && (isProxyTokenRejected(err) || isSessionGone(err) || isFreeLimitReached(err)) {
 			c.forgetLocked(key, true)
 		}
 		return
@@ -523,6 +542,13 @@ func (c *sessionCache) handleRefreshFailure(key string, err error) {
 	}
 	if isSessionGone(err) {
 		log.Debug().Err(err).Str("sessionId", entry.sessionID).Msg("agent-vault: session no longer valid, dropping")
+		c.forgetLocked(key, true)
+		return
+	}
+	// Dropped at once, not after the grace window: a credential must not outlive the org's free requests.
+	if isFreeLimitReached(err) {
+		log.Warn().Str("sessionId", entry.sessionID).Msg("agent-vault: this organization used its free Agent Vault requests for this month, dropping the session's credentials")
+		c.rememberRefusalLocked(key, err)
 		c.forgetLocked(key, true)
 		return
 	}
@@ -579,14 +605,14 @@ func (e *refreshNotRecoveredError) Error() string {
 	return fmt.Sprintf("the refresh did not produce a token the upstream accepts (status %q)", e.status)
 }
 
-// The refusals that end the session itself. A 404 from credential-refresh can mean the service is gone
+// The refusals that drop the session's credentials. A 404 from credential-refresh can mean the service is gone
 // rather than the session, so it stays a credential failure.
 func refreshEndedSession(err error) bool {
 	var apiErr *api.APIError
 	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
 		return false
 	}
-	return isProxyTokenRejected(err) || isSessionGone(err)
+	return isProxyTokenRejected(err) || isSessionGone(err) || isFreeLimitReached(err)
 }
 
 func credentialHash(cred *credential) string {
