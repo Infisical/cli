@@ -130,8 +130,8 @@ The proxy says which Infisical it works with, and the agent gets that Infisical'
 Through the proxy, the agent lists the services its session reaches at
 $INFISICAL_AGENT_VAULT_URL/api/v1/agent-vault/session/services, with no credential of its own.
 
-The skills in the session's access bundle, plus infisical-agent-vault, which tells the agent how to work behind
-the proxy, are fetched through the proxy and installed when the agent starts, into
+The session's skills (its access bundle's, the ones it names and the ones sent with it), plus infisical-agent-vault,
+which tells the agent how to work behind the proxy, are fetched through the proxy and installed when the agent starts, into
 ~/.agents/skills, where Codex, OpenCode and OpenClaw find them. A proxy too old to pass skills on is skipped and
 Infisical asked directly. Pass --no-agent-vault-skill to leave out infisical-agent-vault. If ~/.claude (or $CLAUDE_CONFIG_DIR) or
 ~/.hermes (or $HERMES_HOME) exists, each skill is also linked into its skills folder for Claude Code or

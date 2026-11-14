@@ -22,7 +22,8 @@ var (
 	// Under the 30 seconds agent-vault run waits for skills, so its own message about the wait wins. The wait for a
 	// free slot, and passing the answer on, count against it too.
 	sessionForwardTimeout = 25 * time.Second
-	// Infisical caps one skill at 1 MB, and a bundle holds at most 25.
+	// Infisical caps one skill at 1 MB, and a session gets at most 25 through its access bundle and 20 it names, while
+	// the skills sent with it share one 2 MB request.
 	sessionForwardMaxBytes int64 = 64 << 20
 )
 
