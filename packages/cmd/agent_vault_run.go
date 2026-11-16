@@ -296,10 +296,11 @@ func parseAgentVaultSessionMetadata(values []string) (map[string]string, error) 
 		key, value, found := strings.Cut(entry, "=")
 		key = strings.TrimSpace(key)
 		if !found || key == "" {
-			return nil, fmt.Errorf("--metadata takes key=value, such as --metadata runId=8812")
+			return nil, &util.CLIError{Code: errCodeInvalidFlagValue, Message: "--metadata takes key=value, such as --metadata runId=8812"}
 		}
 		if _, seen := metadata[key]; seen {
-			return nil, fmt.Errorf("--metadata sets %q more than once; pass each key once", key)
+			return nil, &util.CLIError{Code: errCodeInvalidFlagValue,
+				Message: fmt.Sprintf("--metadata sets %s more than once; pass each key once", quoted(key, "metadata key"))}
 		}
 		metadata[key] = strings.TrimSpace(value)
 	}

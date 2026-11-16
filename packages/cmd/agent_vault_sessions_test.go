@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -87,7 +87,7 @@ func TestAgentVaultSessionOutputFormats(t *testing.T) {
 			t.Fatalf("%s: keys %v, want %v", format, got, want)
 		}
 		for key, value := range want {
-			if fmt.Sprint(got[key]) != fmt.Sprint(value) {
+			if !reflect.DeepEqual(got[key], value) {
 				t.Errorf("%s: %s = %v, want %v", format, key, got[key], value)
 			}
 		}
