@@ -20,6 +20,8 @@ import (
 const (
 	usageReportInterval    = time.Minute
 	maxPendingUsageReports = 24 * 60
+	// Infisical refuses a report above this, so a busier minute is split into several.
+	maxBrokeredPerReport = 1_000_000
 	// An Infisical without the route may be mid-upgrade, so the proxy asks again after this rather than giving up.
 	usageRouteMissingPause = time.Hour
 	// The last report on the way out gets this long in all, so it never holds up the shutdown.
@@ -67,7 +69,11 @@ func (u *usageReporter) seal(now time.Time) {
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	u.pending = append(u.pending, usageReport{id: uuid.NewString(), endedAt: now.UTC(), brokered: n})
+	for n > 0 {
+		part := min(n, maxBrokeredPerReport)
+		u.pending = append(u.pending, usageReport{id: uuid.NewString(), endedAt: now.UTC(), brokered: part})
+		n -= part
+	}
 	if over := len(u.pending) - maxPendingUsageReports; over > 0 {
 		log.Warn().Int("reports", over).Msg("agent-vault: Infisical has been unreachable for a day, dropping the oldest usage reports")
 		u.pending = append([]usageReport(nil), u.pending[over:]...)

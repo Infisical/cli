@@ -187,3 +187,23 @@ func TestANilReporterIgnoresCounts(t *testing.T) {
 	var reporter *usageReporter
 	reporter.add(1)
 }
+
+func TestAMinuteOverTheReportLimitIsSplit(t *testing.T) {
+	reporter := newUsageReporter((&recordingSender{}).send, (&recordingSender{}).send)
+	reporter.add(2*maxBrokeredPerReport + 5)
+	reporter.seal(time.Now())
+
+	if len(reporter.pending) != 3 {
+		t.Fatalf("want 3 reports, got %+v", reporter.pending)
+	}
+	var total int64
+	for _, report := range reporter.pending {
+		if report.brokered > maxBrokeredPerReport {
+			t.Fatalf("a report carries %d, over the limit", report.brokered)
+		}
+		total += report.brokered
+	}
+	if total != 2*maxBrokeredPerReport+5 {
+		t.Fatalf("split lost requests: total %d", total)
+	}
+}
