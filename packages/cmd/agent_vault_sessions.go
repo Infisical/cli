@@ -298,7 +298,7 @@ func init() {
 	agentVaultSessionsCreateCmd.Flags().StringArray("access-bundle", nil, "create the session over the access bundle with this `name` (falls back to "+agentVaultAccessBundleEnv+")")
 	agentVaultSessionsCreateCmd.Flags().String("ttl", "never", "lifetime of the session: one number and one unit, such as 30m, 8h or 7d (not 2h30m), or never")
 	agentVaultSessionsCreateCmd.Flags().String("label", "", "describe what the session is for (up to 128 characters)")
-	agentVaultSessionsCreateCmd.Flags().StringArray("metadata", nil, "attach a key=value pair to the session, such as runId=8812 (repeatable, up to 20)")
+	agentVaultSessionsCreateCmd.Flags().StringArray("metadata", nil, "attach a key=value pair to the session, such as runId=8812 (repeatable, up to 20; the value can contain = but the key can't)")
 	agentVaultSessionsCreateCmd.Flags().String("client-id", "", "universal auth client id of the machine identity that creates the session (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_ID)")
 	agentVaultSessionsCreateCmd.Flags().String("client-secret", "", "universal auth client secret of that machine identity (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET)")
 	agentVaultSessionsCreateCmd.Flags().StringP("output", "o", "", "print the session's ID, token, project, access bundle, label, metadata and expiry as json or yaml, instead of only its token")

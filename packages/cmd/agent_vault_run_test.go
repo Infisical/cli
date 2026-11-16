@@ -548,11 +548,11 @@ func metadataCmd(t *testing.T, args ...string) *cobra.Command {
 }
 
 func TestParseAgentVaultSessionMetadata(t *testing.T) {
-	got, err := parseAgentVaultSessionMetadata([]string{" runId = 8812 ", "query=a=b", "empty="})
+	got, err := parseAgentVaultSessionMetadata([]string{" runId = 8812 ", "query=a=b"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{"runId": "8812", "query": "a=b", "empty": ""}
+	want := map[string]string{"runId": "8812", "query": "a=b"}
 	if len(got) != len(want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -571,6 +571,15 @@ func TestParseAgentVaultSessionMetadataRefusesAMalformedPair(t *testing.T) {
 	for _, value := range []string{"runId", "=8812", "  =8812", ""} {
 		_, err := parseAgentVaultSessionMetadata([]string{value})
 		if err == nil || err.Error() != "--metadata takes key=value, such as --metadata runId=8812" {
+			t.Errorf("%q: err = %v", value, err)
+		}
+	}
+}
+
+func TestParseAgentVaultSessionMetadataRefusesAnEmptyValue(t *testing.T) {
+	for _, value := range []string{"flag=", "flag=   "} {
+		_, err := parseAgentVaultSessionMetadata([]string{value})
+		if err == nil || err.Error() != "--metadata takes key=value with a non-empty value, such as --metadata runId=8812" {
 			t.Errorf("%q: err = %v", value, err)
 		}
 	}

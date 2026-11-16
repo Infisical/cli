@@ -285,8 +285,8 @@ func resolveAgentVaultSessionMetadata(cmd *cobra.Command, sessionToken string, t
 	return parseAgentVaultSessionMetadata(values)
 }
 
-// parseAgentVaultSessionMetadata splits each value on its first "=", so a value may itself contain "=". Limits on
-// keys and values are left to the server, which reports them.
+// parseAgentVaultSessionMetadata splits each value on its first "=", so a value may itself contain "=" and a key
+// can't. Other limits on keys and values are left to the server, which reports them.
 func parseAgentVaultSessionMetadata(values []string) (map[string]string, error) {
 	if len(values) == 0 {
 		return nil, nil
@@ -302,7 +302,12 @@ func parseAgentVaultSessionMetadata(values []string) (map[string]string, error) 
 			return nil, &util.CLIError{Code: errCodeInvalidFlagValue,
 				Message: fmt.Sprintf("--metadata sets %s more than once; pass each key once", quoted(key, "metadata key"))}
 		}
-		metadata[key] = strings.TrimSpace(value)
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return nil, &util.CLIError{Code: errCodeInvalidFlagValue,
+				Message: "--metadata takes key=value with a non-empty value, such as --metadata runId=8812"}
+		}
+		metadata[key] = value
 	}
 	return metadata, nil
 }
@@ -1040,7 +1045,7 @@ func init() {
 	agentVaultRunCmd.Flags().Bool("keep-session", false, "leave a minted session active when the agent exits")
 	agentVaultRunCmd.Flags().String("project-id", "", "Agent Vault project of the access bundle to mint over (falls back to "+agentVaultProjectIDEnv+", then INFISICAL_PROJECT_ID)")
 	agentVaultRunCmd.Flags().String("label", "", "describe what the session this command creates is for (up to 128 characters)")
-	agentVaultRunCmd.Flags().StringArray("metadata", nil, "attach a key=value pair to the session this command creates, such as runId=8812 (repeatable, up to 20)")
+	agentVaultRunCmd.Flags().StringArray("metadata", nil, "attach a key=value pair to the session this command creates, such as runId=8812 (repeatable, up to 20; the value can contain = but the key can't)")
 	agentVaultRunCmd.Flags().String("proxy", "", "address of the Agent Vault proxy as host:port (falls back to "+agentVaultProxyAddressEnv+")")
 	agentVaultRunCmd.Flags().String("ca-fingerprint", "", "abort unless the proxy's certificate authority matches this SHA256 fingerprint from Infisical")
 	agentVaultRunCmd.Flags().String("no-proxy", "", "additional comma-separated hosts to bypass the proxy (always merged with localhost,127.0.0.1)")
