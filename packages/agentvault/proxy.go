@@ -115,6 +115,7 @@ type proxyServer struct {
 	sseStreams sseStreamRegistry
 
 	lateNativeLogs lateNativeLogs
+	refusalLogs    refusalLimiter
 	// Open database and SSH tunnels across every session, held under maxNativeTunnels.
 	nativeTunnels atomic.Int64
 }
@@ -201,13 +202,61 @@ const proxyRevokedBody = "this proxy's access has been revoked"
 
 func (ps *proxyServer) denyAtGate(w http.ResponseWriter, sessionToken, hostname, port string, err error) {
 	refusal := classifyGateRefusal(err)
-	refusal.event.
+	ps.limitedRefusalEvent("http", refusal, err).
 		Str("host", net.JoinHostPort(hostname, port)).
 		Str("sessionKey", sessionKey(sessionToken)).
 		Str("decision", refusal.decision).
 		Int("status", refusal.status).
 		Msg(refusal.msg)
 	writeProxyError(w, refusal.status, refusal.decision, refusal.code, refusal.body)
+}
+
+const gateRefusalWarnEvery = time.Minute
+
+// An agent that keeps calling on a refused session, or a flood of made-up tokens, would otherwise write a line per
+// attempt. The first refusal of each kind in a minute keeps its usual line, with how many were held back since; the
+// rest go to debug.
+type refusalLimiter struct {
+	mu      sync.Mutex
+	entries map[string]*refusalLog
+}
+
+type refusalLog struct {
+	last       time.Time
+	suppressed int
+}
+
+func (l *refusalLimiter) admit(key string, now time.Time) (emit bool, suppressed int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.entries == nil {
+		l.entries = make(map[string]*refusalLog)
+	}
+	entry := l.entries[key]
+	if entry == nil {
+		entry = &refusalLog{}
+		l.entries[key] = entry
+	}
+	if now.Sub(entry.last) < gateRefusalWarnEvery {
+		entry.suppressed++
+		return false, 0
+	}
+	suppressed = entry.suppressed
+	entry.last, entry.suppressed = now, 0
+	return true, suppressed
+}
+
+// Keyed by door as well, so a flood on one door never hides the first refusal on another.
+func (ps *proxyServer) limitedRefusalEvent(door string, refusal gateRefusal, err error) *zerolog.Event {
+	emit, suppressed := ps.refusalLogs.admit(door+" "+refusal.msg, time.Now())
+	if !emit {
+		refusal.event.Discard()
+		return log.Debug().Err(err)
+	}
+	if suppressed > 0 {
+		return refusal.event.Int("suppressedSinceLast", suppressed)
+	}
+	return refusal.event
 }
 
 type gateRefusal struct {
@@ -276,7 +325,7 @@ func (ps *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 		// The refusal reaches the agent inside the tunnel, but the operator looks for it here, as for any other door.
 		refusal := classifyGateRefusal(err)
 		refused = &refusal
-		refusal.event.
+		ps.limitedRefusalEvent("http", refusal, err).
 			Str("host", net.JoinHostPort(hostname, port)).
 			Str("sessionKey", sessionKey(sessionToken)).
 			Str("decision", refusal.decision).
@@ -733,6 +782,15 @@ func (ps *proxyServer) forwardHTTP(w http.ResponseWriter, r *http.Request, t tun
 		event = log.Warn()
 	case decisionError:
 		event = log.Error()
+	}
+	// An agent on a refused session is refused again on every request, so these lines are limited like the gate's.
+	if !t.viaSocks5 && (refusesSession(code) || code == errorCodeFreeLimitReached) {
+		if emit, suppressed := ps.refusalLogs.admit("http request "+code, time.Now()); !emit {
+			event.Discard()
+			event = log.Debug()
+		} else if suppressed > 0 {
+			event = event.Int("suppressedSinceLast", suppressed)
+		}
 	}
 	event.Str("method", reqMethod).
 		Str("host", hostname).

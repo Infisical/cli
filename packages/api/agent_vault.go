@@ -269,9 +269,10 @@ type ReportAgentVaultUsageRequest struct {
 	Brokered int64     `json:"brokered"`
 }
 
-func CallReportAgentVaultUsage(httpClient *resty.Client, request ReportAgentVaultUsageRequest) error {
+func CallReportAgentVaultUsage(ctx context.Context, httpClient *resty.Client, request ReportAgentVaultUsageRequest) error {
 	response, err := httpClient.
 		R().
+		SetContext(ctx).
 		SetHeader("User-Agent", USER_AGENT).
 		SetBody(request).
 		Post(fmt.Sprintf("%v/v1/agent-vault/proxy/usage", config.INFISICAL_URL))

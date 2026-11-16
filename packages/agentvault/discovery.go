@@ -288,7 +288,7 @@ const (
 
 var proxyErrorHints = map[string]string{
 	errorCodeFreeLimitReached: "This is the Agent Vault proxy, not the API: this organization used its free Agent Vault requests " +
-		"for this month, so every request is refused. Pass the message on to the user: an organization admin can add a card in " +
+		"for this month, so every request is refused. Pass the message on to the user: an admin can add a card in " +
 		"Infisical under Usage & Billing, or the user can wait for the monthly reset; nothing in this environment can fix it.",
 	errorCodeSessionInvalid: "This is the Agent Vault proxy, not the API: the session this agent runs on has expired or been revoked, " +
 		"or it belongs to a different Agent Vault project than this proxy, so every request is refused. The user has to start a new " +

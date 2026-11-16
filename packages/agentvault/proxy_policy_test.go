@@ -526,7 +526,7 @@ func newHookedPolicyFixture(t *testing.T, fake *fakeHook) (*proxyServer, *http.C
 	ps, client := newTLSProxy(t, upstream, grantingResolver{services: []*resolvedService{svc}})
 	ps.opts.ProxyID = "proxy-1"
 	ps.sessionLogs = newSessionLogRecorder("proxy-1", &fakeShipper{})
-	ps.usage = newUsageReporter((&recordingSender{}).send)
+	ps.usage = newUsageReporter((&recordingSender{}).send, (&recordingSender{}).send)
 	return ps, client, host, hits
 }
 

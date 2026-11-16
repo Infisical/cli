@@ -1,6 +1,7 @@
 package agentvault
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"sync"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/util"
+	"github.com/go-resty/resty/v2"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 )
@@ -18,6 +20,10 @@ import (
 const (
 	usageReportInterval    = time.Minute
 	maxPendingUsageReports = 24 * 60
+	// An Infisical without the route may be mid-upgrade, so the proxy asks again after this rather than giving up.
+	usageRouteMissingPause = time.Hour
+	// The last report on the way out gets this long in all, so it never holds up the shutdown.
+	usageFinalTimeout = 5 * time.Second
 )
 
 // A sealed report never changes. Infisical bills each report once by its id and end time, so a resend that carried
@@ -28,25 +34,27 @@ type usageReport struct {
 	brokered int64
 }
 
-type usageSender func(report usageReport) error
+type usageSender func(ctx context.Context, report usageReport) error
 
 type usageReporter struct {
 	brokered atomic.Int64
-	disabled atomic.Bool
 
-	mu      sync.Mutex
-	pending []usageReport
+	mu          sync.Mutex
+	pending     []usageReport
+	pausedUntil time.Time
 
-	send usageSender
+	send      usageSender
+	sendFinal usageSender
+	now       func() time.Time
 }
 
-func newUsageReporter(send usageSender) *usageReporter {
-	return &usageReporter{send: send}
+func newUsageReporter(send, sendFinal usageSender) *usageReporter {
+	return &usageReporter{send: send, sendFinal: sendFinal, now: time.Now}
 }
 
 // Nil-safe, so a proxy built without a reporter (tests) still serves requests.
 func (u *usageReporter) add(n int64) {
-	if u == nil || u.disabled.Load() {
+	if u == nil {
 		return
 	}
 	u.brokered.Add(n)
@@ -67,35 +75,36 @@ func (u *usageReporter) seal(now time.Time) {
 }
 
 // Sends the pending reports oldest first, and stops at the first one that may still succeed later.
-func (u *usageReporter) flush() {
-	if u.disabled.Load() {
+func (u *usageReporter) flush(ctx context.Context, send usageSender) {
+	u.mu.Lock()
+	if u.now().Before(u.pausedUntil) {
+		u.mu.Unlock()
 		return
 	}
-	u.mu.Lock()
 	reports := append([]usageReport(nil), u.pending...)
 	u.mu.Unlock()
 
 	done := map[string]bool{}
 	for _, report := range reports {
-		err := u.send(report)
+		err := send(ctx, report)
 		if err == nil {
 			done[report.id] = true
 			continue
 		}
 		var apiErr *api.APIError
 		if errors.As(err, &apiErr) {
-			// An Infisical too old to have the route: nothing it could ever accept, so stop counting for this run.
 			if apiErr.StatusCode == http.StatusNotFound && apiErr.DocumentationURL != "" {
-				log.Info().Msg("agent-vault: this Infisical doesn't take usage reports, not sending them")
-				u.disabled.Store(true)
+				log.Info().Msg("agent-vault: this Infisical doesn't take usage reports yet, trying again in an hour")
 				u.mu.Lock()
-				u.pending = nil
+				u.pausedUntil = u.now().Add(usageRouteMissingPause)
 				u.mu.Unlock()
-				return
+				break
 			}
-			// Refused for what it says, such as a clock too far off, so a resend would be refused too.
-			if apiErr.StatusCode >= 400 && apiErr.StatusCode < 500 && apiErr.StatusCode != http.StatusTooManyRequests &&
-				apiErr.StatusCode != http.StatusUnauthorized {
+			// Only a refusal Infisical named is about the report itself, such as a clock too far off, so a resend would
+			// be refused too. An unnamed one came from something in front of Infisical and may pass later.
+			if apiErr.Name != "" && apiErr.StatusCode >= 400 && apiErr.StatusCode < 500 &&
+				apiErr.StatusCode != http.StatusTooManyRequests && apiErr.StatusCode != http.StatusUnauthorized &&
+				apiErr.StatusCode != http.StatusRequestTimeout {
 				log.Warn().Err(err).Int64("brokered", report.brokered).Msg("agent-vault: Infisical refused a usage report, dropping it")
 				done[report.id] = true
 				continue
@@ -128,28 +137,45 @@ func (u *usageReporter) run(stop <-chan struct{}) {
 			return
 		case now := <-ticker.C:
 			u.seal(now)
-			u.flush()
+			u.flush(context.Background(), u.send)
 		}
 	}
 }
 
-// One last report on the way out. Anything still unsent is lost with the process.
+// One last report on the way out, without retries. Anything still unsent is lost with the process.
 func (u *usageReporter) close() {
-	u.seal(time.Now())
-	u.flush()
+	u.seal(u.now())
+	ctx, cancel := context.WithTimeout(context.Background(), usageFinalTimeout)
+	defer cancel()
+	u.flush(ctx, u.sendFinal)
 }
 
 func sendUsageReports(proxyToken func() string) usageSender {
-	return func(report usageReport) error {
+	return func(ctx context.Context, report usageReport) error {
 		httpClient, err := util.GetRestyClientWithCustomHeaders()
 		if err != nil {
 			return err
 		}
 		httpClient.SetAuthToken(proxyToken()).SetTimeout(controlPlaneTimeout)
-		return api.CallReportAgentVaultUsage(httpClient, api.ReportAgentVaultUsageRequest{
-			ReportID: report.id,
-			EndedAt:  report.endedAt,
-			Brokered: report.brokered,
-		})
+		return reportUsage(ctx, httpClient, report)
 	}
+}
+
+func sendFinalUsageReports(proxyToken func() string) usageSender {
+	return func(ctx context.Context, report usageReport) error {
+		httpClient, err := util.GetRestyClientWithPolicy(util.RetryPolicy{})
+		if err != nil {
+			return err
+		}
+		httpClient.SetAuthToken(proxyToken()).SetTimeout(usageFinalTimeout)
+		return reportUsage(ctx, httpClient, report)
+	}
+}
+
+func reportUsage(ctx context.Context, httpClient *resty.Client, report usageReport) error {
+	return api.CallReportAgentVaultUsage(ctx, httpClient, api.ReportAgentVaultUsageRequest{
+		ReportID: report.id,
+		EndedAt:  report.endedAt,
+		Brokered: report.brokered,
+	})
 }

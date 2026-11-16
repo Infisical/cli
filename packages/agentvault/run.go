@@ -393,7 +393,7 @@ func serve(opts Options, s startup) error {
 		return err
 	}
 	ps.sessionLogs = newSessionLogRecorder(state.ProxyID, shipper)
-	ps.usage = newUsageReporter(sendUsageReports(opts.ProxyToken))
+	ps.usage = newUsageReporter(sendUsageReports(opts.ProxyToken), sendFinalUsageReports(opts.ProxyToken))
 
 	// Port 0 is not "unset": it is the ordinary ask for any free port, so it is never substituted.
 	listenAddr := net.JoinHostPort(opts.ListenHost, strconv.Itoa(opts.Port))
@@ -524,8 +524,7 @@ func serve(opts Options, s startup) error {
 		close(stop)
 		closeSocks()
 		ps.cache.closeNative(nativeShutdownWait)
-		ps.usage.close()
-		closeSessionLogs()
+		ps.closeReporting(closeSessionLogs)
 		ps.cache.close()
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
@@ -542,8 +541,7 @@ func serve(opts Options, s startup) error {
 		defer cancel()
 		_ = front.Shutdown(ctx)
 		ps.cache.closeNative(nativeShutdownWait)
-		ps.usage.close()
-		closeSessionLogs()
+		ps.closeReporting(closeSessionLogs)
 		ps.cache.close()
 		return fmt.Errorf("the SOCKS5 listener stopped: %w", err)
 	case <-signals:
@@ -554,8 +552,7 @@ func serve(opts Options, s startup) error {
 		defer cancel()
 		_ = front.Shutdown(ctx)
 		ps.cache.closeNative(nativeShutdownWait)
-		ps.usage.close()
-		closeSessionLogs()
+		ps.closeReporting(closeSessionLogs)
 		ps.cache.close()
 		return nil
 	case err := <-fatal:
@@ -565,11 +562,17 @@ func serve(opts Options, s startup) error {
 		defer cancel()
 		_ = front.Shutdown(ctx)
 		ps.cache.closeNative(nativeShutdownWait)
-		ps.usage.close()
-		closeSessionLogs()
+		ps.closeReporting(closeSessionLogs)
 		ps.cache.close()
 		return err
 	}
+}
+
+// Session logs go first: they are the customer's record of what the agents did, and the usage report is small and
+// has its own short budget, so it never eats theirs.
+func (ps *proxyServer) closeReporting(closeSessionLogs func()) {
+	closeSessionLogs()
+	ps.usage.close()
 }
 
 // How long shutdown waits for open database and SSH connections to finish, so their last rows reach the session log.

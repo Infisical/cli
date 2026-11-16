@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -53,6 +54,10 @@ type nativeSessionLogger struct {
 	svc *resolvedService
 	now func() time.Time
 
+	// Billed once per connection, however many queries or commands follow, and only once one arrives: PAM logs
+	// nothing until it has logged in to the service, so a connection the service turned away costs nothing.
+	billed atomic.Bool
+
 	mu    sync.Mutex
 	grant *sessionLogGrant
 	// The command's own row is written when it starts. What is piped into it and what it prints follow in rows
@@ -74,7 +79,14 @@ func newNativeSessionLogger(ps *proxyServer, key string, grant *sessionLogGrant,
 	return &nativeSessionLogger{ps: ps, key: key, grant: grant, svc: svc, now: time.Now}
 }
 
+func (l *nativeSessionLogger) bill() {
+	if l.billed.CompareAndSwap(false, true) {
+		l.ps.usage.add(1)
+	}
+}
+
 func (l *nativeSessionLogger) LogEntry(entry session.SessionLogEntry) error {
+	l.bill()
 	detail := &nativeDetail{}
 	appendCapped(&detail.Statement, entry.Input, nativeLogInputCap, &detail.Truncated)
 	appendCapped(&detail.Result, entry.Output, nativeLogOutputCap, &detail.Truncated)
@@ -91,6 +103,7 @@ func (l *nativeSessionLogger) LogEntry(entry session.SessionLogEntry) error {
 }
 
 func (l *nativeSessionLogger) LogSessionEvent(event session.SessionEvent) error {
+	l.bill()
 	data := string(event.Data)
 
 	l.mu.Lock()
