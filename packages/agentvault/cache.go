@@ -226,7 +226,7 @@ func isProxyTokenRejected(err error) bool {
 }
 
 // The name the server puts on a refusal because the org used its free Agent Vault requests for the month. Not a
-// verdict on the session or the proxy: the proxy keeps running and brokers again once the org adds a card or the
+// verdict on the session or the proxy: the proxy keeps running and brokers again once the org adds a payment method or the
 // month resets.
 const freeLimitReachedName = "AgentVaultFreeLimitReached"
 

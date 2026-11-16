@@ -390,7 +390,7 @@ func TestARefreshThatEndsTheSessionIsAnsweredAsARevokedSession(t *testing.T) {
 }
 
 func TestARefreshRefusedForTheFreeLimitIsAnsweredWithTheServersMessage(t *testing.T) {
-	const message = "This organization used its 5,000 free Agent Vault requests this month. An admin with billing access can add a card in Usage & Billing, or the limit resets on Dec 1."
+	const message = "This organization used its 5,000 free Agent Vault requests this month. An admin can add a payment method in Usage & Billing, or wait for next month."
 	resolver := &oauthResolver{err: &api.APIError{StatusCode: http.StatusBadRequest, Name: freeLimitReachedName, ErrorMessage: message}}
 	client, host, up := newOAuthFixture(t, resolver, func(h string) *resolvedService { return oauthMCPService(h, "old-token") }, acceptOnly("new-token"))
 
