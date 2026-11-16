@@ -54,6 +54,7 @@
     "client-secret": "|string|",
     "keep-session": "|bool|false",
     "label": "|string|",
+    "metadata": "|stringArray|[]",
     "no-agent-vault-skill": "|bool|false",
     "no-ca-trust": "|bool|false",
     "no-mcp-servers": "|bool|false",
@@ -71,6 +72,7 @@
     "client-id": "|string|",
     "client-secret": "|string|",
     "label": "|string|",
+    "metadata": "|stringArray|[]",
     "output": "o|string|",
     "project-id": "|string|",
     "ttl": "|string|never"
@@ -118,6 +120,7 @@
     "client-secret": "|string|",
     "keep-session": "|bool|false",
     "label": "|string|",
+    "metadata": "|stringArray|[]",
     "no-agent-vault-skill": "|bool|false",
     "no-ca-trust": "|bool|false",
     "no-mcp-servers": "|bool|false",
@@ -135,6 +138,7 @@
     "client-id": "|string|",
     "client-secret": "|string|",
     "label": "|string|",
+    "metadata": "|stringArray|[]",
     "output": "o|string|",
     "project-id": "|string|",
     "ttl": "|string|never"

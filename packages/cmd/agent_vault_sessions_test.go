@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -38,7 +39,7 @@ func TestMintAgentVaultSessionSendsTheProject(t *testing.T) {
 	config.INFISICAL_URL = srv.URL + "/api"
 	t.Cleanup(func() { config.INFISICAL_URL = old })
 
-	minted, err := mintAgentVaultSession(resty.New(), agentVaultProject{ID: projectFromFlag}, []string{"coding-agent"}, "8h", "")
+	minted, err := mintAgentVaultSession(resty.New(), agentVaultProject{ID: projectFromFlag}, []string{"coding-agent"}, "8h", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,6 +48,9 @@ func TestMintAgentVaultSessionSendsTheProject(t *testing.T) {
 	}
 	if _, ok := sent["label"]; ok {
 		t.Fatalf("an empty label should stay out of the body: %v", sent)
+	}
+	if _, ok := sent["metadata"]; ok {
+		t.Fatalf("no metadata should stay out of the body: %v", sent)
 	}
 	if minted.Token != "agv_x" || minted.ProjectID != projectFromFlag || minted.AccessBundle == nil || minted.AccessBundle.Name != "coding-agent" {
 		t.Fatalf("minted %+v", minted)
@@ -57,11 +61,12 @@ func TestAgentVaultSessionOutputFormats(t *testing.T) {
 	label, expires := "nightly deploy", "2026-11-05T00:00:00Z"
 	out := agentVaultSessionOutputFrom(api.AgentVaultSession{
 		ID: "s1", Token: "agv_x", ProjectID: projectFromFlag, Label: &label, ExpiresAt: &expires,
+		Metadata:     map[string]string{"runId": "8812"},
 		AccessBundle: &api.AgentVaultSessionAccessBundle{ID: "b1", Name: "coding-agent"},
 	}, agentVaultProject{ID: projectFromFlag}, "coding-agent")
 	want := map[string]any{
 		"id": "s1", "token": "agv_x", "projectId": projectFromFlag, "accessBundle": "coding-agent",
-		"label": label, "expiresAt": expires,
+		"label": label, "expiresAt": expires, "metadata": map[string]any{"runId": "8812"},
 	}
 
 	for _, format := range []string{util.OUTPUT_FORMAT_JSON, util.OUTPUT_FORMAT_YAML} {
@@ -82,10 +87,35 @@ func TestAgentVaultSessionOutputFormats(t *testing.T) {
 			t.Fatalf("%s: keys %v, want %v", format, got, want)
 		}
 		for key, value := range want {
-			if got[key] != value {
+			if fmt.Sprint(got[key]) != fmt.Sprint(value) {
 				t.Errorf("%s: %s = %v, want %v", format, key, got[key], value)
 			}
 		}
+	}
+}
+
+func TestMintAgentVaultSessionSendsMetadataAsAnObject(t *testing.T) {
+	var sent map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &sent)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"session":{"id":"s1","token":"agv_x","projectId":"` + projectFromFlag + `","label":null,"metadata":{"runId":"8812"},"expiresAt":null,"createdAt":"2026-11-04T00:00:00Z","accessBundle":null}}`))
+	}))
+	t.Cleanup(srv.Close)
+	old := config.INFISICAL_URL
+	config.INFISICAL_URL = srv.URL + "/api"
+	t.Cleanup(func() { config.INFISICAL_URL = old })
+
+	minted, err := mintAgentVaultSession(resty.New(), agentVaultProject{ID: projectFromFlag}, []string{"coding-agent"}, "8h", "", map[string]string{"runId": "8812"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sentMetadata, ok := sent["metadata"].(map[string]any); !ok || sentMetadata["runId"] != "8812" || len(sentMetadata) != 1 {
+		t.Fatalf("metadata in body = %v, want {runId: 8812}", sent["metadata"])
+	}
+	if minted.Metadata["runId"] != "8812" {
+		t.Fatalf("minted metadata = %v", minted.Metadata)
 	}
 }
 
@@ -94,7 +124,7 @@ func TestAgentVaultSessionOutputWithNoExpiryOrLabelPrintsNull(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, part := range []string{`"expiresAt":null`, `"label":null`, `"projectId":"` + projectFromFlag + `"`, `"accessBundle":"coding-agent"`} {
+	for _, part := range []string{`"expiresAt":null`, `"label":null`, `"metadata":{}`, `"projectId":"` + projectFromFlag + `"`, `"accessBundle":"coding-agent"`} {
 		if !strings.Contains(formatted, part) {
 			t.Errorf("want %s in %s", part, formatted)
 		}

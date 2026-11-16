@@ -537,6 +537,75 @@ func TestResolveAgentVaultSessionLabelRefusesASessionToken(t *testing.T) {
 	}
 }
 
+func metadataCmd(t *testing.T, args ...string) *cobra.Command {
+	t.Helper()
+	cmd := &cobra.Command{Use: "run", Run: func(*cobra.Command, []string) {}}
+	cmd.Flags().StringArray("metadata", nil, "")
+	if err := cmd.Flags().Parse(args); err != nil {
+		t.Fatal(err)
+	}
+	return cmd
+}
+
+func TestParseAgentVaultSessionMetadata(t *testing.T) {
+	got, err := parseAgentVaultSessionMetadata([]string{" runId = 8812 ", "query=a=b", "empty="})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"runId": "8812", "query": "a=b", "empty": ""}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for key, value := range want {
+		if got[key] != value {
+			t.Errorf("%s = %q, want %q", key, got[key], value)
+		}
+	}
+
+	if got, err := parseAgentVaultSessionMetadata(nil); err != nil || got != nil {
+		t.Errorf("no values: got %v, %v; want nil and no error", got, err)
+	}
+}
+
+func TestParseAgentVaultSessionMetadataRefusesAMalformedPair(t *testing.T) {
+	for _, value := range []string{"runId", "=8812", "  =8812", ""} {
+		_, err := parseAgentVaultSessionMetadata([]string{value})
+		if err == nil || err.Error() != "--metadata takes key=value, such as --metadata runId=8812" {
+			t.Errorf("%q: err = %v", value, err)
+		}
+	}
+}
+
+func TestParseAgentVaultSessionMetadataRefusesARepeatedKey(t *testing.T) {
+	_, err := parseAgentVaultSessionMetadata([]string{"runId=1", " runId =2"})
+	if err == nil || !strings.Contains(err.Error(), `"runId"`) {
+		t.Errorf("err = %v, want one naming runId", err)
+	}
+}
+
+func TestResolveAgentVaultSessionMetadataRefusesASessionToken(t *testing.T) {
+	for _, tc := range []struct {
+		source agentVaultSource
+		names  string
+	}{
+		{agentVaultSourceFlag, "--session-token"},
+		{agentVaultSourceEnv, agentVaultSessionTokenEnv},
+	} {
+		_, err := resolveAgentVaultSessionMetadata(metadataCmd(t, "--metadata", "runId=8812"), "agv_token", tc.source)
+		if err == nil {
+			t.Fatalf("token from %s: want an error", tc.names)
+		}
+		if !strings.Contains(err.Error(), tc.names) || !strings.Contains(err.Error(), "--metadata") {
+			t.Errorf("the message should name --metadata and %q, got %q", tc.names, err)
+		}
+	}
+
+	metadata, err := resolveAgentVaultSessionMetadata(metadataCmd(t, "--metadata", "runId=8812"), "", agentVaultSourceNone)
+	if err != nil || metadata["runId"] != "8812" {
+		t.Errorf("minting: got %v, %v", metadata, err)
+	}
+}
+
 func TestAgentVaultLoginReadErrorShowsAllButAMissingLogin(t *testing.T) {
 	if err := agentVaultLoginReadError(nil); err != nil {
 		t.Fatalf("no error: %v", err)
