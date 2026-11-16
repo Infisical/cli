@@ -792,3 +792,65 @@ func TestAHookRefusalOfAConnectionReachesConnectAndTheSessionLog(t *testing.T) {
 		})
 	}
 }
+
+func TestADatabaseConnectionIsBilledOnceOnItsFirstQuery(t *testing.T) {
+	upstream := startFakePostgres(t, "agent", "secret")
+	ps, client, _ := newNativeProxy(t, []*resolvedService{nativeServiceAt(serviceKindPostgres, "db", upstream)})
+	ps.usage = newUsageReporter(nil, nil)
+
+	tunnel, err := client.OpenTunnel(context.Background(), "db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tunnel.Close()
+	_ = tunnel.SetDeadline(time.Now().Add(5 * time.Second))
+
+	frontend := pgproto3.NewFrontend(tunnel, tunnel)
+	frontend.Send(&pgproto3.StartupMessage{ProtocolVersion: pgproto3.ProtocolVersionNumber, Parameters: map[string]string{"user": "whoever"}})
+	if err := frontend.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor[*pgproto3.ReadyForQuery](t, frontend)
+	if n := ps.usage.brokered.Load(); n != 0 {
+		t.Fatalf("billed %d before any query", n)
+	}
+	for _, query := range []string{"SELECT 1", "SELECT 2"} {
+		frontend.Send(&pgproto3.Query{String: query})
+		if err := frontend.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		waitFor[*pgproto3.ReadyForQuery](t, frontend)
+	}
+	frontend.Send(&pgproto3.Terminate{})
+	_ = frontend.Flush()
+	waitNativeDone(t, ps)
+
+	if n := ps.usage.brokered.Load(); n != 1 {
+		t.Fatalf("billed %d for one connection with two queries, want 1", n)
+	}
+}
+
+func TestADatabaseConnectionThatFailsToLogInIsNotBilled(t *testing.T) {
+	upstream := startFakePostgres(t, "agent", "the-real-password")
+	ps, client, _ := newNativeProxy(t, []*resolvedService{nativeServiceAt(serviceKindPostgres, "db", upstream)})
+	ps.usage = newUsageReporter(nil, nil)
+
+	tunnel, err := client.OpenTunnel(context.Background(), "db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tunnel.Close()
+	_ = tunnel.SetDeadline(time.Now().Add(5 * time.Second))
+	frontend := pgproto3.NewFrontend(tunnel, tunnel)
+	frontend.Send(&pgproto3.StartupMessage{ProtocolVersion: pgproto3.ProtocolVersionNumber, Parameters: map[string]string{"user": "whoever"}})
+	_ = frontend.Flush()
+
+	if records := nativeRecords(t, ps, 1); len(errorRows(records)) != 1 {
+		t.Fatalf("records = %+v, want the failed login's error row", records)
+	}
+	_ = tunnel.Close()
+	waitNativeDone(t, ps)
+	if n := ps.usage.brokered.Load(); n != 0 {
+		t.Fatalf("billed %d for a connection that never logged in", n)
+	}
+}

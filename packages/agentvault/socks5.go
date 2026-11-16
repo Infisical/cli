@@ -183,7 +183,6 @@ func writeSocks5Reply(w io.Writer, rep byte) error {
 const (
 	socks5StepTimeout       = 3 * time.Second
 	socks5MismatchWarnEvery = time.Minute
-	socks5RefusalWarnEvery  = time.Minute
 )
 
 type socks5Server struct {
@@ -204,14 +203,6 @@ type socks5Server struct {
 	lastMismatchWarn atomic.Int64
 
 	budget *missBudget
-
-	refusalsMu sync.Mutex
-	refusals   map[string]*refusalLog
-}
-
-type refusalLog struct {
-	last       time.Time
-	suppressed int
 }
 
 func newSocks5Server(ps *proxyServer, tlsConfig *tls.Config) *socks5Server {
@@ -220,7 +211,6 @@ func newSocks5Server(ps *proxyServer, tlsConfig *tls.Config) *socks5Server {
 		tlsConfig:   tlsConfig,
 		stepTimeout: socks5StepTimeout,
 		budget:      newMissBudget(socks5MissesPerSecond, socks5MissBurst),
-		refusals:    make(map[string]*refusalLog),
 	}
 	s.idle = sync.NewCond(&s.connsMu)
 	return s
@@ -389,33 +379,9 @@ func (s *socks5Server) handle(raw net.Conn) {
 	s.ps.serveIntercepted(conn, tunnel{hostname: hostname, port: port, sessionToken: sessionToken, viaSocks5: true}, leaf)
 }
 
-// A flood of logins with made-up tokens would otherwise write a line each. The first refusal of each kind in a
-// minute keeps its usual line, with how many were held back since; the rest go to debug.
+// A flood of logins with made-up tokens would otherwise write a line each.
 func (s *socks5Server) logRefusal(refusal gateRefusal, err error, remote, sessionToken string) {
-	now := time.Now()
-	s.refusalsMu.Lock()
-	entry := s.refusals[refusal.msg]
-	if entry == nil {
-		entry = &refusalLog{}
-		s.refusals[refusal.msg] = entry
-	}
-	suppressed, emit := 0, now.Sub(entry.last) >= socks5RefusalWarnEvery
-	if emit {
-		suppressed = entry.suppressed
-		entry.last, entry.suppressed = now, 0
-	} else {
-		entry.suppressed++
-	}
-	s.refusalsMu.Unlock()
-
-	event := refusal.event
-	if !emit {
-		event.Discard()
-		event = log.Debug().Err(err)
-	} else if suppressed > 0 {
-		event = event.Int("suppressedSinceLast", suppressed)
-	}
-	event.
+	s.ps.limitedRefusalEvent("socks5", refusal, err).
 		Str("door", "socks5").
 		Str("remote", remote).
 		Str("sessionKey", sessionKey(sessionToken)).
