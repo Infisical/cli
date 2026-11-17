@@ -328,10 +328,11 @@ func CallCreateAgentVaultSessionLogChunk(ctx context.Context, httpClient *resty.
 }
 
 type CreateAgentVaultSessionRequest struct {
-	ProjectID    string `json:"projectId,omitempty"`
-	AccessBundle string `json:"accessBundle"`
-	TTL          string `json:"ttl"`
-	Label        string `json:"label,omitempty"`
+	ProjectID    string            `json:"projectId,omitempty"`
+	AccessBundle string            `json:"accessBundle"`
+	TTL          string            `json:"ttl"`
+	Label        string            `json:"label,omitempty"`
+	Metadata     map[string]string `json:"metadata,omitempty"`
 }
 
 type AgentVaultSessionAccessBundle struct {
@@ -344,6 +345,7 @@ type AgentVaultSession struct {
 	Token        string                         `json:"token"`
 	ProjectID    string                         `json:"projectId"`
 	Label        *string                        `json:"label"`
+	Metadata     map[string]string              `json:"metadata"`
 	AccessBundle *AgentVaultSessionAccessBundle `json:"accessBundle"`
 	ExpiresAt    *string                        `json:"expiresAt"`
 	CreatedAt    string                         `json:"createdAt"`

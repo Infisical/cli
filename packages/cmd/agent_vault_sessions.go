@@ -37,22 +37,23 @@ Only the token is printed, so it can be captured into a variable:
 
   export INFISICAL_AGENT_VAULT_SESSION_TOKEN=$(infisical agent-vault sessions create --access-bundle coding-agent --ttl 8h)
 
-Pass -o json or -o yaml for the session's ID, project, access bundle, label and expiry as well. The session
+Pass -o json or -o yaml for the session's ID, project, access bundle, label, metadata and expiry as well. The session
 stays active until it expires or you revoke it with 'infisical agent-vault sessions revoke'.`,
 	Example: `  infisical agent-vault sessions create --access-bundle coding-agent --ttl 8h
-  infisical agent-vault sessions create --project-id 4f0c... --access-bundle coding-agent --label "nightly deploy" -o json`,
+  infisical agent-vault sessions create --project-id 4f0c... --access-bundle coding-agent --label "nightly deploy" --metadata runId=8812 -o json`,
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.NoArgs,
 	Run:                   runAgentVaultSessionsCreate,
 }
 
 type agentVaultSessionOutput struct {
-	ID           string  `json:"id"`
-	Token        string  `json:"token"`
-	ProjectID    string  `json:"projectId"`
-	AccessBundle string  `json:"accessBundle"`
-	Label        *string `json:"label"`
-	ExpiresAt    *string `json:"expiresAt"`
+	ID           string            `json:"id"`
+	Token        string            `json:"token"`
+	ProjectID    string            `json:"projectId"`
+	AccessBundle string            `json:"accessBundle"`
+	Label        *string           `json:"label"`
+	Metadata     map[string]string `json:"metadata"`
+	ExpiresAt    *string           `json:"expiresAt"`
 }
 
 func runAgentVaultSessionsCreate(cmd *cobra.Command, args []string) {
@@ -85,10 +86,15 @@ func runAgentVaultSessionsCreate(cmd *cobra.Command, args []string) {
 	ttl, _ := cmd.Flags().GetString("ttl")
 	label, _ := cmd.Flags().GetString("label")
 	label = strings.TrimSpace(label)
+	metadataValues, _ := cmd.Flags().GetStringArray("metadata")
+	metadata, err := parseAgentVaultSessionMetadata(metadataValues)
+	if err != nil {
+		exitWithError(cmd, err)
+	}
 
 	stdoutIsTerminal := isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
 	identity := resolveAgentVaultIdentity(cmd, stdoutIsTerminal)
-	minted, err := mintAgentVaultSession(newAgentVaultAPIClient(identity), project, accessBundles, ttl, label)
+	minted, err := mintAgentVaultSession(newAgentVaultAPIClient(identity), project, accessBundles, ttl, label, metadata)
 	if err != nil {
 		exitWithError(cmd, classifyAgentVaultAPIError(err, project, accessBundles[0]),
 			append([]string{"Unable to mint an Agent Vault session"}, agentVaultProjectHints(err, project)...)...)
@@ -100,6 +106,7 @@ func runAgentVaultSessionsCreate(cmd *cobra.Command, args []string) {
 		Set("platform", runtime.GOOS).
 		Set("ttl", ttl).
 		Set("labeled", label != "").
+		Set("hasMetadata", len(metadata) > 0).
 		Set("projectSource", agentVaultProjectSourceKind(project)).
 		Set("output", outputFormat))
 
@@ -121,10 +128,15 @@ func agentVaultSessionOutputFrom(minted api.AgentVaultSession, project agentVaul
 		ProjectID:    cmp.Or(minted.ProjectID, project.ID),
 		AccessBundle: accessBundle,
 		Label:        minted.Label,
+		Metadata:     minted.Metadata,
 		ExpiresAt:    minted.ExpiresAt,
 	}
 	if minted.AccessBundle != nil {
 		out.AccessBundle = minted.AccessBundle.Name
+	}
+	// An older server sends no metadata; print an empty object rather than null so scripts can always index it.
+	if out.Metadata == nil {
+		out.Metadata = map[string]string{}
 	}
 	return out
 }
@@ -250,12 +262,13 @@ func validateAgentVaultAccessBundles(bundles []string, source agentVaultSource) 
 	return nil
 }
 
-func mintAgentVaultSession(httpClient *resty.Client, project agentVaultProject, accessBundles []string, ttl, label string) (api.AgentVaultSession, error) {
+func mintAgentVaultSession(httpClient *resty.Client, project agentVaultProject, accessBundles []string, ttl, label string, metadata map[string]string) (api.AgentVaultSession, error) {
 	created, err := api.CallCreateAgentVaultSession(httpClient, api.CreateAgentVaultSessionRequest{
 		ProjectID:    project.ID,
 		AccessBundle: accessBundles[0],
 		TTL:          ttl,
 		Label:        label,
+		Metadata:     metadata,
 	})
 	if err != nil {
 		return api.AgentVaultSession{}, err
@@ -272,8 +285,8 @@ func newAgentVaultAPIClient(identity string) *resty.Client {
 	return httpClient
 }
 
-func mintAgentVaultSessionOrExit(identity string, project agentVaultProject, accessBundles []string, ttl, label string) *api.AgentVaultSession {
-	minted, err := mintAgentVaultSession(newAgentVaultAPIClient(identity), project, accessBundles, ttl, label)
+func mintAgentVaultSessionOrExit(identity string, project agentVaultProject, accessBundles []string, ttl, label string, metadata map[string]string) *api.AgentVaultSession {
+	minted, err := mintAgentVaultSession(newAgentVaultAPIClient(identity), project, accessBundles, ttl, label, metadata)
 	if err != nil {
 		util.HandleError(err, append([]string{"Unable to mint an Agent Vault session"}, agentVaultProjectHints(err, project)...)...)
 	}
@@ -285,9 +298,10 @@ func init() {
 	agentVaultSessionsCreateCmd.Flags().StringArray("access-bundle", nil, "create the session over the access bundle with this `name` (falls back to "+agentVaultAccessBundleEnv+")")
 	agentVaultSessionsCreateCmd.Flags().String("ttl", "never", "lifetime of the session: one number and one unit, such as 30m, 8h or 7d (not 2h30m), or never")
 	agentVaultSessionsCreateCmd.Flags().String("label", "", "describe what the session is for (up to 128 characters)")
+	agentVaultSessionsCreateCmd.Flags().StringArray("metadata", nil, "attach a key=value pair to the session, such as runId=8812 (repeatable, up to 20; the value can contain = but the key can't)")
 	agentVaultSessionsCreateCmd.Flags().String("client-id", "", "universal auth client id of the machine identity that creates the session (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_ID)")
 	agentVaultSessionsCreateCmd.Flags().String("client-secret", "", "universal auth client secret of that machine identity (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET)")
-	agentVaultSessionsCreateCmd.Flags().StringP("output", "o", "", "print the session's ID, token, project, access bundle, label and expiry as json or yaml, instead of only its token")
+	agentVaultSessionsCreateCmd.Flags().StringP("output", "o", "", "print the session's ID, token, project, access bundle, label, metadata and expiry as json or yaml, instead of only its token")
 
 	agentVaultSessionsRevokeCmd.Flags().String("session-token", "", "revoke the session this session token belongs to, instead of naming it by ID (falls back to "+agentVaultSessionTokenEnv+" when no ID is given)")
 	agentVaultSessionsRevokeCmd.Flags().String("client-id", "", "universal auth client id of the machine identity to revoke as (falls back to INFISICAL_UNIVERSAL_AUTH_CLIENT_ID)")
