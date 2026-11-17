@@ -16,7 +16,12 @@ import (
 	"github.com/Infisical/infisical-merge/packages/util"
 )
 
-func startAWSAccess(_ *resty.Client, response *api.PAMAccessResponse, path, _ string, _ int) {
+func startAWSAccess(httpClient *resty.Client, response *api.PAMAccessResponse, path, durationStr string, port int) {
+	if response.GatewayId != "" {
+		startAWSGatewayAccess(httpClient, response, path, durationStr, port)
+		return
+	}
+
 	expiresAtStr := response.Metadata["expiresAt"]
 	accessKeyId := response.Metadata["accessKeyId"]
 	secretAccessKey := response.Metadata["secretAccessKey"]

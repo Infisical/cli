@@ -21,6 +21,10 @@ const AwsIamAuthMethod = "aws-iam"
 
 const awsIamCredentialTTL = 10 * time.Minute
 
+// How long before STS credentials expire the gateway fetches the next set, so no request is signed with
+// credentials that lapse in flight
+const stsCredentialRefreshMargin = 5 * time.Minute
+
 type PAMCredentials struct {
 	AuthMethod            string
 	Username              string
@@ -51,6 +55,9 @@ type PAMCredentials struct {
 	Schema                string
 	Role                  string
 	PrivateKeyPassphrase  string
+	AccessKeyId           string
+	SecretAccessKey       string
+	SessionToken          string
 	PolicyRules           *api.PAMPolicyRules
 }
 
@@ -216,6 +223,9 @@ func (cm *CredentialsManager) GetPAMSessionCredentials(sessionId string, expiryT
 		Schema:                response.Credentials.Schema,
 		Role:                  response.Credentials.Role,
 		PrivateKeyPassphrase:  response.Credentials.PrivateKeyPassphrase,
+		AccessKeyId:           response.Credentials.AccessKeyId,
+		SecretAccessKey:       response.Credentials.SecretAccessKey,
+		SessionToken:          response.Credentials.SessionToken,
 		PolicyRules:           response.PolicyRules,
 	}
 
@@ -223,6 +233,11 @@ func (cm *CredentialsManager) GetPAMSessionCredentials(sessionId string, expiryT
 	if credentials.AuthMethod == AwsIamAuthMethod {
 		if tokenExpiry := time.Now().Add(awsIamCredentialTTL); tokenExpiry.Before(cacheExpiry) {
 			cacheExpiry = tokenExpiry
+		}
+	}
+	if expiresAt, err := time.Parse(time.RFC3339Nano, response.Credentials.ExpiresAt); err == nil {
+		if refreshAt := expiresAt.Add(-stsCredentialRefreshMargin); refreshAt.Before(cacheExpiry) {
+			cacheExpiry = refreshAt
 		}
 	}
 

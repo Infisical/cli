@@ -19,6 +19,7 @@ func TestLocalProxiesBindLoopback(t *testing.T) {
 		{"kubernetes", func() (net.Listener, error) { p := &KubernetesProxyServer{}; err := p.Start(0); return p.server, err }},
 		{"ssh", func() (net.Listener, error) { p := &SSHProxyServer{}; err := p.Start(0); return p.server, err }},
 		{"rdp", func() (net.Listener, error) { p := &RDPProxyServer{}; err := p.Start(0); return p.server, err }},
+		{"aws", func() (net.Listener, error) { p := &AWSProxyServer{}; err := p.Start(0); return p.server, err }},
 	}
 
 	for _, tc := range cases {

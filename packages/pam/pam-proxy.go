@@ -15,6 +15,7 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/aws"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/azure"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/clickhouse"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/gcp"
@@ -67,6 +68,7 @@ func GetSupportedResourceTypes() []string {
 		session.ResourceTypeAzureCli,
 		session.ResourceTypeSnowflake,
 		session.ResourceTypeClickhouse,
+		session.ResourceTypeAwsIam,
 	}
 	// Only advertise RDP when the real bridge is compiled in. A stub
 	// build would otherwise accept RDP session routing and fail every
@@ -169,6 +171,8 @@ func credentialValues(c *session.PAMCredentials) []string {
 		c.Token,
 		c.ServiceAccountToken,
 		c.ConnectionString,
+		c.SecretAccessKey,
+		c.SessionToken,
 	}
 	for _, token := range c.Tokens {
 		values = append(values, token)
@@ -663,6 +667,26 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		log.Info().
 			Str("sessionId", pamConfig.SessionId).
 			Msg("Starting Azure CLI PAM proxy")
+		return proxy.HandleConnection(ctx, handlerConn)
+	case session.ResourceTypeAwsIam:
+		proxy := aws.NewAWSProxy(aws.AWSProxyConfig{
+			SessionID:     pamConfig.SessionId,
+			SessionLogger: sessionLogger,
+			GetCredentials: func() (aws.Credentials, error) {
+				current, err := pamConfig.CredentialsManager.GetPAMSessionCredentials(pamConfig.SessionId, pamConfig.ExpiryTime)
+				if err != nil {
+					return aws.Credentials{}, err
+				}
+				return aws.Credentials{
+					AccessKeyID:     current.AccessKeyId,
+					SecretAccessKey: current.SecretAccessKey,
+					SessionToken:    current.SessionToken,
+				}, nil
+			},
+		})
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Msg("Starting AWS IAM PAM proxy")
 		return proxy.HandleConnection(ctx, handlerConn)
 	default:
 		return fmt.Errorf("unsupported resource type: %s", pamConfig.ResourceType)
