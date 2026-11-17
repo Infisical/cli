@@ -35,14 +35,14 @@ func upstreamAuthBody(code, message string) string {
 // For a credential the user stored, which only they can replace.
 func staticCredentialRejectedBody(svc *resolvedService) string {
 	if svc.memberProvided {
-		return upstreamAuthBody("upstream_auth_failed", fmt.Sprintf("The %s service rejected your credential. Update your personal value on access bundle %q in Infisical Agent Vault.", svc.name, svc.accessBundleName))
+		return upstreamAuthBody("upstream_auth_failed", fmt.Sprintf("The %s service rejected your credential. Update your personal value for it under Services in Infisical Agent Vault.", svc.name))
 	}
 	return upstreamAuthBody("upstream_auth_failed", fmt.Sprintf("The %s service's credential was rejected. Update it in Infisical Agent Vault.", svc.name))
 }
 
 func reauthorizationNeededBody(svc *resolvedService) string {
 	if svc.memberProvided {
-		return upstreamAuthBody("upstream_auth_failed", fmt.Sprintf("Reconnect your account for the %s service on access bundle %q in Infisical Agent Vault.", svc.name, svc.accessBundleName))
+		return upstreamAuthBody("upstream_auth_failed", fmt.Sprintf("Reconnect your account for the %s service under Services in Infisical Agent Vault.", svc.name))
 	}
 	return upstreamAuthBody("upstream_auth_failed", fmt.Sprintf("The %s service needs to be reauthorized in Infisical Agent Vault.", svc.name))
 }
