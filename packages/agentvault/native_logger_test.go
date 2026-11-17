@@ -624,3 +624,26 @@ func TestASilentClientIsClosedWhenConnectStops(t *testing.T) {
 		t.Fatalf("the silent client was left open after cancel: %v", err)
 	}
 }
+
+func TestTheLoggerBillsItsConnectionOnceOnTheFirstEntryOrEvent(t *testing.T) {
+	for _, first := range []func(*nativeSessionLogger){
+		func(l *nativeSessionLogger) { _ = l.LogEntry(session.SessionLogEntry{Input: "SELECT 1"}) },
+		func(l *nativeSessionLogger) {
+			_ = l.LogSessionEvent(session.SessionEvent{ChannelType: session.SessionChannelExec, EventType: session.SessionEventInput, Data: []byte("$ whoami")})
+		},
+	} {
+		logger, ps := newLoggerUnderTest(t)
+		ps.usage = newUsageReporter(nil, nil)
+		logger.recordOutcome(decisionError, "the service refused the login")
+		if n := ps.usage.brokered.Load(); n != 0 {
+			t.Fatalf("billed %d for an outcome row", n)
+		}
+		first(logger)
+		_ = logger.LogEntry(session.SessionLogEntry{Input: "SELECT 2"})
+		_ = logger.LogSessionEvent(session.SessionEvent{ChannelType: session.SessionChannelShell, EventType: session.SessionEventOutput, Data: []byte("ok")})
+		_ = logger.Close()
+		if n := ps.usage.brokered.Load(); n != 1 {
+			t.Fatalf("billed %d for one connection, want 1", n)
+		}
+	}
+}

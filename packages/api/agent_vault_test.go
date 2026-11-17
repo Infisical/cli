@@ -76,6 +76,24 @@ func TestCreateAgentVaultSessionRequestSendsALabelOnlyWhenGiven(t *testing.T) {
 	}
 }
 
+func TestCreateAgentVaultSessionRequestSendsMetadataOnlyWhenGiven(t *testing.T) {
+	without, err := json.Marshal(CreateAgentVaultSessionRequest{AccessBundle: "coding-agent", TTL: "never"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(without), "metadata") {
+		t.Errorf("want no metadata key, got %s", without)
+	}
+
+	with, err := json.Marshal(CreateAgentVaultSessionRequest{AccessBundle: "coding-agent", TTL: "never", Metadata: map[string]string{"runId": "8812"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(with), `"metadata":{"runId":"8812"}`) {
+		t.Errorf("want the metadata as an object in the body, got %s", with)
+	}
+}
+
 func TestCreateAgentVaultSessionRequestSendsTheProject(t *testing.T) {
 	body, err := json.Marshal(CreateAgentVaultSessionRequest{ProjectID: "p1", AccessBundle: "coding-agent", TTL: "never"})
 	if err != nil {

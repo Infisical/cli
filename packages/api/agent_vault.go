@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/go-resty/resty/v2"
@@ -262,6 +263,29 @@ func CallReportAgentVaultServiceMissingScopes(httpClient *resty.Client, sessionT
 	return nil
 }
 
+type ReportAgentVaultUsageRequest struct {
+	ReportID string    `json:"reportId"`
+	EndedAt  time.Time `json:"endedAt"`
+	Brokered int64     `json:"brokered"`
+}
+
+func CallReportAgentVaultUsage(ctx context.Context, httpClient *resty.Client, request ReportAgentVaultUsageRequest) error {
+	response, err := httpClient.
+		R().
+		SetContext(ctx).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/agent-vault/proxy/usage", config.INFISICAL_URL))
+
+	if err != nil {
+		return NewGenericRequestError("CallReportAgentVaultUsage", err)
+	}
+	if response.IsError() {
+		return NewAPIErrorWithResponse("CallReportAgentVaultUsage", response, nil)
+	}
+	return nil
+}
+
 type CreateAgentVaultSessionLogChunkRequest struct {
 	ChunkID          string `json:"chunkId"`
 	EndedAt          string `json:"endedAt"`
@@ -304,10 +328,11 @@ func CallCreateAgentVaultSessionLogChunk(ctx context.Context, httpClient *resty.
 }
 
 type CreateAgentVaultSessionRequest struct {
-	ProjectID    string `json:"projectId,omitempty"`
-	AccessBundle string `json:"accessBundle"`
-	TTL          string `json:"ttl"`
-	Label        string `json:"label,omitempty"`
+	ProjectID    string            `json:"projectId,omitempty"`
+	AccessBundle string            `json:"accessBundle"`
+	TTL          string            `json:"ttl"`
+	Label        string            `json:"label,omitempty"`
+	Metadata     map[string]string `json:"metadata,omitempty"`
 }
 
 type AgentVaultSessionAccessBundle struct {
@@ -320,6 +345,7 @@ type AgentVaultSession struct {
 	Token        string                         `json:"token"`
 	ProjectID    string                         `json:"projectId"`
 	Label        *string                        `json:"label"`
+	Metadata     map[string]string              `json:"metadata"`
 	AccessBundle *AgentVaultSessionAccessBundle `json:"accessBundle"`
 	ExpiresAt    *string                        `json:"expiresAt"`
 	CreatedAt    string                         `json:"createdAt"`

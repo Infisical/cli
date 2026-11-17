@@ -273,6 +273,45 @@ func resolveAgentVaultSessionLabel(cmd *cobra.Command, sessionToken string, toke
 	return strings.TrimSpace(label), nil
 }
 
+// resolveAgentVaultSessionMetadata returns the metadata to send when this command mints a session, refusing
+// --metadata alongside a session token for the same reason as --label.
+func resolveAgentVaultSessionMetadata(cmd *cobra.Command, sessionToken string, tokenSource agentVaultSource) (map[string]string, error) {
+	if sessionToken != "" && cmd.Flags().Changed("metadata") {
+		return nil, fmt.Errorf(
+			"--metadata applies to a session this command mints; edit the metadata of the one behind %s in the dashboard. Drop --metadata, or mint here with --access-bundle",
+			agentVaultSourceName(tokenSource, "--session-token", agentVaultSessionTokenEnv))
+	}
+	values, _ := cmd.Flags().GetStringArray("metadata")
+	return parseAgentVaultSessionMetadata(values)
+}
+
+// parseAgentVaultSessionMetadata splits each value on its first "=", so a value may itself contain "=" and a key
+// can't. Other limits on keys and values are left to the server, which reports them.
+func parseAgentVaultSessionMetadata(values []string) (map[string]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	metadata := make(map[string]string, len(values))
+	for _, entry := range values {
+		key, value, found := strings.Cut(entry, "=")
+		key = strings.TrimSpace(key)
+		if !found || key == "" {
+			return nil, &util.CLIError{Code: errCodeInvalidFlagValue, Message: "--metadata takes key=value, such as --metadata runId=8812"}
+		}
+		if _, seen := metadata[key]; seen {
+			return nil, &util.CLIError{Code: errCodeInvalidFlagValue,
+				Message: fmt.Sprintf("--metadata sets %s more than once; pass each key once", quoted(key, "metadata key"))}
+		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return nil, &util.CLIError{Code: errCodeInvalidFlagValue,
+				Message: "--metadata takes key=value with a non-empty value, such as --metadata runId=8812"}
+		}
+		metadata[key] = value
+	}
+	return metadata, nil
+}
+
 // None of these can reach a session minted in the dashboard: its expiry and project were fixed when it was
 // created, and this command never revokes it.
 func refuseAgentVaultMintOnlyFlags(cmd *cobra.Command, sessionToken string, tokenSource agentVaultSource) error {
@@ -332,6 +371,10 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 
 	ttl, _ := cmd.Flags().GetString("ttl")
 	label, err := resolveAgentVaultSessionLabel(cmd, sessionToken, tokenSource)
+	if err != nil {
+		util.HandleError(err)
+	}
+	metadata, err := resolveAgentVaultSessionMetadata(cmd, sessionToken, tokenSource)
 	if err != nil {
 		util.HandleError(err)
 	}
@@ -439,7 +482,7 @@ func runAgentVaultRun(cmd *cobra.Command, args []string) {
 	var minted *api.AgentVaultSession
 	if len(accessBundles) > 0 {
 		identity := resolveAgentVaultIdentityToken(cmd)
-		minted = mintAgentVaultSessionOrExit(identity, project, accessBundles, ttl, label)
+		minted = mintAgentVaultSessionOrExit(identity, project, accessBundles, ttl, label, metadata)
 		sessionToken = minted.Token
 
 		Telemetry.SetActor(telemetry.IdentityClaimsFromToken(identity))
@@ -1002,6 +1045,7 @@ func init() {
 	agentVaultRunCmd.Flags().Bool("keep-session", false, "leave a minted session active when the agent exits")
 	agentVaultRunCmd.Flags().String("project-id", "", "Agent Vault project of the access bundle to mint over (falls back to "+agentVaultProjectIDEnv+", then INFISICAL_PROJECT_ID)")
 	agentVaultRunCmd.Flags().String("label", "", "describe what the session this command creates is for (up to 128 characters)")
+	agentVaultRunCmd.Flags().StringArray("metadata", nil, "attach a key=value pair to the session this command creates, such as runId=8812 (repeatable, up to 20; the value can contain = but the key can't)")
 	agentVaultRunCmd.Flags().String("proxy", "", "address of the Agent Vault proxy as host:port (falls back to "+agentVaultProxyAddressEnv+")")
 	agentVaultRunCmd.Flags().String("ca-fingerprint", "", "abort unless the proxy's certificate authority matches this SHA256 fingerprint from Infisical")
 	agentVaultRunCmd.Flags().String("no-proxy", "", "additional comma-separated hosts to bypass the proxy (always merged with localhost,127.0.0.1)")
