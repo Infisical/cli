@@ -49,6 +49,32 @@ func GetWorkSpaceFromFile() (models.WorkspaceConfigFile, error) {
 	return GetWorkSpaceFromFilePath(filepath.Dir(cfgFile))
 }
 
+// ResolveMachineIdentityWorkspaceId returns explicitWorkspaceId when set. Otherwise it reads the project ID
+// from the .infisical.json found in projectConfigFileDir, or the nearest one when that is empty.
+func ResolveMachineIdentityWorkspaceId(explicitWorkspaceId string, projectConfigFileDir string) (string, error) {
+	if explicitWorkspaceId != "" {
+		return explicitWorkspaceId, nil
+	}
+
+	var workspaceFile models.WorkspaceConfigFile
+	var err error
+	if projectConfigFileDir == "" {
+		workspaceFile, err = GetWorkSpaceFromFile()
+	} else {
+		workspaceFile, err = GetWorkSpaceFromFilePath(projectConfigFileDir)
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("Project ID is required when using machine identity. Pass --projectId, or run [infisical init] to create a project config file (%w)", err)
+	}
+
+	if workspaceFile.WorkspaceId == "" {
+		return "", errors.New("Project ID is required when using machine identity. Pass --projectId, or set workspaceId in the project config file")
+	}
+
+	return workspaceFile.WorkspaceId, nil
+}
+
 func GetDomainFromFile() (domain string, valid bool) {
 	workspaceFile, err := GetWorkSpaceFromFile()
 	if err != nil {
