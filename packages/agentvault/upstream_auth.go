@@ -24,8 +24,8 @@ const (
 	maxReportedScopeLen = 256
 )
 
-// The bodies of the 502 that replaces the upstream's auth failure. No WWW-Authenticate goes with it: passing
-// the upstream's challenge on would start the agent's MCP client on an OAuth flow of its own, when the
+// The bodies of the response that replaces the upstream's auth failure. No WWW-Authenticate goes with it:
+// passing the upstream's challenge on would start the agent's MCP client on an OAuth flow of its own, when the
 // credential belongs to Infisical.
 func upstreamAuthBody(code, message string) string {
 	body, _ := json.Marshal(map[string]string{"error": code, "message": message})
@@ -40,11 +40,14 @@ func staticCredentialRejectedBody(svc *resolvedService) string {
 	return upstreamAuthBody("upstream_auth_failed", fmt.Sprintf("The %s service's credential was rejected. Update it in Infisical Agent Vault.", svc.name))
 }
 
-func reauthorizationNeededBody(svc *resolvedService) string {
+func reauthorizationNeededBody(svc *resolvedService, status string) string {
 	if svc.memberProvided {
 		return upstreamAuthBody("upstream_auth_failed", fmt.Sprintf("Reconnect your account for the %s service on access bundle %q in Infisical Agent Vault.", svc.name, svc.accessBundleName))
 	}
-	return upstreamAuthBody("upstream_auth_failed", fmt.Sprintf("The %s service needs to be reauthorized in Infisical Agent Vault.", svc.name))
+	if status == oauthStatusNeedsAdditionalScopes {
+		return upstreamAuthBody("upstream_auth_failed", fmt.Sprintf("The sign-in used by the %s service is missing a permission it needs and has to be connected again. This can't be fixed from here.", svc.name))
+	}
+	return upstreamAuthBody("upstream_auth_failed", fmt.Sprintf("The sign-in used by the %s service has expired and has to be connected again. This can't be fixed from here.", svc.name))
 }
 
 // For a failure that may pass on its own: Infisical or the provider unreachable, a body that could not be
@@ -53,12 +56,29 @@ func credentialUnavailableBody(svc *resolvedService) string {
 	return upstreamAuthBody("upstream_auth_unavailable", fmt.Sprintf("Couldn't get a valid credential for the %s service. Try again in a moment.", svc.name))
 }
 
-// Only a status Infisical reports, or an insufficient_scope challenge, means the user has to reauthorize.
-func refreshFailedBody(svc *resolvedService, status string) string {
-	if status == oauthStatusNeedsReauthorization || status == oauthStatusNeedsAdditionalScopes {
-		return reauthorizationNeededBody(svc)
+// An HTTP client is told 401 for a sign-in that is dead and 403 for one missing a scope. An MCP client keeps
+// the 502, since a 401 is what starts its own OAuth flow.
+func reauthorizationNeeded(req *http.Request, svc *resolvedService, status string) *http.Response {
+	code := http.StatusBadGateway
+	if svc.kind != serviceKindMCP {
+		code = http.StatusUnauthorized
+		if status == oauthStatusNeedsAdditionalScopes {
+			code = http.StatusForbidden
+		}
 	}
-	return credentialUnavailableBody(svc)
+	return upstreamAuthFailed(req, code, reauthorizationNeededBody(svc, status))
+}
+
+func credentialUnavailable(req *http.Request, svc *resolvedService) *http.Response {
+	return upstreamAuthFailed(req, http.StatusBadGateway, credentialUnavailableBody(svc))
+}
+
+// Only a status Infisical reports, or an insufficient_scope challenge, means the user has to reauthorize.
+func refreshFailed(req *http.Request, svc *resolvedService, status string) *http.Response {
+	if status == oauthStatusNeedsReauthorization || status == oauthStatusNeedsAdditionalScopes {
+		return reauthorizationNeeded(req, svc, status)
+	}
+	return credentialUnavailable(req, svc)
 }
 
 // The request body as it will go upstream, when it can be sent a second time. Only a body already held in
@@ -89,17 +109,17 @@ func (ps *proxyServer) handleUpstreamAuth(upstream http.RoundTripper, req *http.
 		if errors.As(err, &notRecovered) {
 			log.Warn().Str("service", svc.name).Str("serviceId", svc.id).Str("status", notRecovered.status).
 				Msg("agent-vault: the upstream rejected the OAuth token and Infisical has no other, not retrying")
-			return upstreamAuthFailed(req, refreshFailedBody(svc, notRecovered.status)), nil
+			return refreshFailed(req, svc, notRecovered.status), nil
 		}
 		if err != nil {
 			log.Warn().Err(err).Str("service", svc.name).Str("serviceId", svc.id).
 				Msg("agent-vault: the upstream rejected the OAuth token and Infisical could not refresh it")
-			return upstreamAuthFailed(req, credentialUnavailableBody(svc)), nil
+			return credentialUnavailable(req, svc), nil
 		}
 		if !replayable {
 			log.Warn().Str("service", svc.name).Str("serviceId", svc.id).Bool("replayable", replayable).Str("status", status).
 				Msg("agent-vault: the upstream rejected the OAuth token, not retrying")
-			return upstreamAuthFailed(req, refreshFailedBody(svc, status)), nil
+			return refreshFailed(req, svc, status), nil
 		}
 
 		retry := req.Clone(req.Context())
@@ -125,7 +145,7 @@ func (ps *proxyServer) handleUpstreamAuth(upstream http.RoundTripper, req *http.
 		ps.cache.rememberRejectedRefresh(sessionToken, svc.id, svc.hostPattern, &fresh, status)
 		log.Warn().Str("service", svc.name).Str("serviceId", svc.id).Int("retryStatus", retryResp.StatusCode).
 			Msg("agent-vault: the upstream rejected the refreshed OAuth token too")
-		return upstreamAuthFailed(req, refreshFailedBody(svc, status)), nil
+		return refreshFailed(req, svc, status), nil
 
 	case http.StatusForbidden:
 		if !ps.reportInsufficientScope(resp, sessionToken, svc, sent) {
@@ -134,7 +154,7 @@ func (ps *proxyServer) handleUpstreamAuth(upstream http.RoundTripper, req *http.
 		_ = resp.Body.Close()
 		log.Warn().Str("service", svc.name).Str("serviceId", svc.id).
 			Msg("agent-vault: the upstream needs OAuth scopes this service was not granted")
-		return upstreamAuthFailed(req, reauthorizationNeededBody(svc)), nil
+		return reauthorizationNeeded(req, svc, oauthStatusNeedsAdditionalScopes), nil
 	}
 	return resp, nil
 }
@@ -183,13 +203,13 @@ func challengedScopes(raw string) []string {
 	return scopes
 }
 
-func upstreamAuthFailed(req *http.Request, body string) *http.Response {
+func upstreamAuthFailed(req *http.Request, code int, body string) *http.Response {
 	header := make(http.Header)
 	header.Set("Content-Type", "application/json")
 	header.Set("Content-Length", strconv.Itoa(len(body)))
 	return &http.Response{
-		Status:        "502 Bad Gateway",
-		StatusCode:    http.StatusBadGateway,
+		Status:        fmt.Sprintf("%d %s", code, http.StatusText(code)),
+		StatusCode:    code,
 		Proto:         "HTTP/1.1",
 		ProtoMajor:    1,
 		ProtoMinor:    1,

@@ -240,3 +240,38 @@ func TestAResolveCarriesHooksAndTheSession(t *testing.T) {
 		t.Fatalf("session = %+v", s)
 	}
 }
+
+func TestAResolveCarriesCredentialRemoved(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// An older server leaves the field out, which has to read as still signed in.
+		_, _ = w.Write([]byte(`{"sessionId":"s1","services":[
+			{"id":"a","name":"gdrive","hostPattern":"www.googleapis.com","credential":{"type":"passthrough"},"personalValuesMissing":true,"credentialRemoved":true},
+			{"id":"b","name":"slack","hostPattern":"slack.com","credential":{"type":"passthrough"}}
+		],"sessionLogs":{"enabled":false}}`))
+	}))
+	defer srv.Close()
+	old := config.INFISICAL_URL
+	config.INFISICAL_URL = srv.URL + "/api"
+	defer func() { config.INFISICAL_URL = old }()
+
+	resolver, err := newInfisicalResolver(func() string { return "ptok" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := resolver.resolve("tok", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	removed := map[string]bool{}
+	for _, svc := range result.Services {
+		removed[svc.name] = svc.credentialRemoved
+	}
+	if !removed["gdrive"] {
+		t.Fatal("credentialRemoved: true on the wire did not reach the resolved service")
+	}
+	if removed["slack"] {
+		t.Fatal("a service without the field resolved as having its sign-in removed")
+	}
+}

@@ -208,8 +208,9 @@ func assertUpstreamAuthFailed(t *testing.T, resp *http.Response, body, want stri
 }
 
 const (
-	reauthorizeLinearBody = `{"error":"upstream_auth_failed","message":"The linear service needs to be reauthorized in Infisical Agent Vault."}`
-	linearUnavailableBody = `{"error":"upstream_auth_unavailable","message":"Couldn't get a valid credential for the linear service. Try again in a moment."}`
+	reauthorizeLinearBody  = `{"error":"upstream_auth_failed","message":"The sign-in used by the linear service has expired and has to be connected again. This can't be fixed from here."}`
+	missingScopeLinearBody = `{"error":"upstream_auth_failed","message":"The sign-in used by the linear service is missing a permission it needs and has to be connected again. This can't be fixed from here."}`
+	linearUnavailableBody  = `{"error":"upstream_auth_unavailable","message":"Couldn't get a valid credential for the linear service. Try again in a moment."}`
 )
 
 const mcpCallBody = `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_issue","arguments":{}}}`
@@ -282,7 +283,7 @@ func TestAnUnchangedTokenIsNotRetried(t *testing.T) {
 	// Infisical answers a refresh it could not do with the token it has and the connection's status.
 	for status, want := range map[string]string{
 		oauthStatusNeedsReauthorization:  reauthorizeLinearBody,
-		oauthStatusNeedsAdditionalScopes: reauthorizeLinearBody,
+		oauthStatusNeedsAdditionalScopes: missingScopeLinearBody,
 		oauthStatusConnected:             linearUnavailableBody,
 	} {
 		t.Run(status, func(t *testing.T) {
@@ -573,7 +574,7 @@ func TestInsufficientScopeIsReportedAndNotRetried(t *testing.T) {
 		})
 
 	resp, body := doWith(t, client, http.MethodPost, fmt.Sprintf("https://%s/mcp", host), "application/json", strings.NewReader(mcpCallBody))
-	assertUpstreamAuthFailed(t, resp, body, reauthorizeLinearBody)
+	assertUpstreamAuthFailed(t, resp, body, missingScopeLinearBody)
 	if got := len(up.recorded()); got != 1 {
 		t.Fatalf("upstream saw %d requests, want no retry", got)
 	}
@@ -1274,8 +1275,8 @@ func TestOpenAuthErrorBodiesDoNotBlockRecovery(t *testing.T) {
 	}{
 		{"401 then success", http.StatusUnauthorized, http.StatusOK, http.StatusOK, "", 1},
 		{"401 twice", http.StatusUnauthorized, http.StatusUnauthorized, http.StatusBadGateway, linearUnavailableBody, 1},
-		{"insufficient scope", http.StatusForbidden, 0, http.StatusBadGateway, reauthorizeLinearBody, 1},
-		{"401 then insufficient scope", http.StatusUnauthorized, http.StatusForbidden, http.StatusBadGateway, reauthorizeLinearBody, 2},
+		{"insufficient scope", http.StatusForbidden, 0, http.StatusBadGateway, missingScopeLinearBody, 1},
+		{"401 then insufficient scope", http.StatusUnauthorized, http.StatusForbidden, http.StatusBadGateway, missingScopeLinearBody, 2},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1432,5 +1433,106 @@ func TestAnOAuthResendAsksTheHookOnce(t *testing.T) {
 	}
 	if hit := fake.only(t); bytes.Contains(hit.body, []byte("old-token")) || bytes.Contains(hit.body, []byte("new-token")) {
 		t.Fatalf("a token reached the hook: %s", hit.body)
+	}
+}
+
+func oauthHTTPService(host string, token string) *resolvedService {
+	svc := oauthMCPService(host, token)
+	svc.kind = serviceKindHTTP
+	return svc
+}
+
+func TestAnHTTPServiceResendsAnyBufferedBodyAfterARefresh(t *testing.T) {
+	const upload = "raw-bytes-not-json"
+	cases := []struct {
+		name  string
+		build func(h string) *resolvedService
+		sent  string
+		want  string
+	}{
+		{"plain body", func(h string) *resolvedService { return oauthHTTPService(h, "old-token") }, upload, upload},
+		{"substituted body", func(h string) *resolvedService {
+			svc := oauthHTTPService(h, "old-token")
+			svc.substitutions = []substitution{{placeholder: "{{KEY}}", surfaces: map[string]bool{surfaceBody: true}, value: []byte("real-key")}}
+			return svc
+		}, "key={{KEY}}", "key=real-key"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resolver := &oauthResolver{issue: oauthToken("new-token"), status: oauthStatusConnected}
+			client, host, up := newOAuthFixture(t, resolver, tc.build, acceptOnly("new-token"))
+
+			resp, body := doWith(t, client, http.MethodPut, fmt.Sprintf("https://%s/files", host), "application/octet-stream", strings.NewReader(tc.sent))
+			if resp.StatusCode != http.StatusOK || body != "ok" {
+				t.Fatalf("the resent request should have succeeded, got %d: %s", resp.StatusCode, body)
+			}
+			hits := up.recorded()
+			if len(hits) != 2 || hits[1].auth != "Bearer new-token" || hits[0].body != tc.want || hits[1].body != tc.want {
+				t.Fatalf("upstream hits = %+v, want the original and a resend with the same body", hits)
+			}
+		})
+	}
+}
+
+func TestAnHTTPServiceDoesNotResendABodyOverTheLimit(t *testing.T) {
+	resolver := &oauthResolver{issue: oauthToken("new-token"), status: oauthStatusConnected}
+	client, host, up := newOAuthFixture(t, resolver, func(h string) *resolvedService { return oauthHTTPService(h, "old-token") }, acceptOnly("new-token"))
+
+	large := strings.Repeat("a", maxMCPInspectBody+1)
+	stream := io.MultiReader(strings.NewReader(large[:10]), strings.NewReader(large[10:]))
+	resp, body := doWith(t, client, http.MethodPut, fmt.Sprintf("https://%s/files", host), "application/octet-stream", stream)
+	assertUpstreamAuthFailed(t, resp, body, linearUnavailableBody)
+	if hits := up.recorded(); len(hits) != 1 || len(hits[0].body) != len(large) {
+		t.Fatalf("upstream saw %d requests; an oversize body must reach it whole and only once", len(hits))
+	}
+}
+
+func TestAnHTTPServiceGetsAStatusThatSaysWhatHappenedToItsSignIn(t *testing.T) {
+	cases := []struct {
+		name     string
+		resolver *oauthResolver
+		handler  func(w http.ResponseWriter, r *http.Request)
+		want     int
+		wantBody string
+	}{
+		{"dead sign-in", &oauthResolver{issue: oauthToken("old-token"), status: oauthStatusNeedsReauthorization}, acceptOnly("nothing"), http.StatusUnauthorized, reauthorizeLinearBody},
+		{"missing scopes reported by Infisical", &oauthResolver{issue: oauthToken("old-token"), status: oauthStatusNeedsAdditionalScopes}, acceptOnly("nothing"), http.StatusForbidden, missingScopeLinearBody},
+		{"insufficient scope", &oauthResolver{}, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("WWW-Authenticate", `Bearer error="insufficient_scope", scope="write"`)
+			w.WriteHeader(http.StatusForbidden)
+		}, http.StatusForbidden, missingScopeLinearBody},
+		{"Infisical unreachable", &oauthResolver{err: errors.New("dial tcp: connection refused")}, acceptOnly("nothing"), http.StatusBadGateway, linearUnavailableBody},
+		{"refreshed token rejected too", &oauthResolver{issue: oauthToken("new-token"), status: oauthStatusConnected}, acceptOnly("nothing"), http.StatusBadGateway, linearUnavailableBody},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client, host, _ := newOAuthFixture(t, tc.resolver, func(h string) *resolvedService { return oauthHTTPService(h, "old-token") }, tc.handler)
+
+			resp, body := doWith(t, client, http.MethodGet, fmt.Sprintf("https://%s/files", host), "", nil)
+			if resp.StatusCode != tc.want || body != tc.wantBody {
+				t.Fatalf("got %d: %s, want %d: %s", resp.StatusCode, body, tc.want, tc.wantBody)
+			}
+			if got := resp.Header.Values("WWW-Authenticate"); len(got) != 0 {
+				t.Fatalf("the upstream's challenge reached the agent: %v", got)
+			}
+			if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+				t.Fatalf("content type = %q", ct)
+			}
+		})
+	}
+}
+
+func TestAMemberProvidedHTTPSignInKeepsItsWording(t *testing.T) {
+	resolver := &oauthResolver{issue: oauthToken("old-token"), status: oauthStatusNeedsReauthorization}
+	client, host, _ := newOAuthFixture(t, resolver, func(h string) *resolvedService {
+		svc := oauthHTTPService(h, "old-token")
+		svc.memberProvided = true
+		return svc
+	}, acceptOnly("nothing"))
+
+	resp, body := doWith(t, client, http.MethodGet, fmt.Sprintf("https://%s/files", host), "", nil)
+	want := `{"error":"upstream_auth_failed","message":"Reconnect your account for the linear service on access bundle \"bundle\" in Infisical Agent Vault."}`
+	if resp.StatusCode != http.StatusUnauthorized || body != want {
+		t.Fatalf("got %d: %s, want 401: %s", resp.StatusCode, body, want)
 	}
 }

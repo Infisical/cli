@@ -83,6 +83,8 @@ type resolvedService struct {
 	native *nativeTarget
 	// Some credential field comes from each member, so a rejection is theirs to fix rather than an admin's.
 	memberProvided bool
+	// The OAuth variable the service signed in with was deleted, so it has no credential to send.
+	credentialRemoved bool
 	// Asked before the credential is attached. Nil when the service has none.
 	hook *serviceHook
 }

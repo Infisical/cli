@@ -364,3 +364,19 @@ func TestPersonalValuesMissing(t *testing.T) {
 		}
 	}
 }
+
+func TestARemovedSignInIsRefusedBeforeMissingPersonalValues(t *testing.T) {
+	svc := serviceWithPolicy([]string{"GET"}, nil)
+	svc.credentialRemoved = true
+	// The server sets both, so an older proxy that only knows personalValuesMissing still refuses the service.
+	svc.personalValuesMissing = true
+
+	err := checkServicePolicy(svc, requestTo(t, "POST", "/x"))
+	if !errors.Is(err, errPolicyBlocked) {
+		t.Fatalf("a service whose sign-in was removed should be blocked, got %v", err)
+	}
+	if !strings.Contains(err.Error(), `service "github"`) ||
+		!strings.Contains(err.Error(), "This service's sign-in was removed in Infisical Agent Vault.") {
+		t.Fatalf("the refusal should say the sign-in was removed: %q", err.Error())
+	}
+}

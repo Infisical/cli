@@ -25,8 +25,16 @@ func errPersonalValuesMissing(svc *resolvedService) error {
 	return fmt.Errorf("service %q needs your own %s, which isn't set up yet: %w. Set it up on access bundle %q in Infisical Agent Vault, or for a machine identity, start the session on behalf of a user who has set it up. It can take a few minutes to apply.", svc.name, what, errPolicyBlocked, svc.accessBundleName)
 }
 
+func errCredentialRemoved(svc *resolvedService) error {
+	return fmt.Errorf("service %q: %w. This service's sign-in was removed in Infisical Agent Vault.", svc.name, errPolicyBlocked)
+}
+
 func checkServicePolicy(svc *resolvedService, req *http.Request) error {
-	// First, so the refusal names what the agent's owner can fix rather than a method or path rule.
+	// First, so the refusal names what the agent's owner can fix rather than a method or path rule. A removed
+	// sign-in comes before missing personal values, which the server also sets on it for older proxies.
+	if svc.credentialRemoved {
+		return errCredentialRemoved(svc)
+	}
 	if svc.personalValuesMissing {
 		return errPersonalValuesMissing(svc)
 	}

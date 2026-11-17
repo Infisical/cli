@@ -87,6 +87,7 @@ func (r *infisicalResolver) resolve(sessionToken string, held *sessionLogGrant) 
 			substitutions:         toSubstitutions(wire.Substitutions),
 			personalValuesMissing: wire.PersonalValuesMissing,
 			memberProvided:        wire.MemberProvided,
+			credentialRemoved:     wire.CredentialRemoved,
 			hook:                  toServiceHook(wire.Hook),
 		})
 	}
