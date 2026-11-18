@@ -12,6 +12,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"io"
 	"math/big"
@@ -253,11 +254,16 @@ func writeLengthPrefixed(t *testing.T, w io.Writer, data []byte) {
 // startProxy runs a proxy against fake AWS and returns the client end of its connection, with the CA sent.
 func startProxy(t *testing.T, server *httptest.Server) (net.Conn, *x509.CertPool, *recordingLogger) {
 	t.Helper()
+	return startProxyWith(t, server, func() (Credentials, error) { return sessionCreds, nil })
+}
+
+func startProxyWith(t *testing.T, server *httptest.Server, getCredentials func() (Credentials, error)) (net.Conn, *x509.CertPool, *recordingLogger) {
+	t.Helper()
 	logger := &recordingLogger{}
 	proxy := NewAWSProxy(AWSProxyConfig{
 		SessionID:      "test-session",
 		SessionLogger:  logger,
-		GetCredentials: func() (Credentials, error) { return sessionCreds, nil },
+		GetCredentials: getCredentials,
 	})
 	proxy.client.Transport = &http.Transport{
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
@@ -453,6 +459,75 @@ func TestProxyRefusesWhatItCannotSign(t *testing.T) {
 	select {
 	case got := <-received:
 		t.Fatalf("a refused request reached AWS: %s %s", got.req.Method, got.req.URL)
+	default:
+	}
+}
+
+func TestProxyShowsWhyInfisicalRefusedTheSession(t *testing.T) {
+	server, received := fakeAWS(t)
+	refused := func() (Credentials, error) { return Credentials{}, &RefusalError{Reason: "Session is not active"} }
+
+	t.Run("XML service", func(t *testing.T) {
+		conn, pool, _ := startProxyWith(t, server, refused)
+		const host = "s3.amazonaws.com"
+		tlsConn := connect(t, conn, pool, host)
+		req := signedRequest(t, http.MethodGet, "https://"+host+"/", "s3", "us-east-1", "UNSIGNED-PAYLOAD", "", nil)
+		resp := roundTrip(t, tlsConn, bufio.NewReader(tlsConn), req)
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "<Code>InfisicalGatewayError</Code><Message>Session is not active</Message>") {
+			t.Fatalf("status = %d, body = %s", resp.StatusCode, body)
+		}
+	})
+
+	t.Run("JSON service", func(t *testing.T) {
+		conn, pool, _ := startProxyWith(t, server, refused)
+		const host = "dynamodb.us-east-1.amazonaws.com"
+		tlsConn := connect(t, conn, pool, host)
+		req := signedRequest(t, http.MethodPost, "https://"+host+"/", "dynamodb", "us-east-1", "",
+			`{"TableName":"t"}`, map[string]string{"X-Amz-Target": "DynamoDB_20120810.DescribeTable", "Content-Type": "application/x-amz-json-1.0"})
+		resp := roundTrip(t, tlsConn, bufio.NewReader(tlsConn), req)
+		var parsed map[string]string
+		if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusForbidden || parsed["__type"] != "InfisicalGatewayError" || parsed["message"] != "Session is not active" {
+			t.Fatalf("status = %d, body = %v", resp.StatusCode, parsed)
+		}
+	})
+
+	t.Run("unsigned request", func(t *testing.T) {
+		conn, pool, _ := startProxyWith(t, server, refused)
+		const host = "public-bucket.s3.amazonaws.com"
+		tlsConn := connect(t, conn, pool, host)
+		req, _ := http.NewRequest(http.MethodGet, "https://"+host+"/object", nil)
+		if resp := roundTrip(t, tlsConn, bufio.NewReader(tlsConn), req); resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403", resp.StatusCode)
+		}
+	})
+
+	select {
+	case got := <-received:
+		t.Fatalf("a request for a refused session reached AWS: %s %s", got.req.Method, got.req.URL)
+	default:
+	}
+}
+
+func TestProxyCapsRequestHeaders(t *testing.T) {
+	server, received := fakeAWS(t)
+	conn, pool, _ := startProxy(t, server)
+	const host = "s3.amazonaws.com"
+	tlsConn := connect(t, conn, pool, host)
+	// The pipe has no buffer, so the gateway's close-notify would wait out its timeout unless something reads it
+	go func() { _, _ = io.Copy(io.Discard, tlsConn) }()
+
+	header := "GET / HTTP/1.1\r\nHost: " + host + "\r\nX-Padding: " + strings.Repeat("a", 2*http.DefaultMaxHeaderBytes) + "\r\n\r\n"
+	if _, err := io.WriteString(tlsConn, header); err == nil {
+		t.Fatal("the gateway read a header twice the size limit to its end")
+	}
+
+	select {
+	case got := <-received:
+		t.Fatalf("a request with oversized headers reached AWS: %s %s", got.req.Method, got.req.URL)
 	default:
 	}
 }

@@ -16,9 +16,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	"net"
 	"net/http"
@@ -52,6 +54,14 @@ type Credentials struct {
 	SecretAccessKey string
 	SessionToken    string
 }
+
+// RefusalError is Infisical's reason for no longer serving a session, such as an admin terminating it. The
+// client is shown the reason, where any other credentials failure is reported as the gateway's own.
+type RefusalError struct {
+	Reason string
+}
+
+func (e *RefusalError) Error() string { return e.Reason }
 
 type AWSProxyConfig struct {
 	SessionID     string
@@ -117,9 +127,9 @@ func (p *AWSProxy) HandleConnection(ctx context.Context, clientConn net.Conn) er
 		return err
 	}
 
-	reader := bufio.NewReader(clientConn)
+	reader := newRequestReader(clientConn)
 	for {
-		req, err := readRequest(ctx, reader)
+		req, err := reader.read(ctx)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
@@ -172,7 +182,7 @@ func (p *AWSProxy) handleConnect(ctx context.Context, clientConn net.Conn, conne
 		hostname, port = connectReq.Host, "443"
 	}
 	if port != "443" || !IsAWSHost(hostname) {
-		writeError(clientConn, http.StatusBadGateway, fmt.Sprintf("%q is not an AWS API endpoint", connectReq.Host))
+		writeError(clientConn, connectReq, http.StatusBadGateway, fmt.Sprintf("%q is not an AWS API endpoint", connectReq.Host))
 		return fmt.Errorf("rejected CONNECT to non-AWS host: %s", connectReq.Host)
 	}
 
@@ -191,9 +201,9 @@ func (p *AWSProxy) handleConnect(ctx context.Context, clientConn net.Conn, conne
 	}
 	defer tlsConn.Close()
 
-	reader := bufio.NewReader(tlsConn)
+	reader := newRequestReader(tlsConn)
 	for {
-		req, err := readRequest(ctx, reader)
+		req, err := reader.read(ctx)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
@@ -213,25 +223,38 @@ func (p *AWSProxy) handleConnect(ctx context.Context, clientConn net.Conn, conne
 func (p *AWSProxy) handleRequest(ctx context.Context, w io.Writer, req *http.Request, tunnelHost string, l zerolog.Logger) (bool, error) {
 	defer req.Body.Close()
 
+	// Fetched for unsigned requests too, so nothing passes through once Infisical has ended the session
+	creds, err := p.config.GetCredentials()
+	if err != nil {
+		var refusal *RefusalError
+		if errors.As(err, &refusal) {
+			writeError(w, req, http.StatusForbidden, refusal.Reason)
+			return false, nil
+		}
+		l.Error().Err(err).Msg("Failed to get AWS credentials for session")
+		writeError(w, req, http.StatusBadGateway, "failed to get AWS credentials for this session")
+		return false, nil
+	}
+
 	requestID := uuid.NewString()
 	startedAt := time.Now()
 
 	host, err := targetHost(req, tunnelHost)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, req, http.StatusBadRequest, err.Error())
 		return false, nil
 	}
 
 	region, service, signed, err := signingScope(req)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, req, http.StatusBadRequest, err.Error())
 		return false, nil
 	}
 
 	payloadHash := req.Header.Get("X-Amz-Content-Sha256")
 	// Each chunk of these carries a signature chained from the client's key, which the gateway can't redo
 	if signed && strings.HasPrefix(payloadHash, "STREAMING-") && payloadHash != unsignedPayloadTrailer {
-		writeError(w, http.StatusBadRequest, "uploads that sign each chunk can't be re-signed by the gateway; upload with an unsigned payload, as the AWS CLI does")
+		writeError(w, req, http.StatusBadRequest, "uploads that sign each chunk can't be re-signed by the gateway; upload with an unsigned payload, as the AWS CLI does")
 		return false, nil
 	}
 
@@ -252,7 +275,7 @@ func (p *AWSProxy) handleRequest(ctx context.Context, w io.Writer, req *http.Req
 			return false, fmt.Errorf("failed to read request body: %w", err)
 		}
 		if len(buffered) > maxHashedBodySize {
-			writeError(w, http.StatusRequestEntityTooLarge, "request body is too large for the gateway to sign")
+			writeError(w, req, http.StatusRequestEntityTooLarge, "request body is too large for the gateway to sign")
 			return false, nil
 		}
 		sum := sha256.Sum256(buffered)
@@ -266,7 +289,7 @@ func (p *AWSProxy) handleRequest(ctx context.Context, w io.Writer, req *http.Req
 
 	out, err := http.NewRequestWithContext(ctx, req.Method, loggedURL, body)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "failed to build the request to AWS")
+		writeError(w, req, http.StatusBadRequest, "failed to build the request to AWS")
 		return false, nil
 	}
 	out.URL = target
@@ -278,13 +301,6 @@ func (p *AWSProxy) handleRequest(ctx context.Context, w io.Writer, req *http.Req
 	out.Header = forwardedHeaders(req.Header, signed)
 
 	if signed {
-		creds, err := p.config.GetCredentials()
-		if err != nil {
-			l.Error().Err(err).Msg("Failed to get AWS credentials for session")
-			writeError(w, http.StatusBadGateway, "failed to get AWS credentials for this session")
-			return false, nil
-		}
-
 		err = p.signer.SignHTTP(ctx, awssdk.Credentials{
 			AccessKeyID:     creds.AccessKeyID,
 			SecretAccessKey: creds.SecretAccessKey,
@@ -294,7 +310,7 @@ func (p *AWSProxy) handleRequest(ctx context.Context, w io.Writer, req *http.Req
 		})
 		if err != nil {
 			l.Error().Err(err).Msg("Failed to sign AWS request")
-			writeError(w, http.StatusBadGateway, "failed to sign the request")
+			writeError(w, req, http.StatusBadGateway, "failed to sign the request")
 			return false, nil
 		}
 	}
@@ -304,7 +320,7 @@ func (p *AWSProxy) handleRequest(ctx context.Context, w io.Writer, req *http.Req
 	resp, err := p.client.Do(out)
 	if err != nil {
 		l.Error().Err(err).Str("host", host).Msg("Failed to forward request to AWS")
-		writeError(w, http.StatusBadGateway, "failed to forward the request to AWS")
+		writeError(w, req, http.StatusBadGateway, "failed to forward the request to AWS")
 		return false, nil
 	}
 	defer resp.Body.Close()
@@ -476,22 +492,59 @@ func loggedHeaders(header http.Header) http.Header {
 	return logged
 }
 
-func readRequest(ctx context.Context, reader *bufio.Reader) (*http.Request, error) {
+var errHeadersTooLarge = errors.New("request line and headers exceed the size limit")
+
+// headerLimit caps the bytes read while a request's line and headers are parsed, as http.Server's
+// MaxHeaderBytes does, since http.ReadRequest alone would buffer a header that never ends
+type headerLimit struct {
+	r io.Reader
+	n int64
+}
+
+func (h *headerLimit) Read(p []byte) (int, error) {
+	if h.n <= 0 {
+		return 0, errHeadersTooLarge
+	}
+	if int64(len(p)) > h.n {
+		p = p[:h.n]
+	}
+	n, err := h.r.Read(p)
+	h.n -= int64(n)
+	return n, err
+}
+
+type requestReader struct {
+	limit  *headerLimit
+	reader *bufio.Reader
+}
+
+func newRequestReader(conn io.Reader) *requestReader {
+	limit := &headerLimit{r: conn}
+	return &requestReader{limit: limit, reader: bufio.NewReader(limit)}
+}
+
+func (r *requestReader) read(ctx context.Context) (*http.Request, error) {
+	// bufio reads ahead of the headers, so the cap leaves room for a full buffer
+	r.limit.n = http.DefaultMaxHeaderBytes + int64(r.reader.Size())
+
 	type result struct {
 		req *http.Request
 		err error
 	}
 	ch := make(chan result, 1)
 	go func() {
-		req, err := http.ReadRequest(reader)
+		req, err := http.ReadRequest(r.reader)
 		ch <- result{req, err}
 	}()
 
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case r := <-ch:
-		return r.req, r.err
+	case res := <-ch:
+		if res.err == nil {
+			r.limit.n = math.MaxInt64
+		}
+		return res.req, res.err
 	}
 }
 
@@ -511,10 +564,23 @@ func readLengthPrefixed(conn net.Conn) ([]byte, error) {
 	return data, nil
 }
 
-func writeError(w io.Writer, status int, message string) {
-	body, _ := json.Marshal(map[string]string{"message": "gateway: " + message})
-	_, _ = fmt.Fprintf(w, "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
-		status, http.StatusText(status), len(body), body)
+const gatewayErrorCode = "InfisicalGatewayError"
+
+// writeError answers in the format the client's AWS SDK parses errors in, so it shows the message rather than
+// a bare status. JSON services send X-Amz-Target or a JSON body; S3, STS, EC2 and the rest expect XML.
+func writeError(w io.Writer, req *http.Request, status int, message string) {
+	contentType := "text/xml"
+	var body []byte
+	if req.Header.Get("X-Amz-Target") != "" || strings.Contains(req.Header.Get("Content-Type"), "json") {
+		contentType = "application/json"
+		body, _ = json.Marshal(map[string]string{"__type": gatewayErrorCode, "message": message})
+	} else {
+		var escaped bytes.Buffer
+		_ = xml.EscapeText(&escaped, []byte(message))
+		body = []byte("<ErrorResponse><Error><Code>" + gatewayErrorCode + "</Code><Message>" + escaped.String() + "</Message></Error></ErrorResponse>")
+	}
+	_, _ = fmt.Fprintf(w, "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nX-Amzn-ErrorType: %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
+		status, http.StatusText(status), contentType, gatewayErrorCode, len(body), body)
 }
 
 type limitedWriter struct {

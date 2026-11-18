@@ -160,7 +160,8 @@ func (p *AWSProxyServer) handleConnection(clientConn net.Conn) {
 	}
 
 	var captured bytes.Buffer
-	clientReader := bufio.NewReader(io.TeeReader(clientConn, &captured))
+	// Any local process can connect, so what's read before the proxy credential is checked is capped
+	clientReader := bufio.NewReader(io.TeeReader(io.LimitReader(clientConn, http.DefaultMaxHeaderBytes), &captured))
 	req, err := http.ReadRequest(clientReader)
 	if err != nil {
 		if !errors.Is(err, io.EOF) {
