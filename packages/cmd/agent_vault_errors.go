@@ -283,6 +283,12 @@ func errAgentVaultSkillPullTarget(folder, problem string) *util.CLIError {
 	return &util.CLIError{Code: errCodeInvalidArgument, Message: fmt.Sprintf("%s %s", quoted(folder, "folder"), problem)}
 }
 
+// The folder isn't named: "." or a path is rarely a safe identifier, so quoted would print a placeholder.
+func errAgentVaultSkillPullTargetHoldsWorkingFolder() *util.CLIError {
+	return &util.CLIError{Code: errCodeInvalidArgument,
+		Message: "The folder to pull into is, or holds, the current folder, so it can't be replaced. Run the command from somewhere else, or pass another folder."}
+}
+
 func errAgentVaultSkillFolderExists(cmd *cobra.Command, args []string, folder string) *util.CLIError {
 	return &util.CLIError{Code: errCodeInvalidArgument,
 		Message: fmt.Sprintf("%s already exists. Pass --force to replace it with the skill's files, which removes everything else in it.", quoted(folder, "folder")),

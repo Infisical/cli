@@ -178,6 +178,8 @@ A delete needs --project-id. It never reads the project from INFISICAL_AGENT_VAU
 			exitWithError(cmd, agentVaultSkillAPIError(err, project, skill.Name), "Unable to delete the skill")
 		}
 		if outputFormat != "" {
+			// The delete response has no bundles, so the lookup's say which bundles the skill was removed from.
+			deleted.Skill.AccessBundles = skill.AccessBundles
 			printFormattedOutput(outputFormat, deleted.Skill)
 			return
 		}
@@ -326,7 +328,7 @@ func checkAgentVaultSkillPullTarget(cmd *cobra.Command, args []string, folder st
 	if wd, err := os.Getwd(); err == nil {
 		if wd, err = filepath.EvalSymlinks(wd); err == nil {
 			if rel, err := filepath.Rel(target, wd); err == nil && filepath.IsLocal(rel) {
-				return errAgentVaultSkillPullTarget(folder, "holds the current folder, so it can't be replaced. Run the command from somewhere else.")
+				return errAgentVaultSkillPullTargetHoldsWorkingFolder()
 			}
 		}
 	}

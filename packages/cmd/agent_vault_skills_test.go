@@ -546,7 +546,7 @@ func TestCheckAgentVaultSkillPullTargetRefusesWhatCannotBeReplaced(t *testing.T)
 	}
 	t.Chdir(inside)
 	for _, target := range []string{".", holder} {
-		if err := checkAgentVaultSkillPullTarget(pullTestCmd(), nil, target, true); err == nil || !strings.Contains(err.Error(), "holds the current folder") {
+		if err := checkAgentVaultSkillPullTarget(pullTestCmd(), nil, target, true); err == nil || !strings.Contains(err.Error(), "is, or holds, the current folder") {
 			t.Fatalf("%s: %v", target, err)
 		}
 	}
