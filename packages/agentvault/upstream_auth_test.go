@@ -1585,6 +1585,8 @@ func TestARefreshInstallsTheNewTokenOnEveryServiceSharingIt(t *testing.T) {
 	gdrive := &resolvedService{id: "svc-1", name: "gdrive", kind: serviceKindHTTP, hostPattern: "drive.example", credential: oauthToken("shared-token")}
 	gmail := &resolvedService{id: "svc-2", name: "gmail", kind: serviceKindHTTP, hostPattern: "gmail.example", credential: oauthToken("shared-token")}
 	other := &resolvedService{id: "svc-3", name: "linear", kind: serviceKindMCP, hostPattern: "linear.example", credential: oauthToken("other-token")}
+	gmail.credential.headerName = "X-Api-Key"
+	gmail.credential.headerPrefix = ""
 	resolver.setServices(gdrive, gmail, other)
 	cache := newTestCache(resolver)
 	if _, err := cache.get("tok"); err != nil {
@@ -1602,6 +1604,9 @@ func TestARefreshInstallsTheNewTokenOnEveryServiceSharingIt(t *testing.T) {
 	got := map[string]string{}
 	for _, svc := range services {
 		got[svc.id] = string(svc.credential.value)
+		if svc.id == "svc-2" && (svc.credential.headerName != "X-Api-Key" || svc.credential.headerPrefix != "") {
+			t.Fatalf("gmail's header = %q %q, want its own X-Api-Key with no prefix", svc.credential.headerName, svc.credential.headerPrefix)
+		}
 	}
 	if want := map[string]string{"svc-1": "new-token", "svc-2": "new-token", "svc-3": "other-token"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("credentials = %v, want %v", got, want)

@@ -807,8 +807,14 @@ func (c *sessionCache) swapCredential(key, serviceID, hostPattern, replacedHash 
 		if !holder.credential.refreshable || credentialHash(&holder.credential) != replacedHash {
 			continue
 		}
+		// A sibling keeps its own header settings and takes only the new token.
+		installed := cred
+		if holder.id != serviceID {
+			installed = holder.credential
+			installed.value = cred.value
+		}
 		updated := *holder
-		updated.credential = cred
+		updated.credential = installed
 		services[i] = &updated
 
 		swap, ok := entry.swaps[holder.id]
@@ -816,7 +822,7 @@ func (c *sessionCache) swapCredential(key, serviceID, hostPattern, replacedHash 
 			swap = &credentialSwap{replaced: make(map[string]bool)}
 			entry.swaps[holder.id] = swap
 		}
-		swap.installed = cred
+		swap.installed = installed
 		if swap.hostPattern != holder.hostPattern {
 			swap.hostPattern = holder.hostPattern
 			clear(swap.replaced)

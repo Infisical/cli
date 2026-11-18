@@ -82,7 +82,7 @@ func agentVaultClaudeMCPConfig(services []api.AgentVaultSessionService, bypasses
 // The server's howToUse says what the service is waiting for (personal values, a member's sign-in, or an admin's),
 // which the status alone can't tell apart.
 func agentVaultNotReadyReason(service api.AgentVaultSessionService) string {
-	if howToUse := strings.TrimSuffix(strings.TrimSpace(util.SanitizeDisplay(service.HowToUse)), "."); howToUse != "" {
+	if howToUse := strings.TrimSuffix(strings.TrimSpace(util.RedactCredentials(util.SanitizeDisplay(service.HowToUse))), "."); howToUse != "" {
 		return howToUse
 	}
 	return "set up your personal values for it in Agent Vault first"
