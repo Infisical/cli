@@ -24,3 +24,23 @@ func TestPullAgentVaultSkillFolderFollowsTheUmask(t *testing.T) {
 		t.Fatalf("folder mode %o, want 700", got)
 	}
 }
+
+func TestPullAgentVaultSkillForceKeepsAPrivateFolderPrivate(t *testing.T) {
+	folder := filepath.Join(t.TempDir(), "code-review")
+	if err := os.Mkdir(folder, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(folder, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pullAgentVaultSkill(newFakeSkillsReadAPI(t, codeReviewSkillAPI()), testSkillsProject, "code-review", folder, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(folder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("folder mode %o, want 700", got)
+	}
+}

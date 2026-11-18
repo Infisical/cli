@@ -674,6 +674,9 @@ func TestPullAgentVaultSkillErrorsDoNotRepeatTheFolder(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("read-only folders work differently on Windows")
 	}
+	if os.Geteuid() == 0 {
+		t.Skip("root can write to read-only folders")
+	}
 	parent := filepath.Join(t.TempDir(), "ghp_0123456789abcdefghijklmnopqrstuvwxyz")
 	if err := os.Mkdir(parent, 0o555); err != nil {
 		t.Fatal(err)

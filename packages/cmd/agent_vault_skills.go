@@ -403,10 +403,15 @@ func replaceAgentVaultSkillFolder(folder string, files []api.AgentVaultSkillFile
 		return agentVaultSkillFolderError("write", folder, err)
 	}
 
-	if _, err := os.Lstat(target); err == nil {
+	if existing, err := os.Lstat(target); err == nil {
 		if !force {
 			_ = os.RemoveAll(staging)
 			return agentVaultSkillFolderError("write", folder, fs.ErrExist)
+		}
+		// A folder the user made private stays private when --force replaces it.
+		if err := os.Chmod(staging, existing.Mode().Perm()); err != nil {
+			_ = os.RemoveAll(staging)
+			return agentVaultSkillFolderError("replace", folder, err)
 		}
 		aside := staging + "-old"
 		if err := os.Rename(target, aside); err != nil {
