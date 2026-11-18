@@ -1531,7 +1531,7 @@ func TestAMemberProvidedHTTPSignInKeepsItsWording(t *testing.T) {
 	}, acceptOnly("nothing"))
 
 	resp, body := doWith(t, client, http.MethodGet, fmt.Sprintf("https://%s/files", host), "", nil)
-	want := `{"error":"upstream_auth_failed","message":"Reconnect your account for the linear service on access bundle \"bundle\" in Infisical Agent Vault."}`
+	want := `{"error":"upstream_auth_failed","message":"Reconnect your account for the linear service under Services in Infisical Agent Vault."}`
 	if resp.StatusCode != http.StatusUnauthorized || body != want {
 		t.Fatalf("got %d: %s, want 401: %s", resp.StatusCode, body, want)
 	}
