@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -78,6 +80,9 @@ The project comes from --project-id, or else INFISICAL_AGENT_VAULT_PROJECT_ID or
 				return
 			}
 			if len(skills) == 0 {
+				if silent, _ := cmd.Flags().GetBool("silent"); silent {
+					return
+				}
 				util.PrintlnStderr("No skills in this project. Add one with infisical agent-vault skills push <folder>.")
 				return
 			}
@@ -119,6 +124,10 @@ The project comes from --project-id, or else INFISICAL_AGENT_VAULT_PROJECT_ID or
 		name := args[0]
 		folder := name
 		if len(args) == 2 {
+			// An empty folder is usually an unset variable, and it would resolve to the current folder.
+			if strings.TrimSpace(args[1]) == "" {
+				exitWithError(cmd, errAgentVaultSkillEmptyFolder())
+			}
 			folder = args[1]
 		} else if !agentvault.ValidSkillFolderName(name) {
 			exitWithError(cmd, errAgentVaultSkillNameNotAFolder(name))
@@ -307,7 +316,7 @@ func checkAgentVaultSkillPullTarget(cmd *cobra.Command, args []string, folder st
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("unable to check %s: %w", folder, err)
+		return agentVaultSkillFolderError("check", folder, err)
 	}
 	if info.Mode()&fs.ModeSymlink != 0 {
 		return errAgentVaultSkillPullTarget(folder, "is a symbolic link. Pass a folder instead.")
@@ -323,7 +332,7 @@ func checkAgentVaultSkillPullTarget(cmd *cobra.Command, args []string, folder st
 		target, err = filepath.EvalSymlinks(target)
 	}
 	if err != nil {
-		return fmt.Errorf("unable to check %s: %w", folder, err)
+		return agentVaultSkillFolderError("check", folder, err)
 	}
 	if wd, err := os.Getwd(); err == nil {
 		if wd, err = filepath.EvalSymlinks(wd); err == nil {
@@ -343,7 +352,7 @@ func pullAgentVaultSkill(httpClient *resty.Client, project agentVaultProject, na
 
 	var files []api.AgentVaultSkillFile
 	switch {
-	case version == 0 || version == skill.LatestVersion:
+	case version == 0:
 		got, err := api.CallGetAgentVaultSkill(httpClient, skill.ID)
 		if err != nil {
 			return "", agentVaultSkillAPIError(err, project, name)
@@ -364,6 +373,10 @@ func pullAgentVaultSkill(httpClient *resty.Client, project agentVaultProject, na
 		files = got.Version.Files
 	}
 
+	files, skipped := withoutHiddenAgentVaultSkillFiles(files)
+	if skipped > 0 {
+		util.PrintlnStderr(fmt.Sprintf("Skipped %d hidden file(s): push never uploads hidden files, so they aren't written.", skipped))
+	}
 	if err := replaceAgentVaultSkillFolder(folder, files, force); err != nil {
 		return "", err
 	}
@@ -375,50 +388,104 @@ func pullAgentVaultSkill(httpClient *resty.Client, project agentVaultProject, na
 func replaceAgentVaultSkillFolder(folder string, files []api.AgentVaultSkillFile, force bool) error {
 	target, err := filepath.Abs(folder)
 	if err != nil {
-		return fmt.Errorf("unable to write %s: %w", folder, err)
+		return agentVaultSkillFolderError("write", folder, err)
 	}
 	parent := filepath.Dir(target)
 	if err := os.MkdirAll(parent, 0o755); err != nil {
-		return fmt.Errorf("unable to create %s: %w", parent, err)
+		return agentVaultSkillFolderError("write", folder, err)
 	}
-	staging, err := os.MkdirTemp(parent, "."+filepath.Base(target)+".pull-")
+	staging, err := makeAgentVaultSkillStagingFolder(parent, filepath.Base(target))
 	if err != nil {
-		return fmt.Errorf("unable to write %s: %w", folder, err)
-	}
-	if err := os.Chmod(staging, 0o755); err != nil {
-		_ = os.RemoveAll(staging)
-		return fmt.Errorf("unable to write %s: %w", folder, err)
+		return agentVaultSkillFolderError("write", folder, err)
 	}
 	if err := agentvault.WriteSkillFiles(staging, files); err != nil {
 		_ = os.RemoveAll(staging)
-		return fmt.Errorf("unable to write %s: %w", folder, err)
+		return agentVaultSkillFolderError("write", folder, err)
 	}
 
 	if _, err := os.Lstat(target); err == nil {
 		if !force {
 			_ = os.RemoveAll(staging)
-			return fmt.Errorf("%s already exists. Pass --force to replace it", folder)
+			return agentVaultSkillFolderError("write", folder, fs.ErrExist)
 		}
 		aside := staging + "-old"
 		if err := os.Rename(target, aside); err != nil {
 			_ = os.RemoveAll(staging)
-			return fmt.Errorf("unable to replace %s: %w", folder, err)
+			return agentVaultSkillFolderError("replace", folder, err)
 		}
 		if err := os.Rename(staging, target); err != nil {
 			_ = os.Rename(aside, target)
 			_ = os.RemoveAll(staging)
-			return fmt.Errorf("unable to replace %s: %w", folder, err)
+			return agentVaultSkillFolderError("replace", folder, err)
 		}
 		if err := os.RemoveAll(aside); err != nil {
-			return fmt.Errorf("pulled into %s, but unable to remove the old copy at %s: %w", folder, aside, err)
+			return fmt.Errorf("pulled into %s, but unable to remove the old copy beside it (%s)", quoted(folder, "folder"), agentVaultSkillFolderErrorReason(err))
 		}
 		return nil
 	}
 	if err := os.Rename(staging, target); err != nil {
 		_ = os.RemoveAll(staging)
-		return fmt.Errorf("unable to write %s: %w", folder, err)
+		return agentVaultSkillFolderError("write", folder, err)
 	}
 	return nil
+}
+
+// makeAgentVaultSkillStagingFolder uses Mkdir rather than MkdirTemp, whose folder is always 0700, so the pulled
+// folder gets the umask's permissions like any other folder the user creates.
+func makeAgentVaultSkillStagingFolder(parent, base string) (string, error) {
+	for range 10 {
+		suffix := make([]byte, 6)
+		if _, err := rand.Read(suffix); err != nil {
+			return "", err
+		}
+		staging := filepath.Join(parent, "."+base+".pull-"+hex.EncodeToString(suffix))
+		err := os.Mkdir(staging, 0o755)
+		if err == nil {
+			return staging, nil
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return "", err
+		}
+	}
+	return "", fs.ErrExist
+}
+
+// withoutHiddenAgentVaultSkillFiles drops what push never uploads, so a skill written through the API can't plant
+// tooling files such as .git/config, which git would act on in the pulled folder.
+func withoutHiddenAgentVaultSkillFiles(files []api.AgentVaultSkillFile) ([]api.AgentVaultSkillFile, int) {
+	kept := make([]api.AgentVaultSkillFile, 0, len(files))
+	for _, file := range files {
+		hidden := false
+		for _, segment := range strings.Split(strings.ReplaceAll(file.Path, `\`, "/"), "/") {
+			// "." and ".." are left to WriteSkillFiles, which refuses a path that leaves the folder.
+			if strings.HasPrefix(segment, ".") && segment != "." && segment != ".." {
+				hidden = true
+				break
+			}
+		}
+		if !hidden {
+			kept = append(kept, file)
+		}
+	}
+	return kept, len(files) - len(kept)
+}
+
+// agentVaultSkillFolderError keeps the path out of the message: the OS's errors repeat it in full, and the folder is
+// something the user typed, so it goes through quoted like any other value.
+func agentVaultSkillFolderError(action, folder string, err error) error {
+	return fmt.Errorf("unable to %s %s: %s", action, quoted(folder, "folder"), agentVaultSkillFolderErrorReason(err))
+}
+
+func agentVaultSkillFolderErrorReason(err error) string {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Err.Error()
+	}
+	var linkErr *os.LinkError
+	if errors.As(err, &linkErr) {
+		return linkErr.Err.Error()
+	}
+	return err.Error()
 }
 
 func agentVaultSkillDeleteAction(skill api.AgentVaultSkill, projectID string) destructiveAction {

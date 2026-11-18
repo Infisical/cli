@@ -262,6 +262,11 @@ func errAgentVaultSkillNameNotAFolder(name string) *util.CLIError {
 		Message: fmt.Sprintf("%s can't be used as a folder name. Pass the folder to pull into after the skill's name.", quoted(name, "name"))}
 }
 
+func errAgentVaultSkillEmptyFolder() *util.CLIError {
+	return &util.CLIError{Code: errCodeInvalidArgument,
+		Message: "The folder to pull into is empty. Pass a folder, or leave it out to pull into a folder named after the skill."}
+}
+
 func errAgentVaultSkillVersionInvalid() *util.CLIError {
 	return &util.CLIError{Code: errCodeInvalidFlagValue,
 		Message: "--version must be 1 or more. Leave it out to pull the latest version."}

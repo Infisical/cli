@@ -29,6 +29,7 @@ func agentVaultConstructedErrors() []*util.CLIError {
 		errAgentVaultSkillVersionAdminOnly("code-review", 4, cause),
 		errAgentVaultSkillPullTarget("code-review", "is a symbolic link. Pass a folder instead."),
 		errAgentVaultSkillPullTargetHoldsWorkingFolder(),
+		errAgentVaultSkillEmptyFolder(),
 		errAgentVaultAccessBundleRequired(),
 		errAgentVaultEmptyAccessBundle(),
 		errAgentVaultOneAccessBundle(),

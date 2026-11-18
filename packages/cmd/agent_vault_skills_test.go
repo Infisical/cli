@@ -328,7 +328,10 @@ func codeReviewSkillAPI() *fakeSkillsReadAPI {
 			skillFileOf("SKILL.md", "0644", "---\nname: code-review\n---\nv4\n"),
 			skillFileOf("scripts/lint.sh", "0755", "#!/bin/sh\n"),
 		}},
-		versions: map[string][]api.AgentVaultSkillFile{"sk1@2": {skillFileOf("SKILL.md", "0644", "---\nname: code-review\n---\nv2\n")}},
+		versions: map[string][]api.AgentVaultSkillFile{
+			"sk1@2": {skillFileOf("SKILL.md", "0644", "---\nname: code-review\n---\nv2\n")},
+			"sk1@4": {skillFileOf("SKILL.md", "0644", "---\nname: code-review\n---\nv4 by number\n")},
+		},
 	}
 }
 
@@ -418,7 +421,7 @@ func TestPullAgentVaultSkillVersions(t *testing.T) {
 		wantBody  string
 	}{
 		{"an earlier version", 2, "find code-review,version sk1 2", "", "v2\n"},
-		{"the latest by number", 4, "find code-review,get sk1", "", "v4\n"},
+		{"the latest by number", 4, "find code-review,version sk1 4", "", "v4 by number\n"},
 		{"past the latest", 9, "find code-review", "has no version 9. Its latest version is 4", ""},
 		{"one the server won't give", 3, "find code-review,version sk1 3", "Only an Admin of the project can pull a version of \"code-review\" other than the latest (4)", ""},
 	}
@@ -645,5 +648,39 @@ func TestDeleteAgentVaultSkillNeedsATypedProject(t *testing.T) {
 	}
 	if agentVaultSkillsDeleteCmd.Flags().Changed("project-id") {
 		t.Fatal("the delete command starts with --project-id set")
+	}
+}
+
+func TestPullAgentVaultSkillSkipsHiddenFiles(t *testing.T) {
+	f := codeReviewSkillAPI()
+	f.files["sk1"] = append(f.files["sk1"],
+		skillFileOf(".git/config", "0644", "[core]\n\tfsmonitor = touch pwned\n"),
+		skillFileOf("scripts/.env", "0644", "x"))
+	folder := filepath.Join(t.TempDir(), "code-review")
+	if _, err := pullAgentVaultSkill(newFakeSkillsReadAPI(t, f), testSkillsProject, "code-review", folder, 0, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{".git", "scripts/.env"} {
+		if _, err := os.Lstat(filepath.Join(folder, rel)); !os.IsNotExist(err) {
+			t.Fatalf("%s was written", rel)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(folder, "scripts", "lint.sh")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPullAgentVaultSkillErrorsDoNotRepeatTheFolder(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("read-only folders work differently on Windows")
+	}
+	parent := filepath.Join(t.TempDir(), "ghp_0123456789abcdefghijklmnopqrstuvwxyz")
+	if err := os.Mkdir(parent, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o755) })
+	_, err := pullAgentVaultSkill(newFakeSkillsReadAPI(t, codeReviewSkillAPI()), testSkillsProject, "code-review", filepath.Join(parent, "x"), 0, false)
+	if err == nil || strings.Contains(err.Error(), "ghp_") || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("err %v", err)
 	}
 }
