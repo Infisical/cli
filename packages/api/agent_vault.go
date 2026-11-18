@@ -126,6 +126,9 @@ type AgentVaultService struct {
 	// The OAuth variable an inline service signed in with was deleted. Older servers never send it, which decodes to
 	// false, and send personalValuesMissing with it so a proxy that does not know it still refuses the service.
 	CredentialRemoved bool `json:"credentialRemoved"`
+	// The OAuth variable the service signs in with isn't connected. Older servers never send it, which decodes to false,
+	// and send personalValuesMissing with it so a proxy that does not know it still refuses the service.
+	CredentialNotConnected bool `json:"credentialNotConnected"`
 	// Nil for a service sent inline with the session.
 	AccessBundleID *string `json:"accessBundleId"`
 	// Asked before each request, or each database or SSH connection. Nil when the service has none.

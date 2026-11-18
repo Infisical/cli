@@ -29,11 +29,18 @@ func errCredentialRemoved(svc *resolvedService) error {
 	return fmt.Errorf("service %q: %w. This service's sign-in was removed in Infisical Agent Vault.", svc.name, errPolicyBlocked)
 }
 
+func errCredentialNotConnected(svc *resolvedService) error {
+	return fmt.Errorf("service %q: %w. The sign-in used by this service isn't connected in Infisical Agent Vault.", svc.name, errPolicyBlocked)
+}
+
 func checkServicePolicy(svc *resolvedService, req *http.Request) error {
-	// First, so the refusal names what the agent's owner can fix rather than a method or path rule. A removed
-	// sign-in comes before missing personal values, which the server also sets on it for older proxies.
+	// First, so the refusal names what the agent's owner can fix rather than a method or path rule. A removed or
+	// unconnected sign-in comes before missing personal values, which the server also sets on it for older proxies.
 	if svc.credentialRemoved {
 		return errCredentialRemoved(svc)
+	}
+	if svc.credentialNotConnected {
+		return errCredentialNotConnected(svc)
 	}
 	if svc.personalValuesMissing {
 		return errPersonalValuesMissing(svc)

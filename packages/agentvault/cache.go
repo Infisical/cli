@@ -85,6 +85,8 @@ type resolvedService struct {
 	memberProvided bool
 	// The OAuth variable the service signed in with was deleted, so it has no credential to send.
 	credentialRemoved bool
+	// The OAuth variable the service signs in with isn't connected, so it has no credential to send.
+	credentialNotConnected bool
 	// Asked before the credential is attached. Nil when the service has none.
 	hook *serviceHook
 }
