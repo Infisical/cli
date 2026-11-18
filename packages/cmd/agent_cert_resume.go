@@ -233,11 +233,7 @@ func (tm *AgentManager) resumeCertificateFromDisk(certificateId int, certConfig 
 	state.LastError = ""
 	state.RetryCount = 0
 
-	if renewBeforeDuration, err := parseDurationWithDays(certConfig.Lifecycle.RenewBeforeExpiry); err == nil {
-		state.NextRenewalCheck = state.ExpiresAt.Add(-renewBeforeDuration)
-	} else {
-		state.NextRenewalCheck = state.ExpiresAt.Add(-24 * time.Hour)
-	}
+	state.NextRenewalCheck = nextCertificateCheck(certConfig, state.ExpiresAt, time.Now())
 
 	if !tm.ShouldRenewCertificate(certificateId) {
 		log.Info().Str("Certificate", displayName).Str("serial", state.SerialNumber).Time("expires", state.ExpiresAt).Msg("resuming management of the existing certificate on disk")
@@ -246,8 +242,7 @@ func (tm *AgentManager) resumeCertificateFromDisk(certificateId int, certConfig 
 
 	log.Info().Str("Certificate", displayName).Msg("certificate on disk is within its renewal window; renewing")
 	if err := tm.RenewCertificate(certificateId, certConfig); err != nil {
-		// Nothing retries a failed renewal for profile-based certificates, so issue a
-		// new certificate rather than letting the one on disk run out.
+		// Issue now rather than wait out failure-retry-interval while the certificate on disk runs out.
 		log.Error().Str("Certificate", displayName).Msgf("failed to renew certificate; issuing a new certificate: %v", err)
 		state.Status = "pending"
 		return false

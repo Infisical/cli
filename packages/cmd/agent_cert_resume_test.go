@@ -48,7 +48,7 @@ func (s *resumeTestServer) start(t *testing.T, renewed *api.RenewCertificateResp
 			resp.Certificate.Status = s.status
 			resp.Certificate.SerialNumber = s.serial
 			resp.Certificate.CommonName = "example.com"
-			resp.Certificate.NotBefore = time.Now().Add(-time.Hour)
+			resp.Certificate.NotBefore = s.notAfter.Add(-90 * 24 * time.Hour)
 			resp.Certificate.NotAfter = s.notAfter
 			resp.Certificate.RenewedByCertificateID = s.renewedBy
 			_ = json.NewEncoder(w).Encode(resp)
@@ -162,7 +162,7 @@ func TestResumeCertificateFromDisk_ResumesValidCertificateOutsideRenewalWindow(t
 	assert.Equal(t, "active", state.Status)
 	assert.Equal(t, resumeTestCertificateID, state.CertificateID)
 	assert.True(t, state.ExpiresAt.Equal(notAfter))
-	assert.True(t, state.NextRenewalCheck.Equal(notAfter.Add(-30*24*time.Hour)))
+	assert.WithinDuration(t, time.Now().Add(DEFAULT_MONITORING_INTERVAL), state.NextRenewalCheck, time.Second)
 	assert.Zero(t, server.renewCalls)
 	assert.Zero(t, server.issueCalls)
 }
@@ -433,6 +433,7 @@ func TestResumedCertificateIsRenewedByTheMonitoringLoop(t *testing.T) {
 	server.mu.Lock()
 	server.notAfter = time.Now().Add(10 * 24 * time.Hour)
 	server.mu.Unlock()
+	tm.certificateStates[1].IssuedAt = time.Now().Add(-80 * 24 * time.Hour)
 	tm.certificateStates[1].NextRenewalCheck = time.Now().Add(-time.Minute)
 
 	tm.CheckCertificateRenewals()
