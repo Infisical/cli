@@ -282,8 +282,9 @@ func TestAn401TwiceGivesA502WithoutTheChallenge(t *testing.T) {
 func TestAnUnchangedTokenIsNotRetried(t *testing.T) {
 	// Infisical answers a refresh it could not do with the token it has and the connection's status.
 	for status, want := range map[string]string{
-		oauthStatusNeedsReauthorization:  reauthorizeLinearBody,
-		oauthStatusNeedsAdditionalScopes: missingScopeLinearBody,
+		oauthStatusNeedsReauthorization: reauthorizeLinearBody,
+		// Shared by every service on a variable and kept through refreshes, so it says nothing about this 401.
+		oauthStatusNeedsAdditionalScopes: linearUnavailableBody,
 		oauthStatusConnected:             linearUnavailableBody,
 	} {
 		t.Run(status, func(t *testing.T) {
@@ -1496,7 +1497,7 @@ func TestAnHTTPServiceGetsAStatusThatSaysWhatHappenedToItsSignIn(t *testing.T) {
 		wantBody string
 	}{
 		{"dead sign-in", &oauthResolver{issue: oauthToken("old-token"), status: oauthStatusNeedsReauthorization}, acceptOnly("nothing"), http.StatusUnauthorized, reauthorizeLinearBody},
-		{"missing scopes reported by Infisical", &oauthResolver{issue: oauthToken("old-token"), status: oauthStatusNeedsAdditionalScopes}, acceptOnly("nothing"), http.StatusForbidden, missingScopeLinearBody},
+		{"missing scopes reported by Infisical, during a brief outage", &oauthResolver{issue: oauthToken("old-token"), status: oauthStatusNeedsAdditionalScopes}, acceptOnly("nothing"), http.StatusBadGateway, linearUnavailableBody},
 		{"insufficient scope", &oauthResolver{}, func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("WWW-Authenticate", `Bearer error="insufficient_scope", scope="write"`)
 			w.WriteHeader(http.StatusForbidden)

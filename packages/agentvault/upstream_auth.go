@@ -81,9 +81,10 @@ func credentialUnavailable(req *http.Request, svc *resolvedService) *http.Respon
 	return upstreamAuthFailed(req, http.StatusBadGateway, credentialUnavailableBody(svc), nil)
 }
 
-// Only a status Infisical reports, or an insufficient_scope challenge, means the user has to reauthorize.
-func refreshFailed(req *http.Request, svc *resolvedService, status string) *http.Response {
-	if status == oauthStatusNeedsReauthorization || status == oauthStatusNeedsAdditionalScopes {
+// On a 401 the variable's needs-additional-scopes is not about this request: it is shared by every service on the
+// variable and survives refreshes, so only an insufficient_scope challenge the upstream itself sent is final.
+func refreshFailed(req *http.Request, svc *resolvedService, status string, scopeChallenged bool) *http.Response {
+	if status == oauthStatusNeedsReauthorization || (scopeChallenged && status == oauthStatusNeedsAdditionalScopes) {
 		return reauthorizationNeeded(req, svc, status)
 	}
 	return credentialUnavailable(req, svc)
@@ -96,7 +97,7 @@ func refreshedTokenFailed(req *http.Request, svc *resolvedService, sent, fresh *
 	if credentialHash(fresh) != credentialHash(sent) {
 		return credentialUnavailable(req, svc)
 	}
-	return refreshFailed(req, svc, status)
+	return refreshFailed(req, svc, status, false)
 }
 
 // The request body as it will go upstream, when it can be sent a second time. Only a body already held in
@@ -127,7 +128,7 @@ func (ps *proxyServer) handleUpstreamAuth(upstream http.RoundTripper, req *http.
 		if errors.As(err, &notRecovered) {
 			log.Warn().Str("service", svc.name).Str("serviceId", svc.id).Str("status", notRecovered.status).
 				Msg("agent-vault: the upstream rejected the OAuth token and Infisical has no other, not retrying")
-			return refreshFailed(req, svc, notRecovered.status), nil
+			return refreshFailed(req, svc, notRecovered.status, notRecovered.scopeChallenged), nil
 		}
 		if err != nil {
 			log.Warn().Err(err).Str("service", svc.name).Str("serviceId", svc.id).
@@ -158,7 +159,7 @@ func (ps *proxyServer) handleUpstreamAuth(upstream http.RoundTripper, req *http.
 				return retryResp, nil
 			}
 			_ = retryResp.Body.Close()
-			ps.cache.rememberRejectedRefresh(sessionToken, svc.id, svc.hostPattern, &fresh, oauthStatusNeedsAdditionalScopes)
+			ps.cache.rememberRejectedRefresh(sessionToken, svc.id, svc.hostPattern, &fresh, oauthStatusNeedsAdditionalScopes, true)
 			log.Warn().Str("service", svc.name).Str("serviceId", svc.id).
 				Msg("agent-vault: the upstream needs OAuth scopes the refreshed token was not granted")
 			return reauthorizationNeeded(req, svc, oauthStatusNeedsAdditionalScopes), nil
@@ -169,7 +170,7 @@ func (ps *proxyServer) handleUpstreamAuth(upstream http.RoundTripper, req *http.
 		if credentialHash(&fresh) != credentialHash(sent) {
 			status = ""
 		}
-		ps.cache.rememberRejectedRefresh(sessionToken, svc.id, svc.hostPattern, &fresh, status)
+		ps.cache.rememberRejectedRefresh(sessionToken, svc.id, svc.hostPattern, &fresh, status, false)
 		log.Warn().Str("service", svc.name).Str("serviceId", svc.id).Int("retryStatus", retryResp.StatusCode).
 			Msg("agent-vault: the upstream rejected the refreshed OAuth token too")
 		return refreshedTokenFailed(req, svc, sent, &fresh, status), nil

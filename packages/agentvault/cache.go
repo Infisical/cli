@@ -603,7 +603,11 @@ var (
 
 // Infisical answered a refresh with the token the upstream rejected, or with one the upstream rejected too.
 // The status is Infisical's view of the service's OAuth connection, kept for the agent's message.
-type refreshNotRecoveredError struct{ status string }
+type refreshNotRecoveredError struct {
+	status string
+	// The upstream answered the refreshed token with an insufficient_scope challenge of its own.
+	scopeChallenged bool
+}
 
 func (e *refreshNotRecoveredError) Error() string {
 	return fmt.Sprintf("the refresh did not produce a token the upstream accepts (status %q)", e.status)
@@ -705,9 +709,9 @@ func (c *sessionCache) rememberRefreshFailure(flightKey string, err error) {
 
 // rememberRejectedRefresh records that the token a refresh produced was rejected by the upstream as well, so
 // the next 401 for it gets its answer without asking Infisical again within the window.
-func (c *sessionCache) rememberRejectedRefresh(sessionToken, serviceID, hostPattern string, rejected *credential, status string) {
+func (c *sessionCache) rememberRejectedRefresh(sessionToken, serviceID, hostPattern string, rejected *credential, status string, scopeChallenged bool) {
 	flightKey := credentialFlightKey(sessionKey(sessionToken), serviceID, hostPattern, credentialHash(rejected), nil)
-	c.rememberRefreshFailure(flightKey, &refreshNotRecoveredError{status: status})
+	c.rememberRefreshFailure(flightKey, &refreshNotRecoveredError{status: status, scopeChallenged: scopeChallenged})
 }
 
 func (c *sessionCache) dropSession(key string, err error) {
