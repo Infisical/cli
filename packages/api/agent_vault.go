@@ -501,6 +501,8 @@ type AgentVaultSessionService struct {
 	// "ready", or "needs-personal-values" until the user sets them; the proxy refuses requests to such a service.
 	Status     string                             `json:"status"`
 	Credential AgentVaultSessionServiceCredential `json:"credential"`
+	// What to do with the service, or for one not ready, what has to happen first. Empty from older servers.
+	HowToUse string `json:"howToUse"`
 }
 
 type AgentVaultSessionServiceCredential struct {

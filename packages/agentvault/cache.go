@@ -774,6 +774,8 @@ func (c *sessionCache) currentCredential(key, serviceID, hostPattern string) (cr
 // cached credential wins over a delayed refresh, including the credential returned for retry.
 // A poll that removed the session or the service during the refresh revoked that access, so the fresh token
 // is refused rather than handed to a retry.
+// Every refreshable service still holding the replaced token gets the new one too: services on one OAuth
+// variable share its token, and one left on the replaced token would send it upstream until the next poll.
 func (c *sessionCache) swapCredential(key, serviceID, hostPattern, replacedHash string, cred credential) (credential, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -781,44 +783,49 @@ func (c *sessionCache) swapCredential(key, serviceID, hostPattern, replacedHash 
 	if !ok {
 		return credential{}, errSessionGone
 	}
-	for i, svc := range entry.services {
-		if svc.id != serviceID {
+	asking := slices.IndexFunc(entry.services, func(svc *resolvedService) bool { return svc.id == serviceID })
+	if asking < 0 {
+		return credential{}, errServiceRemoved
+	}
+	svc := entry.services[asking]
+	if svc.hostPattern != hostPattern {
+		return credential{}, errServiceHostChanged
+	}
+	if !svc.credential.refreshable {
+		return credential{}, errCredentialNotRefreshable
+	}
+	if credentialHash(&svc.credential) != replacedHash {
+		return svc.credential, nil
+	}
+
+	services := append([]*resolvedService(nil), entry.services...)
+	c.swapGen++
+	if entry.swaps == nil {
+		entry.swaps = make(map[string]*credentialSwap)
+	}
+	for i, holder := range services {
+		if !holder.credential.refreshable || credentialHash(&holder.credential) != replacedHash {
 			continue
 		}
-		if svc.hostPattern != hostPattern {
-			return credential{}, errServiceHostChanged
-		}
-		if !svc.credential.refreshable {
-			return credential{}, errCredentialNotRefreshable
-		}
-		if credentialHash(&svc.credential) != replacedHash {
-			return svc.credential, nil
-		}
-		updated := *svc
+		updated := *holder
 		updated.credential = cred
-		services := append([]*resolvedService(nil), entry.services...)
 		services[i] = &updated
-		entry.services = services
 
-		c.swapGen++
-		if entry.swaps == nil {
-			entry.swaps = make(map[string]*credentialSwap)
-		}
-		swap, ok := entry.swaps[serviceID]
+		swap, ok := entry.swaps[holder.id]
 		if !ok {
 			swap = &credentialSwap{replaced: make(map[string]bool)}
-			entry.swaps[serviceID] = swap
+			entry.swaps[holder.id] = swap
 		}
 		swap.installed = cred
-		if swap.hostPattern != hostPattern {
-			swap.hostPattern = hostPattern
+		if swap.hostPattern != holder.hostPattern {
+			swap.hostPattern = holder.hostPattern
 			clear(swap.replaced)
 		}
 		swap.replaced[replacedHash] = true
 		swap.gen = c.swapGen
 		// A refresh can hand back the token it replaced, which is then current rather than stale.
 		delete(swap.replaced, credentialHash(&cred))
-		return cred, nil
 	}
-	return credential{}, errServiceRemoved
+	entry.services = services
+	return cred, nil
 }

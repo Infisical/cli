@@ -24,9 +24,9 @@ const (
 	maxReportedScopeLen = 256
 )
 
-// The bodies of the response that replaces the upstream's auth failure. No WWW-Authenticate goes with it:
-// passing the upstream's challenge on would start the agent's MCP client on an OAuth flow of its own, when the
-// credential belongs to Infisical.
+// The bodies of the response that replaces the upstream's auth failure. The upstream's WWW-Authenticate never
+// goes with it: passing its challenge on would start the agent's MCP client on an OAuth flow of its own, when
+// the credential belongs to Infisical.
 func upstreamAuthBody(code, message string) string {
 	body, _ := json.Marshal(map[string]string{"error": code, "message": message})
 	return string(body)
@@ -56,21 +56,29 @@ func credentialUnavailableBody(svc *resolvedService) string {
 	return upstreamAuthBody("upstream_auth_unavailable", fmt.Sprintf("Couldn't get a valid credential for the %s service. Try again in a moment.", svc.name))
 }
 
+// Sent with the 401 because RFC 9110 requires a challenge on one, and some clients (Java's HttpClient with an
+// Authenticator) throw without it. A scheme no client implements is passed through to the caller instead of
+// starting a sign-in of the client's own.
+const agentVaultChallenge = `AgentVault realm="Infisical Agent Vault"`
+
 // An HTTP client is told 401 for a sign-in that is dead and 403 for one missing a scope. An MCP client keeps
 // the 502, since a 401 is what starts its own OAuth flow.
 func reauthorizationNeeded(req *http.Request, svc *resolvedService, status string) *http.Response {
 	code := http.StatusBadGateway
+	var extra http.Header
 	if svc.kind != serviceKindMCP {
 		code = http.StatusUnauthorized
 		if status == oauthStatusNeedsAdditionalScopes {
 			code = http.StatusForbidden
+		} else {
+			extra = http.Header{"Www-Authenticate": {agentVaultChallenge}}
 		}
 	}
-	return upstreamAuthFailed(req, code, reauthorizationNeededBody(svc, status))
+	return upstreamAuthFailed(req, code, reauthorizationNeededBody(svc, status), extra)
 }
 
 func credentialUnavailable(req *http.Request, svc *resolvedService) *http.Response {
-	return upstreamAuthFailed(req, http.StatusBadGateway, credentialUnavailableBody(svc))
+	return upstreamAuthFailed(req, http.StatusBadGateway, credentialUnavailableBody(svc), nil)
 }
 
 // Only a status Infisical reports, or an insufficient_scope challenge, means the user has to reauthorize.
@@ -79,6 +87,16 @@ func refreshFailed(req *http.Request, svc *resolvedService, status string) *http
 		return reauthorizationNeeded(req, svc, status)
 	}
 	return credentialUnavailable(req, svc)
+}
+
+// Once a refresh produced a new token the status can't say the sign-in is dead: it is the OAuth variable's,
+// shared by every service on it, and keeps needs-additional-scopes through successful refreshes. The new token
+// is cached, so the agent is told to try again.
+func refreshedTokenFailed(req *http.Request, svc *resolvedService, sent, fresh *credential, status string) *http.Response {
+	if credentialHash(fresh) != credentialHash(sent) {
+		return credentialUnavailable(req, svc)
+	}
+	return refreshFailed(req, svc, status)
 }
 
 // The request body as it will go upstream, when it can be sent a second time. Only a body already held in
@@ -119,7 +137,7 @@ func (ps *proxyServer) handleUpstreamAuth(upstream http.RoundTripper, req *http.
 		if !replayable {
 			log.Warn().Str("service", svc.name).Str("serviceId", svc.id).Bool("replayable", replayable).Str("status", status).
 				Msg("agent-vault: the upstream rejected the OAuth token, not retrying")
-			return refreshFailed(req, svc, status), nil
+			return refreshedTokenFailed(req, svc, sent, &fresh, status), nil
 		}
 
 		retry := req.Clone(req.Context())
@@ -139,13 +157,22 @@ func (ps *proxyServer) handleUpstreamAuth(upstream http.RoundTripper, req *http.
 			if !ps.reportInsufficientScope(retryResp, sessionToken, svc, &fresh) {
 				return retryResp, nil
 			}
-			status = oauthStatusNeedsAdditionalScopes
+			_ = retryResp.Body.Close()
+			ps.cache.rememberRejectedRefresh(sessionToken, svc.id, svc.hostPattern, &fresh, oauthStatusNeedsAdditionalScopes)
+			log.Warn().Str("service", svc.name).Str("serviceId", svc.id).
+				Msg("agent-vault: the upstream needs OAuth scopes the refreshed token was not granted")
+			return reauthorizationNeeded(req, svc, oauthStatusNeedsAdditionalScopes), nil
 		}
 		_ = retryResp.Body.Close()
+		// Remembered without the shared status when that status was not the answer, so a repeat within the window
+		// is told the same thing.
+		if credentialHash(&fresh) != credentialHash(sent) {
+			status = ""
+		}
 		ps.cache.rememberRejectedRefresh(sessionToken, svc.id, svc.hostPattern, &fresh, status)
 		log.Warn().Str("service", svc.name).Str("serviceId", svc.id).Int("retryStatus", retryResp.StatusCode).
 			Msg("agent-vault: the upstream rejected the refreshed OAuth token too")
-		return refreshFailed(req, svc, status), nil
+		return refreshedTokenFailed(req, svc, sent, &fresh, status), nil
 
 	case http.StatusForbidden:
 		if !ps.reportInsufficientScope(resp, sessionToken, svc, sent) {
@@ -203,8 +230,11 @@ func challengedScopes(raw string) []string {
 	return scopes
 }
 
-func upstreamAuthFailed(req *http.Request, code int, body string) *http.Response {
-	header := make(http.Header)
+func upstreamAuthFailed(req *http.Request, code int, body string, extra http.Header) *http.Response {
+	header := extra.Clone()
+	if header == nil {
+		header = make(http.Header)
+	}
 	header.Set("Content-Type", "application/json")
 	header.Set("Content-Length", strconv.Itoa(len(body)))
 	return &http.Response{

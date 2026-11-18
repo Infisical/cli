@@ -1512,8 +1512,14 @@ func TestAnHTTPServiceGetsAStatusThatSaysWhatHappenedToItsSignIn(t *testing.T) {
 			if resp.StatusCode != tc.want || body != tc.wantBody {
 				t.Fatalf("got %d: %s, want %d: %s", resp.StatusCode, body, tc.want, tc.wantBody)
 			}
-			if got := resp.Header.Values("WWW-Authenticate"); len(got) != 0 {
-				t.Fatalf("the upstream's challenge reached the agent: %v", got)
+			// RFC 9110 requires a challenge on a 401, and a client with an Authenticator (Java's HttpClient) throws
+			// without one. Nothing else gets one.
+			var want []string
+			if tc.want == http.StatusUnauthorized {
+				want = []string{`AgentVault realm="Infisical Agent Vault"`}
+			}
+			if got := resp.Header.Values("WWW-Authenticate"); !reflect.DeepEqual(got, want) {
+				t.Fatalf("WWW-Authenticate = %q, want %q", got, want)
 			}
 			if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
 				t.Fatalf("content type = %q", ct)
@@ -1534,5 +1540,78 @@ func TestAMemberProvidedHTTPSignInKeepsItsWording(t *testing.T) {
 	want := `{"error":"upstream_auth_failed","message":"Reconnect your account for the linear service under Services in Infisical Agent Vault."}`
 	if resp.StatusCode != http.StatusUnauthorized || body != want {
 		t.Fatalf("got %d: %s, want 401: %s", resp.StatusCode, body, want)
+	}
+}
+
+// The OAuth variable's status is shared by every service on it and stays needs-additional-scopes through
+// refreshes, so it can't tell an agent holding a new token that the sign-in is dead.
+func TestASharedMissingScopeStatusDoesNotFailARequestARefreshRecovered(t *testing.T) {
+	resolver := &oauthResolver{issue: oauthToken("new-token"), status: oauthStatusNeedsAdditionalScopes}
+	client, host, up := newOAuthFixture(t, resolver, func(h string) *resolvedService { return oauthHTTPService(h, "old-token") }, acceptOnly("new-token"))
+
+	large := strings.Repeat("a", maxMCPInspectBody+1)
+	stream := io.MultiReader(strings.NewReader(large[:10]), strings.NewReader(large[10:]))
+	resp, body := doWith(t, client, http.MethodPut, fmt.Sprintf("https://%s/files", host), "application/octet-stream", stream)
+	assertUpstreamAuthFailed(t, resp, body, linearUnavailableBody)
+
+	stream = io.MultiReader(strings.NewReader(large[:10]), strings.NewReader(large[10:]))
+	resp, body = doWith(t, client, http.MethodPut, fmt.Sprintf("https://%s/files", host), "application/octet-stream", stream)
+	if resp.StatusCode != http.StatusOK || body != "ok" {
+		t.Fatalf("the identical retry should carry the refreshed token, got %d: %s", resp.StatusCode, body)
+	}
+	if hits := up.recorded(); len(hits) != 2 || hits[1].auth != "Bearer new-token" {
+		t.Fatalf("upstream hits = %d, want the rejected request and the retry with the new token", len(hits))
+	}
+}
+
+func TestARefreshedTokenRejectedUnderASharedMissingScopeStatusIsRetryable(t *testing.T) {
+	resolver := &oauthResolver{issue: oauthToken("new-token"), status: oauthStatusNeedsAdditionalScopes}
+	client, host, up := newOAuthFixture(t, resolver, func(h string) *resolvedService { return oauthHTTPService(h, "old-token") }, acceptOnly("nothing"))
+
+	for i := range 2 {
+		resp, body := doWith(t, client, http.MethodGet, fmt.Sprintf("https://%s/files", host), "", nil)
+		assertUpstreamAuthFailed(t, resp, body, linearUnavailableBody)
+		if got := len(resolver.refreshCalls()); got != 1 {
+			t.Fatalf("request %d: refresh called %d times, want 1", i, got)
+		}
+	}
+	if got := len(up.recorded()); got != 3 {
+		t.Fatalf("upstream saw %d requests, want the original, one retry and the repeat", got)
+	}
+}
+
+func TestARefreshInstallsTheNewTokenOnEveryServiceSharingIt(t *testing.T) {
+	resolver := &oauthResolver{issue: oauthToken("new-token"), status: oauthStatusConnected}
+	gdrive := &resolvedService{id: "svc-1", name: "gdrive", kind: serviceKindHTTP, hostPattern: "drive.example", credential: oauthToken("shared-token")}
+	gmail := &resolvedService{id: "svc-2", name: "gmail", kind: serviceKindHTTP, hostPattern: "gmail.example", credential: oauthToken("shared-token")}
+	other := &resolvedService{id: "svc-3", name: "linear", kind: serviceKindMCP, hostPattern: "linear.example", credential: oauthToken("other-token")}
+	resolver.setServices(gdrive, gmail, other)
+	cache := newTestCache(resolver)
+	if _, err := cache.get("tok"); err != nil {
+		t.Fatal(err)
+	}
+
+	sent := oauthToken("shared-token")
+	if _, _, err := cache.refreshCredential("tok", "svc-1", "drive.example", &sent); err != nil {
+		t.Fatal(err)
+	}
+	services, err := cache.get("tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, svc := range services {
+		got[svc.id] = string(svc.credential.value)
+	}
+	if want := map[string]string{"svc-1": "new-token", "svc-2": "new-token", "svc-3": "other-token"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("credentials = %v, want %v", got, want)
+	}
+
+	fresh, _, err := cache.refreshCredential("tok", "svc-2", "gmail.example", &sent)
+	if err != nil || string(fresh.value) != "new-token" {
+		t.Fatalf("gmail's refresh = %q, %v; want the token already installed", fresh.value, err)
+	}
+	if calls := len(resolver.refreshCalls()); calls != 1 {
+		t.Fatalf("Infisical was asked %d times, want once for both services", calls)
 	}
 }
