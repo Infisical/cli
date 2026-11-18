@@ -38,6 +38,8 @@ import (
 // signature, so these only have to exist.
 const awsProxyDummyCredential = "infisical-pam-proxy-managed"
 
+const awsProxyRequestTimeout = 30 * time.Second
+
 type AWSProxyServer struct {
 	BaseProxyServer
 	server          net.Listener
@@ -160,7 +162,9 @@ func (p *AWSProxyServer) handleConnection(clientConn net.Conn) {
 	}
 
 	var captured bytes.Buffer
-	// Any local process can connect, so what's read before the proxy credential is checked is capped
+	// Any local process can connect, so what's read before the proxy credential is checked is capped in
+	// size and time
+	_ = clientConn.SetReadDeadline(time.Now().Add(awsProxyRequestTimeout))
 	clientReader := bufio.NewReader(io.TeeReader(io.LimitReader(clientConn, http.DefaultMaxHeaderBytes), &captured))
 	req, err := http.ReadRequest(clientReader)
 	if err != nil {
@@ -169,6 +173,7 @@ func (p *AWSProxyServer) handleConnection(clientConn net.Conn) {
 		}
 		return
 	}
+	_ = clientConn.SetReadDeadline(time.Time{})
 	if subtle.ConstantTimeCompare([]byte(req.Header.Get("Proxy-Authorization")), []byte(p.proxyAuthHeader)) != 1 {
 		log.Warn().Msg("Rejected local proxy client with missing or invalid Proxy-Authorization")
 		_, _ = clientConn.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"infisical-pam\"\r\nContent-Length: 0\r\n\r\n"))
@@ -284,6 +289,14 @@ func awsProxyEnv(base []string, proxyURL, caPath string) []string {
 	)
 }
 
+// The settings awsProxyEnv applies, as commands for a shell the CLI didn't start
+func awsProxyExports(proxyURL, caPath string) string {
+	return fmt.Sprintf("export HTTPS_PROXY=\"%[1]s\" https_proxy=\"%[1]s\" AWS_CA_BUNDLE=\"%[2]s\"\n"+
+		"export AWS_ACCESS_KEY_ID=\"%[3]s\" AWS_SECRET_ACCESS_KEY=\"%[3]s\"\n"+
+		"unset AWS_SESSION_TOKEN AWS_SECURITY_TOKEN NO_PROXY no_proxy\n",
+		proxyURL, caPath, awsProxyDummyCredential)
+}
+
 func startAWSGatewayAccess(httpClient *resty.Client, response *api.PAMAccessResponse, path, durationStr string, port int) {
 	sessionExpiry, err := time.Parse(time.RFC3339, response.Metadata["expiresAt"])
 	if err != nil {
@@ -357,18 +370,32 @@ func startAWSGatewayAccess(httpClient *resty.Client, response *api.PAMAccessResp
 	_, _ = caFile.Write(proxy.caCertPEM)
 	caFile.Close()
 
+	proxyURL := fmt.Sprintf("http://infisical:%s@127.0.0.1:%d", proxySecret, proxy.port)
+
+	// The printed tips point at this file, which only the user can read, so they never show the proxy password
+	envFile, err := os.CreateTemp("", "infisical-pam-aws-env-*.sh")
+	if err != nil {
+		proxy.Shutdown()
+		_ = os.Remove(caPath)
+		util.PrintErrorMessageAndExit(fmt.Sprintf("Failed to create environment file: %v", err))
+		return
+	}
+	envPath := envFile.Name()
+	_, _ = envFile.WriteString(awsProxyExports(proxyURL, caPath))
+	envFile.Close()
+
 	cleanup := func() {
 		proxy.Shutdown()
 		_ = os.Remove(caPath)
+		_ = os.Remove(envPath)
 	}
 
-	proxyURL := fmt.Sprintf("http://infisical:%s@127.0.0.1:%d", proxySecret, proxy.port)
 	awsEnv := awsProxyEnv(os.Environ(), proxyURL, caPath)
 
 	folder, account := parsePath(path)
 	interactive := isatty.IsTerminal(os.Stdin.Fd()) && isatty.IsTerminal(os.Stdout.Fd())
 
-	printAWSGatewaySessionInfo(folder, account, response.Metadata, sessionExpiry, interactive, proxyURL, caPath)
+	printAWSGatewaySessionInfo(folder, account, response.Metadata, sessionExpiry, interactive, envPath)
 
 	if interactive {
 		runAWSSubshell(awsEnv, sessionExpiry, cleanup)
@@ -425,7 +452,7 @@ func runAWSSubshell(env []string, expiry time.Time, cleanup func()) {
 	cleanup()
 }
 
-func printAWSGatewaySessionInfo(folder, account string, metadata map[string]string, expiresAt time.Time, interactive bool, proxyURL, caPath string) {
+func printAWSGatewaySessionInfo(folder, account string, metadata map[string]string, expiresAt time.Time, interactive bool, envPath string) {
 	fmt.Printf("\n")
 	fmt.Printf("**********************************************************************\n")
 	fmt.Printf("              AWS IAM Session Started!                                \n")
@@ -454,15 +481,11 @@ func printAWSGatewaySessionInfo(folder, account string, metadata map[string]stri
 		util.PrintfStderr("    $ aws s3 ls\n")
 		fmt.Printf("\n")
 		fmt.Printf("  To use another terminal or your own tooling against this session,\n")
-		fmt.Printf("  export the same settings there:\n")
+		fmt.Printf("  load the same settings there:\n")
 	} else {
 		fmt.Printf("  Point AWS tooling at this session, then run aws commands:\n")
 	}
-	util.PrintfStderr("    $ export HTTPS_PROXY=\"%s\"\n", proxyURL)
-	util.PrintfStderr("    $ export AWS_CA_BUNDLE=\"%s\"\n", caPath)
-	util.PrintfStderr("    $ export AWS_ACCESS_KEY_ID=\"%s\"\n", awsProxyDummyCredential)
-	util.PrintfStderr("    $ export AWS_SECRET_ACCESS_KEY=\"%s\"\n", awsProxyDummyCredential)
-	util.PrintfStderr("    $ unset AWS_SESSION_TOKEN NO_PROXY no_proxy\n")
+	util.PrintfStderr("    $ source \"%s\"\n", envPath)
 	if !interactive {
 		util.PrintfStderr("    $ aws sts get-caller-identity\n")
 	}

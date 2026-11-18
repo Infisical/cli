@@ -318,13 +318,8 @@ func (p *AWSProxy) handleRequest(ctx context.Context, w io.Writer, req *http.Req
 	l.Info().Str("method", req.Method).Str("host", host).Str("service", service).Str("reqId", requestID).Msg("Forwarding AWS request")
 
 	resp, err := p.client.Do(out)
-	if err != nil {
-		l.Error().Err(err).Str("host", host).Msg("Failed to forward request to AWS")
-		writeError(w, req, http.StatusBadGateway, "failed to forward the request to AWS")
-		return false, nil
-	}
-	defer resp.Body.Close()
 
+	// Recorded even when the response is lost, since AWS may still have carried out the call
 	p.logHttpEvent(session.HttpEvent{
 		Timestamp: startedAt,
 		RequestId: requestID,
@@ -334,6 +329,20 @@ func (p *AWSProxy) handleRequest(ctx context.Context, w io.Writer, req *http.Req
 		Headers:   loggedHeaders(req.Header),
 		Body:      loggedRequestBody.Bytes(),
 	}, l)
+
+	if err != nil {
+		l.Error().Err(err).Str("host", host).Msg("Failed to forward request to AWS")
+		writeError(w, req, http.StatusBadGateway, "failed to forward the request to AWS")
+		p.logHttpEvent(session.HttpEvent{
+			Timestamp: time.Now(),
+			RequestId: requestID,
+			EventType: session.HttpEventResponse,
+			Status:    "502 Bad Gateway",
+			Body:      []byte("No response from AWS: " + err.Error()),
+		}, l)
+		return false, nil
+	}
+	defer resp.Body.Close()
 
 	var loggedResponseBody bytes.Buffer
 	resp.Body = io.NopCloser(io.TeeReader(resp.Body, &limitedWriter{w: &loggedResponseBody, n: maxLoggedBodySize}))
@@ -484,9 +493,15 @@ func forwardedHeaders(header http.Header, signed bool) http.Header {
 	return forwarded
 }
 
+// Headers that carry a credential or a key, which the session log would otherwise keep, since it masks only bodies
+var credentialHeaders = []string{
+	"Authorization", "X-Amz-Security-Token", "Proxy-Authorization", "X-Amz-Sso_bearer_token",
+	"X-Amz-Server-Side-Encryption-Customer-Key", "X-Amz-Copy-Source-Server-Side-Encryption-Customer-Key",
+}
+
 func loggedHeaders(header http.Header) http.Header {
 	logged := header.Clone()
-	for _, name := range []string{"Authorization", "X-Amz-Security-Token", "Proxy-Authorization"} {
+	for _, name := range credentialHeaders {
 		logged.Del(name)
 	}
 	return logged

@@ -118,6 +118,9 @@ func HandlePAMCapabilities(ctx context.Context, conn *tls.Conn, gatewayName stri
 func HandlePAMCancellation(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMConfig, httpClient *resty.Client, cancelSession func(string) bool) error {
 	log.Info().Str("sessionId", pamConfig.SessionId).Msg("Received session termination message")
 
+	// Before the connections close, so a client that reconnects has to ask Infisical rather than reuse the cache
+	pamConfig.CredentialsManager.EvictSessionCredentials(pamConfig.SessionId)
+
 	// Kill the active proxy connection if it exists in the registry
 	if cancelled := cancelSession(pamConfig.SessionId); cancelled {
 		log.Info().Str("sessionId", pamConfig.SessionId).Msg("Active proxy session cancelled via registry")

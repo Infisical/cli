@@ -298,6 +298,14 @@ func (cm *CredentialsManager) cleanupExpiredCredentials() {
 	// They are cleaned by CleanupSessionCredentials (called from CleanupPAMSession) or by Shutdown
 }
 
+// EvictSessionCredentials drops a session's cached credentials but keeps its recording secrets, which the
+// final upload still needs
+func (cm *CredentialsManager) EvictSessionCredentials(sessionID string) {
+	cm.cacheMutex.Lock()
+	delete(cm.credentialsCache, sessionID)
+	cm.cacheMutex.Unlock()
+}
+
 func (cm *CredentialsManager) CleanupSessionCredentials(sessionID string) {
 	cm.cacheMutex.Lock()
 	if _, exists := cm.credentialsCache[sessionID]; exists {

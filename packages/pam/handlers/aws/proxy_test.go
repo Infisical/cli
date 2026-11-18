@@ -404,18 +404,47 @@ func TestProxyResignsRequestsWithSessionCredentials(t *testing.T) {
 
 func TestProxyPassesUnsignedRequestsThrough(t *testing.T) {
 	server, received := fakeAWS(t)
-	conn, pool, _ := startProxy(t, server)
+	conn, pool, logger := startProxy(t, server)
 
-	const host = "public-bucket.s3.amazonaws.com"
+	const host = "portal.sso.us-east-1.amazonaws.com"
 	tlsConn := connect(t, conn, pool, host)
 
-	req, _ := http.NewRequest(http.MethodGet, "https://"+host+"/object", nil)
+	req, _ := http.NewRequest(http.MethodGet, "https://"+host+"/assignment/accounts", nil)
+	req.Header.Set("x-amz-sso_bearer_token", "sso-access-token")
 	if resp := roundTrip(t, tlsConn, bufio.NewReader(tlsConn), req); resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
 	got := <-received
 	if got.req.Header.Get("Authorization") != "" || got.req.Header.Get("X-Amz-Security-Token") != "" {
 		t.Fatal("the gateway signed a request the client left unsigned")
+	}
+	if got.req.Header.Get("x-amz-sso_bearer_token") != "sso-access-token" {
+		t.Error("the SSO token didn't reach AWS")
+	}
+	if logged := logger.waitFor(t, 2)[0].Headers.Get("x-amz-sso_bearer_token"); logged != "" {
+		t.Errorf("the session log kept the SSO token %q", logged)
+	}
+}
+
+func TestProxyRecordsCallsWhoseResponseIsLost(t *testing.T) {
+	server, _ := fakeAWS(t)
+	conn, pool, logger := startProxy(t, server)
+	server.Close()
+
+	const host = "sts.amazonaws.com"
+	tlsConn := connect(t, conn, pool, host)
+	req := signedRequest(t, http.MethodPost, "https://"+host+"/", "sts", "us-east-1", "",
+		"Action=GetCallerIdentity&Version=2011-06-15", map[string]string{"Content-Type": "application/x-www-form-urlencoded"})
+	if resp := roundTrip(t, tlsConn, bufio.NewReader(tlsConn), req); resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", resp.StatusCode)
+	}
+
+	events := logger.waitFor(t, 2)
+	if events[0].EventType != session.HttpEventRequest || string(events[0].Body) != "Action=GetCallerIdentity&Version=2011-06-15" {
+		t.Errorf("request event = %s %q", events[0].EventType, events[0].Body)
+	}
+	if events[1].EventType != session.HttpEventResponse || events[1].Status != "502 Bad Gateway" {
+		t.Errorf("response event = %s %q", events[1].EventType, events[1].Status)
 	}
 }
 
