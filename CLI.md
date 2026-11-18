@@ -18,7 +18,7 @@ infisical secrets-manager secrets get API_KEY --env prod
   - `create` fails if the item exists, and `update` fails if it doesn't. Don't add upserts like `set`.
 - **Workflow commands** act on a whole environment rather than one resource: `run` sits directly under the product, and `export` under the resource it writes out (`secrets-manager secrets export`). Agent Vault also has `agent-vault proxy`, which runs the proxy, and `agent-vault connect`, which opens local ports to a session's database and SSH services.
 - **Lifecycle actions** are for long-running things such as agents and services: `start`, `stop`, `install`, `uninstall`.
-- **Other resource actions** cover what CRUD can't say: `revoke` ends something that keeps existing (`agent-vault sessions revoke`), and `push` uploads a local copy (`agent-vault skills push`).
+- **Other resource actions** cover what CRUD can't say: `revoke` ends something that keeps existing (`agent-vault sessions revoke`), `push` uploads a local copy (`agent-vault skills push`), and `pull` downloads one to edit and push back (`agent-vault skills pull`).
 
 Adding a word to any of these lists is a design decision. Raise it in the PR, and update this file and `conventions_test.go` together.
 
@@ -81,7 +81,7 @@ With `-o json`, the same error is JSON on stderr:
 | `token_project_mismatch` | `secrets create` or `update` with a service token for a different project than the one selected. Nothing is written |
 | `invalid_argument` | An argument the command can't use, such as the same secret name given twice to `secrets create`, or a secret with no name or no value, or a name that starts with a number. Nothing is written |
 | `project_delete_protected` | `projects delete` on a project with delete protection on, read from its settings. Nothing is deleted |
-| `project_required` | A delete ran without `--projectId`. Deletes never use `INFISICAL_PROJECT_ID` or `.infisical.yaml`. For Agent Vault, no project from `--project-id`, `INFISICAL_AGENT_VAULT_PROJECT_ID` or `INFISICAL_PROJECT_ID` |
+| `project_required` | A delete ran without `--projectId`. Deletes never use `INFISICAL_PROJECT_ID` or `.infisical.yaml`. For Agent Vault, no project from `--project-id`, `INFISICAL_AGENT_VAULT_PROJECT_ID` or `INFISICAL_PROJECT_ID`, or `agent-vault skills delete` without `--project-id` |
 | `invalid_project_id` | An Agent Vault project ID from `--project-id` or a variable isn't a project ID |
 | `access_bundle_required` | `agent-vault sessions create` without `--access-bundle` or `INFISICAL_AGENT_VAULT_ACCESS_BUNDLE` |
 | `access_bundle_not_granted` | `agent-vault sessions create` with an access bundle the caller (or the user a session is on behalf of) can't use, or that doesn't exist (400 `AccessBundleNotGranted`) |
@@ -96,6 +96,7 @@ With `-o json`, the same error is JSON on stderr:
 | `service_refused` | The proxy refused a database or SSH service, for example because personal values aren't set or the stored SSH key can't be used, or it can't serve one right now. The message is the proxy's. With `connect --all`, only when it refused every service |
 | `session_invalid` | `agent-vault connect` with a session that has ended, or that belongs to a different Agent Vault project than the proxy, as Infisical or the proxy reports it |
 | `local_port_unavailable` | `agent-vault connect` can't open a port on 127.0.0.1, such as a `--port` another program holds |
+| `skill_not_found` | An Agent Vault skills command names a skill the project doesn't have, or that the caller can't see |
 | `secret_exists` | `secrets create` on a key that exists. Nothing is written |
 | `secret_not_found` | `secrets update` on a key that doesn't exist. Nothing is written |
 | `folder_not_found` | `folders get`, `update` or `delete` on a folder that doesn't exist at `--path` |

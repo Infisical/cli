@@ -216,7 +216,7 @@ func lockSkillsDir(ctx context.Context, dir string) func() {
 }
 
 func installSkillFolder(dir string, skill api.AgentVaultSessionSkill) error {
-	if !validSkillFolderName(skill.Name) {
+	if !ValidSkillFolderName(skill.Name) {
 		return fmt.Errorf("the name %q cannot be used as a folder name", skill.Name)
 	}
 	dest := filepath.Join(dir, skill.Name)
@@ -404,7 +404,7 @@ func notInstalledByInfisical(dir, name string, info os.FileInfo) error {
 }
 
 // Skill names become folder names, so anything that could step outside the install directory is refused.
-func validSkillFolderName(name string) bool {
+func ValidSkillFolderName(name string) bool {
 	return name != "" && len(name) <= 64 && !strings.HasPrefix(name, ".") &&
 		!strings.ContainsAny(name, `/\:`) && filepath.IsLocal(name)
 }
@@ -417,7 +417,7 @@ func writeSkillFolder(root string, skill api.AgentVaultSessionSkill) error {
 	if err := writeSkillMarker(root, skillMarker{SkillID: skill.ID}); err != nil {
 		return err
 	}
-	if err := writeSkillFiles(root, skill.Files); err != nil {
+	if err := WriteSkillFiles(root, skill.Files); err != nil {
 		return err
 	}
 	return writeSkillMarker(root, skillMarker{SkillID: skill.ID, Sha256: skill.Sha256})
@@ -434,7 +434,7 @@ func writeSkillMarker(root string, marker skillMarker) error {
 	return nil
 }
 
-func writeSkillFiles(root string, files []api.AgentVaultSkillFile) error {
+func WriteSkillFiles(root string, files []api.AgentVaultSkillFile) error {
 	for _, file := range files {
 		rel := filepath.FromSlash(file.Path)
 		if file.Path == "" || strings.Contains(file.Path, `\`) || !filepath.IsLocal(rel) || filepath.Clean(rel) == "." {

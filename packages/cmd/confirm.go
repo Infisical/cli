@@ -33,8 +33,8 @@ var credentialFlags = map[string]bool{"token": true, "client-secret": true, "cli
 // flag's value becomes a placeholder, so a secret in a flag nobody anticipated can't reach the
 // suggestion even when it looks like a slug.
 var rerunIdentifierFlags = map[string]bool{
-	"projectId": true, "project-slug": true, "env": true, "path": true, "type": true, "tag": true, "tags": true,
-	"name": true, "slug": true, "output": true,
+	"projectId": true, "project-id": true, "project-slug": true, "env": true, "path": true, "type": true, "tag": true, "tags": true,
+	"name": true, "slug": true, "output": true, "version": true,
 }
 
 // scopeFlag is a flag that says where a delete acts, with the value the command resolved for it.

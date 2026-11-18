@@ -579,12 +579,18 @@ func CallGetAgentVaultSessionProxyCaFingerprints(ctx context.Context, httpClient
 }
 
 type AgentVaultSkill struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	Description   string `json:"description"`
-	LatestVersion int    `json:"latestVersion"`
-	CreatedAt     string `json:"createdAt"`
-	UpdatedAt     string `json:"updatedAt"`
+	ID            string                        `json:"id"`
+	Name          string                        `json:"name"`
+	Description   string                        `json:"description"`
+	LatestVersion int                           `json:"latestVersion"`
+	CreatedAt     string                        `json:"createdAt"`
+	UpdatedAt     string                        `json:"updatedAt"`
+	AccessBundles []AgentVaultSkillAccessBundle `json:"accessBundles"`
+}
+
+type AgentVaultSkillAccessBundle struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 type AgentVaultSkillVersion struct {
@@ -616,6 +622,99 @@ func CallListAgentVaultSkillsByName(httpClient *resty.Client, projectID, name st
 	}
 	if response.IsError() {
 		return ListAgentVaultSkillsResponse{}, NewAPIErrorWithResponse("CallListAgentVaultSkillsByName", response, nil)
+	}
+	return res, nil
+}
+
+func CallListAgentVaultSkills(httpClient *resty.Client, projectID string, limit, offset int) (ListAgentVaultSkillsResponse, error) {
+	var res ListAgentVaultSkillsResponse
+	response, err := httpClient.
+		R().
+		SetResult(&res).
+		SetHeader("User-Agent", USER_AGENT).
+		SetQueryParam("projectId", projectID).
+		SetQueryParam("limit", strconv.Itoa(limit)).
+		SetQueryParam("offset", strconv.Itoa(offset)).
+		Get(fmt.Sprintf("%v/v1/agent-vault/skills", config.INFISICAL_URL))
+
+	if err != nil {
+		return ListAgentVaultSkillsResponse{}, NewGenericRequestError("CallListAgentVaultSkills", err)
+	}
+	if response.IsError() {
+		return ListAgentVaultSkillsResponse{}, NewAPIErrorWithResponse("CallListAgentVaultSkills", response, nil)
+	}
+	return res, nil
+}
+
+type AgentVaultSkillWithFiles struct {
+	AgentVaultSkill
+	Files []AgentVaultSkillFile `json:"files"`
+}
+
+type GetAgentVaultSkillResponse struct {
+	Skill AgentVaultSkillWithFiles `json:"skill"`
+}
+
+func CallGetAgentVaultSkill(httpClient *resty.Client, skillID string) (GetAgentVaultSkillResponse, error) {
+	var res GetAgentVaultSkillResponse
+	response, err := httpClient.
+		R().
+		SetResult(&res).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/agent-vault/skills/%s", config.INFISICAL_URL, url.PathEscape(skillID)))
+
+	if err != nil {
+		return GetAgentVaultSkillResponse{}, NewGenericRequestError("CallGetAgentVaultSkill", err)
+	}
+	if response.IsError() {
+		return GetAgentVaultSkillResponse{}, NewAPIErrorWithResponse("CallGetAgentVaultSkill", response, nil)
+	}
+	return res, nil
+}
+
+type AgentVaultSkillVersionWithFiles struct {
+	AgentVaultSkillVersion
+	Files []AgentVaultSkillFile `json:"files"`
+}
+
+type GetAgentVaultSkillVersionResponse struct {
+	Version AgentVaultSkillVersionWithFiles `json:"version"`
+}
+
+func CallGetAgentVaultSkillVersion(httpClient *resty.Client, skillID string, version int) (GetAgentVaultSkillVersionResponse, error) {
+	var res GetAgentVaultSkillVersionResponse
+	response, err := httpClient.
+		R().
+		SetResult(&res).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/agent-vault/skills/%s/versions/%d", config.INFISICAL_URL, url.PathEscape(skillID), version))
+
+	if err != nil {
+		return GetAgentVaultSkillVersionResponse{}, NewGenericRequestError("CallGetAgentVaultSkillVersion", err)
+	}
+	if response.IsError() {
+		return GetAgentVaultSkillVersionResponse{}, NewAPIErrorWithResponse("CallGetAgentVaultSkillVersion", response, nil)
+	}
+	return res, nil
+}
+
+type DeleteAgentVaultSkillResponse struct {
+	Skill AgentVaultSkill `json:"skill"`
+}
+
+func CallDeleteAgentVaultSkill(httpClient *resty.Client, skillID string) (DeleteAgentVaultSkillResponse, error) {
+	var res DeleteAgentVaultSkillResponse
+	response, err := httpClient.
+		R().
+		SetResult(&res).
+		SetHeader("User-Agent", USER_AGENT).
+		Delete(fmt.Sprintf("%v/v1/agent-vault/skills/%s", config.INFISICAL_URL, url.PathEscape(skillID)))
+
+	if err != nil {
+		return DeleteAgentVaultSkillResponse{}, NewGenericRequestError("CallDeleteAgentVaultSkill", err)
+	}
+	if response.IsError() {
+		return DeleteAgentVaultSkillResponse{}, NewAPIErrorWithResponse("CallDeleteAgentVaultSkill", response, nil)
 	}
 	return res, nil
 }
