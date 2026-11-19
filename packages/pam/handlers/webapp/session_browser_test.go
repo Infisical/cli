@@ -3,6 +3,8 @@ package webapp
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -18,6 +20,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Infisical/infisical-merge/packages/pam/session"
+	"github.com/Infisical/infisical-merge/packages/pam/session/masking"
 )
 
 const linkStyle = `style="display:block;position:absolute;left:0;width:400px;height:100px"`
@@ -31,10 +36,14 @@ func testSite() *httptest.Server {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/{$}", page("Home",
-		`<a href="/second" `+linkStyle+` id="next">next</a>`+
+		`<a href="/redirect" `+linkStyle+` id="next">next</a>`+
 			`<a href="/popup" target="_blank" `+linkStyle[:len(linkStyle)-1]+`;top:300px">popup</a>`))
 	mux.Handle("/second", page("Second", `<a href="http://blocked.invalid/x?token=abc" `+linkStyle+`>out</a>`))
 	mux.Handle("/popup", page("Popup", `popup`))
+	mux.Handle("/redirect", http.RedirectHandler("/second", http.StatusFound))
+	mux.Handle("/long", page("Long",
+		`<button onclick="this.textContent='saved';document.body.style.background='#cde'" `+linkStyle+`>save</button>`+
+			`<div style="height:6000px;background:linear-gradient(#fff,#333)"></div>`))
 	mux.Handle("/form", page("Form",
 		`<input autofocus oninput="document.title='v:'+this.value" `+linkStyle+`>`+
 			`<button onclick="alert('saved')" `+linkStyle[:len(linkStyle)-1]+`;top:150px">alert</button>`+
@@ -52,6 +61,8 @@ type viewer struct {
 	t      *testing.T
 	done   chan error
 	site   string
+	logger *session.EncryptedSessionLogger
+	key    string
 	conn   net.Conn
 	json   chan map[string]any
 	frames chan []byte
@@ -104,9 +115,12 @@ func (v *viewer) send(msg string) {
 	}
 }
 
+// click holds the button for a moment, as a person does. The gateway describes the target from
+// the press, and a release that navigates at once would leave it no page to describe.
 func (v *viewer) click(x, y int) {
 	v.send(fmt.Sprintf(`{"type":"mouse","action":"move","x":%d,"y":%d,"button":"none","buttons":0,"clickCount":0,"deltaX":0,"deltaY":0,"modifiers":0}`, x, y))
 	v.send(fmt.Sprintf(`{"type":"mouse","action":"down","x":%d,"y":%d,"button":"left","buttons":1,"clickCount":1,"deltaX":0,"deltaY":0,"modifiers":0}`, x, y))
+	time.Sleep(80 * time.Millisecond)
 	v.send(fmt.Sprintf(`{"type":"mouse","action":"up","x":%d,"y":%d,"button":"left","buttons":0,"clickCount":1,"deltaX":0,"deltaY":0,"modifiers":0}`, x, y))
 }
 
@@ -207,15 +221,191 @@ func startBrowserSession(t *testing.T, startPath string) (*viewer, string) {
 	site := testSite()
 	t.Cleanup(site.Close)
 
+	session.SetSessionRecordingPath(t.TempDir())
+	t.Cleanup(func() { session.SetSessionRecordingPath("") })
+	rawKey := make([]byte, 32)
+	if _, err := rand.Read(rawKey); err != nil {
+		t.Fatal(err)
+	}
+	key := base64.StdEncoding.EncodeToString(rawKey)
+	expiresAt := time.Now().Add(time.Hour)
+	logger, err := session.NewSessionLogger("test-session", key, expiresAt, session.ResourceTypeWebApp, masking.Nop())
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	server, client := net.Pipe()
 	t.Cleanup(func() { client.Close() })
-	proxy := NewWebAppProxy(WebAppProxyConfig{SessionID: "test-session", StartURL: site.URL + startPath})
+	proxy := NewWebAppProxy(WebAppProxyConfig{
+		SessionID:     "test-session",
+		StartURL:      site.URL + startPath,
+		ExpiresAt:     expiresAt,
+		SessionLogger: logger,
+	})
 	done := make(chan error, 1)
 	go func() { done <- proxy.HandleConnection(context.Background(), server) }()
 	v := newViewer(t, client)
 	v.done = done
 	v.site = site.URL
+	v.logger = logger
+	v.key = key
 	return v, profiles
+}
+
+// recorded reads back the activity log, which is complete once close has returned.
+func (v *viewer) recorded() []session.WebEvent {
+	v.t.Helper()
+	if err := v.logger.Close(); err != nil {
+		v.t.Fatal(err)
+	}
+	info, err := session.FindSessionFileBySessionID("test-session")
+	if err != nil {
+		v.t.Fatal(err)
+	}
+	events, err := session.ReadEncryptedWebEventsFromFile(info.Filename, v.key)
+	if err != nil {
+		v.t.Fatal(err)
+	}
+	return events
+}
+
+// recordedSoFar reads the activity log while the session still runs. The last record can be half
+// written, so a failed read is retried.
+func (v *viewer) recordedSoFar() []session.WebEvent {
+	v.t.Helper()
+	info, err := session.FindSessionFileBySessionID("test-session")
+	if err != nil {
+		v.t.Fatal(err)
+	}
+	events, err := session.ReadEncryptedWebEventsFromFile(info.Filename, v.key)
+	if err != nil {
+		return nil
+	}
+	return events
+}
+
+func (v *viewer) waitRecorded(what string, match func(session.WebEvent) bool) {
+	v.t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, ev := range v.recordedSoFar() {
+			if match(ev) {
+				return
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	for _, ev := range v.recordedSoFar() {
+		if ev.WebScreenshot != nil {
+			ev.JPEG = nil
+		}
+		raw, _ := json.Marshal(ev)
+		v.t.Logf("recorded %s", raw)
+	}
+	v.t.Fatalf("timed out waiting for a recorded %s", what)
+}
+
+func isScreenshot(trigger string) func(session.WebEvent) bool {
+	return func(ev session.WebEvent) bool {
+		return ev.EventType == session.WebEventScreenshot && ev.Trigger == trigger
+	}
+}
+
+func checkScreenshot(t *testing.T, ev session.WebEvent) {
+	t.Helper()
+	cfg, err := jpeg.DecodeConfig(bytes.NewReader(ev.JPEG))
+	if err != nil {
+		t.Fatalf("%s screenshot is not a JPEG: %v", ev.Trigger, err)
+	}
+	if cfg.Width != ev.Width || cfg.Height != ev.Height || ev.Bytes != len(ev.JPEG) || ev.Bytes > maxScreenshotBytes {
+		t.Errorf("%s screenshot reports %dx%d and %d bytes, image is %dx%d and %d bytes",
+			ev.Trigger, ev.Width, ev.Height, ev.Bytes, cfg.Width, cfg.Height, len(ev.JPEG))
+	}
+}
+
+// indexOf returns the position of the first event that matches, or -1.
+func indexOf(events []session.WebEvent, from int, match func(session.WebEvent) bool) int {
+	for i := from; i < len(events); i++ {
+		if match(events[i]) {
+			return i
+		}
+	}
+	return -1
+}
+
+func TestBrowserSessionScreenshots(t *testing.T) {
+	v, _ := startBrowserSession(t, "/long")
+	v.waitFor("state of the long page", isState(v.site+"/long", "Long"))
+	v.waitRecorded("navigation screenshot", isScreenshot("navigation"))
+
+	v.click(50, 50)
+	v.waitRecorded("click screenshot", isScreenshot("click"))
+
+	v.send(`{"type":"mouse","action":"wheel","x":400,"y":400,"button":"none","buttons":0,"clickCount":0,"deltaX":0,"deltaY":800,"modifiers":0}`)
+	v.waitRecorded("scroll screenshot", isScreenshot("scroll"))
+	v.close()
+
+	events := v.recorded()
+	click := indexOf(events, 0, isAction(session.WebEventInput, "click"))
+	clickShot := indexOf(events, max(click, 0), isScreenshot("click"))
+	if click < 0 || clickShot < 0 {
+		t.Fatalf("click at %d, its screenshot at %d", click, clickShot)
+	}
+	scroll := indexOf(events, 0, isAction(session.WebEventInput, "scroll"))
+	scrollShot := indexOf(events, max(scroll, 0), isScreenshot("scroll"))
+	if scroll < 0 || scrollShot < 0 {
+		t.Fatalf("scroll at %d, its screenshot at %d", scroll, scrollShot)
+	}
+	if events[scroll].WebScroll == nil || events[scroll].ScrollY == 0 {
+		t.Errorf("scroll = %+v", events[scroll].WebScroll)
+	}
+	navShot := indexOf(events, 0, isScreenshot("navigation"))
+	if nav := indexOf(events, 0, func(ev session.WebEvent) bool { return ev.EventType == session.WebEventNavigation }); nav < 0 || nav > navShot {
+		t.Errorf("navigation at %d, its screenshot at %d", nav, navShot)
+	}
+	for _, i := range []int{navShot, clickShot, scrollShot} {
+		checkScreenshot(t, events[i])
+	}
+
+	largest := 0
+	for _, ev := range events {
+		raw, _ := json.Marshal(ev)
+		largest = max(largest, len(raw))
+	}
+	if largest > 512<<10 {
+		t.Errorf("largest event is %d bytes, over the 512 KiB chunk cap", largest)
+	}
+	shot := events[clickShot]
+	shot.JPEG = shot.JPEG[:12]
+	raw, _ := json.Marshal(shot)
+	t.Logf("click screenshot (jpeg cut to 12 bytes): %s", raw)
+	raw, _ = json.Marshal(events[scroll])
+	t.Logf("scroll input: %s", raw)
+	t.Logf("largest recorded event: %d bytes; screenshots: %d, %d, %d bytes", largest,
+		events[navShot].Bytes, events[clickShot].Bytes, events[scrollShot].Bytes)
+}
+
+func findEvent(t *testing.T, events []session.WebEvent, what string, match func(session.WebEvent) bool) session.WebEvent {
+	t.Helper()
+	for _, ev := range events {
+		if match(ev) {
+			return ev
+		}
+	}
+	for _, ev := range events {
+		raw, _ := json.Marshal(ev)
+		t.Logf("recorded %s", raw)
+	}
+	t.Fatalf("no recorded event for %s", what)
+	return session.WebEvent{}
+}
+
+func isHTTP(url string) func(session.WebEvent) bool {
+	return func(ev session.WebEvent) bool { return ev.EventType == session.WebEventHTTP && ev.URL == url }
+}
+
+func isAction(eventType session.WebEventType, action string) func(session.WebEvent) bool {
+	return func(ev session.WebEvent) bool { return ev.EventType == eventType && ev.Action == action }
 }
 
 func (v *viewer) close() {
@@ -240,7 +430,6 @@ func isNotice(substr string) func(map[string]any) bool {
 
 func TestBrowserSessionInputAndNotices(t *testing.T) {
 	v, _ := startBrowserSession(t, "/form")
-	defer v.close()
 	v.waitFor("state of the form page", isState(v.site+"/form", "Form"))
 
 	v.click(50, 50)
@@ -260,6 +449,44 @@ func TestBrowserSessionInputAndNotices(t *testing.T) {
 	v.waitFor("upload notice", isNotice("uploads are blocked"))
 	v.click(50, 500)
 	v.waitFor("download notice", isNotice("Downloads are blocked"))
+
+	v.click(50, 50)
+	v.send(`{"type":"key","action":"down","key":"Enter","code":"Enter","keyCode":13}`)
+	v.send(`{"type":"key","action":"up","key":"Enter","code":"Enter","keyCode":13}`)
+	v.click(50, 200)
+	v.waitFor("dialog notice after Enter", isNotice("saved"))
+	v.close()
+
+	events := v.recorded()
+	for _, ev := range events {
+		raw, _ := json.Marshal(ev)
+		if strings.Contains(string(raw), "aBpasted") || strings.Contains(string(raw), `"text":"aB`) {
+			t.Errorf("typed or pasted text reached the log: %s", raw)
+		}
+	}
+	paste := findEvent(t, events, "paste", isAction(session.WebEventInput, "paste"))
+	if paste.Length != len("pasted") || paste.Target != nil {
+		t.Errorf("paste = %+v", paste)
+	}
+	submit := findEvent(t, events, "submit", isAction(session.WebEventInput, "submit"))
+	if submit.Target == nil || submit.Target.Tag != "input" || submit.Target.Role != "textbox" || submit.Target.Text != "" {
+		t.Errorf("submit target = %+v", submit.Target)
+	}
+	inputClick := findEvent(t, events, "click on the input", func(ev session.WebEvent) bool {
+		return ev.Action == "click" && ev.Target != nil && ev.Target.Tag == "input"
+	})
+	if inputClick.Target.Text != "" {
+		t.Errorf("click on an input recorded text %q", inputClick.Target.Text)
+	}
+	dialog := findEvent(t, events, "dialog", isAction(session.WebEventSession, "dialog"))
+	if dialog.Detail != "alert" {
+		t.Errorf("dialog detail = %q", dialog.Detail)
+	}
+	findEvent(t, events, "upload.blocked", isAction(session.WebEventSession, "upload.blocked"))
+	download := findEvent(t, events, "download.blocked", isAction(session.WebEventSession, "download.blocked"))
+	if download.Detail != v.site+"/download" {
+		t.Errorf("download detail = %q", download.Detail)
+	}
 }
 
 func TestBrowserSessionEndToEnd(t *testing.T) {
@@ -288,6 +515,8 @@ func TestBrowserSessionEndToEnd(t *testing.T) {
 		t.Errorf("blocked url = %v", blocked["url"])
 	}
 
+	v.send(`{"type":"text","text":"héllo wörld"}`)
+
 	v.send(`{"type":"navigate","url":"http://blocked.invalid/typed"}`)
 	v.waitFor("blocked for a typed URL", func(m map[string]any) bool {
 		return m["type"] == "blocked" && m["url"] == "http://blocked.invalid/typed"
@@ -310,6 +539,7 @@ func TestBrowserSessionEndToEnd(t *testing.T) {
 	}
 
 	v.close()
+	checkRecording(t, v.recorded(), site.URL)
 
 	if pids := processesUsing(t, profiles); len(pids) > 0 {
 		t.Errorf("browser processes left running: %v", pids)
@@ -320,5 +550,82 @@ func TestBrowserSessionEndToEnd(t *testing.T) {
 	}
 	if len(left) > 0 {
 		t.Errorf("profile directories left behind: %v", left)
+	}
+}
+
+func checkRecording(t *testing.T, events []session.WebEvent, site string) {
+	t.Helper()
+	if len(events) == 0 {
+		t.Fatal("nothing was recorded")
+	}
+	first, last := events[0], events[len(events)-1]
+	if first.Action != "start" || first.Detail != site+"/" {
+		t.Errorf("first event = %+v", first)
+	}
+	if last.Action != "end" || last.Detail != "viewer disconnected" {
+		t.Errorf("last event = %+v", last)
+	}
+	for i, ev := range events {
+		if ev.ChannelType != session.SessionChannelWeb {
+			t.Errorf("event %d channel = %q", i, ev.ChannelType)
+		}
+		if i > 0 && ev.ElapsedTime < events[i-1].ElapsedTime {
+			t.Errorf("event %d goes back in time: %v after %v", i, ev.ElapsedTime, events[i-1].ElapsedTime)
+		}
+	}
+
+	redirect := findEvent(t, events, "redirect hop", isHTTP(site+"/redirect"))
+	if redirect.Status != 302 || redirect.Method != "GET" || redirect.ResourceType != "document" {
+		t.Errorf("redirect = %+v", *redirect.WebRequest)
+	}
+	second := findEvent(t, events, "redirect target", isHTTP(site+"/second"))
+	if second.Status != 200 || second.MimeType != "text/html" || second.RespBytes == 0 || second.Error != "" {
+		t.Errorf("second = %+v", *second.WebRequest)
+	}
+	blocked := findEvent(t, events, "blocked request", isHTTP("http://blocked.invalid/x?token=***"))
+	if !blocked.Blocked || blocked.ResourceType != "document" {
+		t.Errorf("blocked = %+v", *blocked.WebRequest)
+	}
+	findEvent(t, events, "navigation to the start page", func(ev session.WebEvent) bool {
+		return ev.EventType == session.WebEventNavigation && ev.URL == site+"/"
+	})
+	findEvent(t, events, "navigation after the redirect", func(ev session.WebEvent) bool {
+		return ev.EventType == session.WebEventNavigation && ev.URL == site+"/second"
+	})
+	navBlocked := findEvent(t, events, "navigation.blocked", isAction(session.WebEventSession, "navigation.blocked"))
+	if navBlocked.Detail != "http://blocked.invalid/x?token=***" {
+		t.Errorf("navigation.blocked detail = %q", navBlocked.Detail)
+	}
+	findEvent(t, events, "typed navigation blocked", func(ev session.WebEvent) bool {
+		return ev.Action == "navigation.blocked" && ev.Detail == "http://blocked.invalid/typed"
+	})
+	click := findEvent(t, events, "click", isAction(session.WebEventInput, "click"))
+	if click.X != 50 || click.Y != 50 || click.Target == nil ||
+		click.Target.Tag != "a" || click.Target.Role != "link" || click.Target.Name != "next" || click.Target.Text != "next" {
+		t.Errorf("click = %+v target %+v", click, click.Target)
+	}
+	paste := findEvent(t, events, "paste", isAction(session.WebEventInput, "paste"))
+	if paste.Length != 11 {
+		t.Errorf("paste length = %d, want 11 characters", paste.Length)
+	}
+	for _, action := range []string{"navigate", "back"} {
+		ev := findEvent(t, events, action, isAction(session.WebEventInput, action))
+		if ev.X != 0 || ev.Target != nil {
+			t.Errorf("%s = %+v", action, ev)
+		}
+	}
+	findEvent(t, events, "popup", isAction(session.WebEventSession, "popup"))
+
+	seen := map[session.WebEventType]bool{}
+	for _, ev := range events {
+		if !seen[ev.EventType] {
+			seen[ev.EventType] = true
+			raw, _ := json.Marshal(ev)
+			t.Logf("first %s event: %s", ev.EventType, raw)
+		}
+	}
+	for _, ev := range []session.WebEvent{redirect, blocked, click, paste, navBlocked} {
+		raw, _ := json.Marshal(ev)
+		t.Logf("example: %s", raw)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rs/zerolog/log"
 
@@ -43,6 +44,7 @@ const (
 	SessionChannelExec  SessionChannelType = "exec"     // Single command execution
 	SessionChannelSFTP  SessionChannelType = "sftp"     // SFTP file transfer
 	SessionChannelRDP   SessionChannelType = "rdp"      // RDP frame/input tap; Data carries an RDP-specific JSON envelope
+	SessionChannelWeb   SessionChannelType = "web"      // Web app activity; see WebEvent
 )
 
 // SessionEvent represents a single event in a recorded session (SSH or RDP).
@@ -74,6 +76,73 @@ const (
 	HttpEventRequest  HttpEventType = "request"
 	HttpEventResponse HttpEventType = "response"
 )
+
+type WebEventType string
+
+const (
+	WebEventHTTP       WebEventType = "http"
+	WebEventNavigation WebEventType = "navigation"
+	WebEventSession    WebEventType = "session"
+	WebEventInput      WebEventType = "input"
+	WebEventScreenshot WebEventType = "screenshot"
+)
+
+const maxWebEventURLChars = 2048
+
+// WebEvent is one entry of a web app session's activity log. Fields that only some event types
+// carry are omitted when empty, except the embedded details, which their event types always have.
+type WebEvent struct {
+	Timestamp   time.Time          `json:"timestamp"`
+	EventType   WebEventType       `json:"eventType"`
+	ChannelType SessionChannelType `json:"channelType"`
+	ElapsedTime float64            `json:"elapsedTime"`
+
+	URL    string `json:"url,omitempty"`
+	Action string `json:"action,omitempty"`
+	Detail string `json:"detail,omitempty"`
+
+	*WebRequest
+
+	X      int        `json:"x,omitempty"`
+	Y      int        `json:"y,omitempty"`
+	Target *WebTarget `json:"target,omitempty"`
+	Length int        `json:"length,omitempty"`
+
+	*WebScroll
+	*WebScreenshot
+}
+
+type WebScroll struct {
+	ScrollX int `json:"scrollX"`
+	ScrollY int `json:"scrollY"`
+}
+
+type WebScreenshot struct {
+	Trigger string `json:"trigger"`
+	Width   int    `json:"width"`
+	Height  int    `json:"height"`
+	Bytes   int    `json:"bytes"`
+	// JPEG is never masked: a pattern that matched its base64 would corrupt the image.
+	JPEG []byte `json:"jpeg"`
+}
+
+type WebRequest struct {
+	Method       string `json:"method"`
+	Status       int    `json:"status"`
+	MimeType     string `json:"mimeType"`
+	ResourceType string `json:"resourceType"`
+	RespBytes    int64  `json:"respBytes"`
+	DurationMs   int64  `json:"durationMs"`
+	Blocked      bool   `json:"blocked,omitempty"`
+	Error        string `json:"error,omitempty"`
+}
+
+type WebTarget struct {
+	Tag  string `json:"tag,omitempty"`
+	Role string `json:"role,omitempty"`
+	Name string `json:"name,omitempty"`
+	Text string `json:"text,omitempty"`
+}
 
 type SessionLogger interface {
 	LogEntry(entry SessionLogEntry) error
@@ -316,6 +385,41 @@ func (sl *EncryptedSessionLogger) LogHttpEvent(event HttpEvent) error {
 		event.Body = sl.applyMasking(event.Body)
 		return json.Marshal(event)
 	})
+}
+
+func (sl *EncryptedSessionLogger) LogWebEvent(event WebEvent) error {
+	return sl.writeEvent(func() ([]byte, error) {
+		event.ChannelType = SessionChannelWeb
+		if event.Timestamp.IsZero() {
+			event.Timestamp = time.Now()
+		}
+		if event.ElapsedTime == 0 {
+			event.ElapsedTime = event.Timestamp.Sub(sl.sessionStart).Seconds()
+		}
+		if event.URL != "" {
+			event.URL = truncateRunes(sl.applyMaskingString(MaskURL(event.URL)), maxWebEventURLChars)
+		}
+		event.Detail = sl.applyMaskingString(event.Detail)
+		if event.WebRequest != nil {
+			request := *event.WebRequest
+			request.Error = sl.applyMaskingString(request.Error)
+			event.WebRequest = &request
+		}
+		if event.Target != nil {
+			target := *event.Target
+			target.Name = sl.applyMaskingString(target.Name)
+			target.Text = sl.applyMaskingString(target.Text)
+			event.Target = &target
+		}
+		return json.Marshal(event)
+	})
+}
+
+func truncateRunes(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	return string([]rune(s)[:n])
 }
 
 func (sl *EncryptedSessionLogger) Close() error {

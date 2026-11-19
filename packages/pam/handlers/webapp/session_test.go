@@ -3,10 +3,20 @@ package webapp
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net"
+	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/chromedp/cdproto/cdp/jsonv2"
+	"github.com/chromedp/cdproto/fetch"
+	"github.com/chromedp/cdproto/input"
+	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/page"
 )
 
 func startReader(t *testing.T) (net.Conn, chan clientMessage, *atomic.Int32, chan error) {
@@ -71,5 +81,148 @@ func TestReadInputEndsOnInvalidFrame(t *testing.T) {
 	go client.Write(clientFrame(frameTypeJPEG, "x"))
 	if err := waitErr(t, done); !errors.Is(err, errInvalidFrame) {
 		t.Fatalf("err = %v, want invalid frame", err)
+	}
+}
+
+type fakeTab struct {
+	mu    sync.Mutex
+	calls map[string]int
+}
+
+func (f *fakeTab) Call(_ context.Context, method string, _, _ any) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.calls == nil {
+		f.calls = make(map[string]int)
+	}
+	f.calls[method]++
+	return nil
+}
+
+func (f *fakeTab) Subscribe(string) (<-chan jsonv2.Value, func()) {
+	return nil, func() {}
+}
+
+func (f *fakeTab) count(method string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls[method]
+}
+
+func TestOnTabEventNeverBlocksOrDropsWhatThePageWaitsOn(t *testing.T) {
+	tab := &fakeTab{}
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	list := mustAllowlist(t, "https://grafana.internal", nil, false, publicResolver())
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	go io.Copy(io.Discard, client)
+	s := &browserSession{
+		sessionID: "s",
+		allowlist: list,
+		conn:      server,
+		out:       newFrameWriter(server),
+		rec:       newRecorder(&memLogger{}, "s", 8),
+		ctx:       ctx,
+		end:       cancel,
+		ready:     make(chan struct{}),
+		events:    make(chan any, 2),
+		frames:    make(chan *page.EventScreencastFrame, 1),
+		tab:       tab,
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := range 1000 {
+			s.onTabEvent(&page.EventLoadEventFired{})
+			s.onTabEvent(&network.EventRequestWillBeSent{RequestID: network.RequestID(strconv.Itoa(i))})
+		}
+		for i := range 20 {
+			s.onTabEvent(&fetch.EventRequestPaused{
+				RequestID: fetch.RequestID(strconv.Itoa(i)),
+				Request:   &network.Request{URL: "https://grafana.internal/" + strconv.Itoa(i)},
+			})
+		}
+		s.onTabEvent(&fetch.EventRequestPaused{RequestID: "x", Request: &network.Request{URL: "https://evil.example/"}})
+		for i := range 5 {
+			s.onTabEvent(&page.EventScreencastFrame{SessionID: int64(i)})
+		}
+		s.onTabEvent(&page.EventJavascriptDialogOpening{Type: page.DialogTypeAlert})
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("onTabEvent blocked")
+	}
+	if got := s.droppedEvents.Load(); got != 998 {
+		t.Errorf("dropped page events = %d, want 998", got)
+	}
+	if s.rec.dropped.Load() == 0 {
+		t.Error("recorder queue did not drop past its bound")
+	}
+
+	close(s.ready)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if tab.count(fetch.CommandContinueRequest) == 20 && tab.count(fetch.CommandFailRequest) == 1 &&
+			tab.count(page.CommandScreencastFrameAck) == 4 && tab.count(page.CommandHandleJavaScriptDialog) == 1 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Errorf("calls = %v, want 20 continued, 1 failed, 4 frames acked, 1 dialog closed", tab.calls)
+}
+
+func TestEndReason(t *testing.T) {
+	cases := []struct {
+		cause     error
+		parentErr error
+		expired   bool
+		want      string
+	}{
+		{errViewerClosed, nil, true, "session expired"},
+		{errViewerClosed, context.Canceled, false, "session terminated"},
+		{errBrowserLost, nil, false, "browser closed"},
+		{errViewerClosed, nil, false, "viewer disconnected"},
+		{fmt.Errorf("%w: broken pipe", errViewerWrite), nil, false, "viewer disconnected"},
+		{fmt.Errorf("%w: type 1", errInvalidFrame), nil, false, "viewer sent an invalid message"},
+		{fmt.Errorf("%w: enable page", errSetupFailed), nil, false, "browser could not be set up"},
+		{errors.New("other"), nil, false, "session ended unexpectedly"},
+	}
+	for _, tc := range cases {
+		if got := endReason(tc.cause, tc.parentErr, tc.expired); got != tc.want {
+			t.Errorf("endReason(%v, %v, %v) = %q, want %q", tc.cause, tc.parentErr, tc.expired, got, tc.want)
+		}
+	}
+}
+
+type paramsTab struct {
+	fakeTab
+	params []byte
+}
+
+func (p *paramsTab) Call(ctx context.Context, method string, params, res any) error {
+	p.params, _ = jsonv2.Marshal(params)
+	return p.fakeTab.Call(ctx, method, params, res)
+}
+
+func TestWheelEventAlwaysSendsBothDeltas(t *testing.T) {
+	tab := &paramsTab{}
+	s := &browserSession{tab: tab}
+	params, err := parse(t, `{"type":"mouse","action":"wheel","x":10,"y":20,"button":"none","deltaX":0,"deltaY":120}`).mouseParams(1280, 800)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.dispatchMouse(context.Background(), params); err != nil {
+		t.Fatal(err)
+	}
+	want := `{"type":"mouseWheel","x":10,"y":20,"deltaX":0,"deltaY":120}`
+	if string(tab.params) != want {
+		t.Errorf("params = %s, want %s", tab.params, want)
+	}
+	if tab.count(input.CommandDispatchMouseEvent) != 1 {
+		t.Errorf("calls = %v", tab.calls)
 	}
 }

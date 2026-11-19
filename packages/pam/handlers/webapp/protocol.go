@@ -13,6 +13,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/chromedp/cdproto/input"
+
+	"github.com/Infisical/infisical-merge/packages/pam/session"
 )
 
 const (
@@ -133,7 +135,7 @@ func newNotice(message string) noticeMessage {
 }
 
 func newBlocked(rawURL, message string) blockedMessage {
-	return blockedMessage{Type: "blocked", URL: MaskURL(rawURL), Message: message}
+	return blockedMessage{Type: "blocked", URL: session.MaskURL(rawURL), Message: message}
 }
 
 func newError(message string) errorMessage {

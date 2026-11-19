@@ -252,6 +252,10 @@ func ReadEncryptedHttpEventsFromFile(filename string, encryptionKey string) ([]H
 	return readEncryptedEntries[HttpEvent](filename, encryptionKey)
 }
 
+func ReadEncryptedWebEventsFromFile(filename string, encryptionKey string) ([]WebEvent, error) {
+	return readEncryptedEntries[WebEvent](filename, encryptionKey)
+}
+
 // offsetFilePath returns the path to the persisted offset file for a given recording filename.
 func offsetFilePath(filename string) string {
 	return filepath.Join(GetSessionRecordingDir(), strings.TrimSuffix(filename, ".enc")+".offset")
@@ -702,6 +706,21 @@ func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
 		}
 
 		return api.CallUploadPamSessionLogs(su.httpClient, fileInfo.SessionID, api.UploadPAMSessionLogsRequest{Logs: logs})
+	}
+
+	// Web events are already in the shape the platform stores, so they go up as they are.
+	if fileInfo.ResourceType == ResourceTypeWebApp {
+		webEvents, err := ReadEncryptedWebEventsFromFile(fileInfo.Filename, encryptionKey)
+		if err != nil {
+			return fmt.Errorf("failed to read web session file: %w", err)
+		}
+
+		log.Debug().
+			Str("sessionId", fileInfo.SessionID).
+			Int("eventCount", len(webEvents)).
+			Msg("Uploading web app session events")
+
+		return api.CallUploadPamSessionLogs(su.httpClient, fileInfo.SessionID, api.UploadPAMSessionLogsRequest{Logs: webEvents})
 	}
 
 	if fileInfo.ResourceType == ResourceTypeKubernetes || fileInfo.ResourceType == ResourceTypeGcpServiceAccount || fileInfo.ResourceType == ResourceTypeAzureCli {

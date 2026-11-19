@@ -675,12 +675,13 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			SessionID:     pamConfig.SessionId,
 			StartURL:      credentials.StartURL,
 			AllowedHosts:  credentials.AllowedHosts,
+			ExpiresAt:     pamConfig.ExpiryTime,
 			SessionLogger: sessionLogger,
 			OnActivity:    pamConfig.OnActivity,
 		})
 		log.Info().
 			Str("sessionId", pamConfig.SessionId).
-			Str("startUrl", webapp.MaskURL(credentials.StartURL)).
+			Str("startUrl", session.MaskURL(credentials.StartURL)).
 			Msg("Starting web app PAM proxy")
 		return proxy.HandleConnection(ctx, conn)
 	default:

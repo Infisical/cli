@@ -108,6 +108,12 @@ func (l *sessionLimiter) acquire(limit int) (func(), bool) {
 	}, true
 }
 
+func (l *sessionLimiter) count() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.active
+}
+
 type browserConfig struct {
 	execPath          string
 	noSandbox         bool
@@ -182,6 +188,16 @@ func launchBrowser(ctx context.Context, cfg browserConfig) (*browserInstance, er
 		}
 	}
 	return b, nil
+}
+
+// pid is the browser's process id, or 0 when it is not known.
+func (b *browserInstance) pid() int {
+	if c := chromedp.FromContext(b.ctx); c != nil && c.Browser != nil {
+		if p := c.Browser.Process(); p != nil {
+			return p.Pid
+		}
+	}
+	return 0
 }
 
 // close kills the browser and waits until its profile directory is removed.
