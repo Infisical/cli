@@ -93,6 +93,7 @@ func startAWSAccess(httpClient *resty.Client, response *api.PAMAccessResponse, p
 	case sig := <-sigChan:
 		log.Info().Msgf("Received signal %v, cleaning up...", sig)
 		cleanup()
+		endSession(httpClient, response.SessionId)
 	case <-time.After(remaining):
 		fmt.Printf("\n  AWS session expired. Cleaning up credentials...\n\n")
 		cleanup()
