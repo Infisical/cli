@@ -229,7 +229,7 @@ func TestAResolveCarriesTheSessionHookAndTheSession(t *testing.T) {
 			{"id":"b","name":"inline","accessBundleId":null,"hostPattern":"x.example","credential":{"type":"passthrough"}}
 		],"sessionLogs":{"enabled":false},
 		"session":{"label":"Nightly refunds","actor":{"type":"machineIdentity","id":"m-1","name":"support-agent","email":null},"onBehalfOf":{"id":"u-1","name":"Ana Silva","email":"ana@acme.com"},"metadata":{"ticket":"T-1"}},
-		"hook":{"id":"h-1","name":"refund-gate","url":"https://hooks.example.com/stripe","secret":"`+testHookSecret+`","mode":"gate",
+		"hook":{"id":"h-1","name":"refund-gate","url":"https://hooks.example.com/stripe","secret":"`+testHookSecret+`",
 			"rules":[{"service":"stripe","methods":["post"],"paths":["/v1/refunds/"]},{"service":"linear","tools":["delete_issue"]}]}}`)
 
 	if stripe := res.Services[0]; stripe.accessBundleID != "b-1" || res.Services[1].accessBundleID != "" {
@@ -256,7 +256,7 @@ func TestAResolveCarriesTheSessionHookAndTheSession(t *testing.T) {
 
 func TestAnInlineOrUnusableSessionHookStaysAHook(t *testing.T) {
 	res := resolveBody(t, `{"sessionId":"s1","services":[],"sessionLogs":{"enabled":false},
-		"hook":{"id":"h-2","name":null,"url":"not a url","secret":"`+testHookSecret+`","mode":"gate","rules":[]}}`)
+		"hook":{"id":"h-2","name":null,"url":"not a url","secret":"`+testHookSecret+`","rules":[]}}`)
 	if hook := res.Hook; hook == nil || hook.name != nil || hook.url != nil || hook.rules != nil {
 		t.Fatalf("an unusable inline hook must stay a hook that fails and sees everything, got %+v", hook)
 	}

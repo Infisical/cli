@@ -68,7 +68,7 @@ func newFakeHook(t *testing.T, answer http.HandlerFunc) *fakeHook {
 func (f *fakeHook) hook(rules ...api.AgentVaultHookRule) *sessionHook {
 	name := "refund-gate"
 	return toSessionHook(&api.AgentVaultHook{ID: "hook-1", Name: &name, URL: f.server.URL + "/agent-vault/hook", Secret: testHookSecret,
-		Mode: "gate", Rules: rules})
+		Rules: rules})
 }
 
 func (f *fakeHook) calls() []hookHit {

@@ -86,7 +86,6 @@ type hookRule struct {
 	tools   map[string]bool
 }
 
-// The mode is not kept: gate is the only one, and a mode this proxy doesn't know is treated as gate.
 func toSessionHook(wire *api.AgentVaultHook) *sessionHook {
 	if wire == nil {
 		return nil

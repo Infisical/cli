@@ -140,7 +140,6 @@ type AgentVaultHook struct {
 	Name   *string `json:"name"`
 	URL    string  `json:"url"`
 	Secret string  `json:"secret"`
-	Mode   string  `json:"mode"`
 	// Empty means every request of the session goes to the hook.
 	Rules []AgentVaultHookRule `json:"rules"`
 }
