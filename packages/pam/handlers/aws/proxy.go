@@ -111,14 +111,12 @@ type AWSProxy struct {
 	config AWSProxyConfig
 	caCert *x509.Certificate
 	caKey  crypto.Signer
-	signer *v4.Signer
 	client *http.Client
 }
 
 func NewAWSProxy(config AWSProxyConfig) *AWSProxy {
 	return &AWSProxy{
 		config: config,
-		signer: v4.NewSigner(),
 		client: &http.Client{
 			Transport: &http.Transport{
 				MaxIdleConns:        10,
@@ -364,7 +362,9 @@ func (p *AWSProxy) handleRequest(ctx context.Context, w io.Writer, req *http.Req
 	out.Header = forwardedHeaders(req.Header, signed)
 
 	if signed {
-		err = p.signer.SignHTTP(ctx, awssdk.Credentials{
+		// A signer keeps a key for every region and service it signs for, and the client picks those, so
+		// one shared across a connection's requests would grow without limit
+		err = v4.NewSigner().SignHTTP(ctx, awssdk.Credentials{
 			AccessKeyID:     creds.AccessKeyID,
 			SecretAccessKey: creds.SecretAccessKey,
 			SessionToken:    creds.SessionToken,
