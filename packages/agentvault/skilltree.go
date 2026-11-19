@@ -434,12 +434,27 @@ func writeSkillMarker(root string, marker skillMarker) error {
 	return nil
 }
 
-func WriteSkillFiles(root string, files []api.AgentVaultSkillFile) error {
+// CheckSkillFiles refuses a skill WriteSkillFiles would stop partway through, so a caller can check before it removes
+// anything.
+func CheckSkillFiles(files []api.AgentVaultSkillFile) error {
 	for _, file := range files {
 		rel := filepath.FromSlash(file.Path)
 		if file.Path == "" || strings.Contains(file.Path, `\`) || !filepath.IsLocal(rel) || filepath.Clean(rel) == "." {
 			return fmt.Errorf("it holds a file at %q, which is outside its folder", file.Path)
 		}
+		if _, err := base64.StdEncoding.DecodeString(file.ContentBase64); err != nil {
+			return fmt.Errorf("its file %q is not valid base64", file.Path)
+		}
+	}
+	return nil
+}
+
+func WriteSkillFiles(root string, files []api.AgentVaultSkillFile) error {
+	if err := CheckSkillFiles(files); err != nil {
+		return err
+	}
+	for _, file := range files {
+		rel := filepath.FromSlash(file.Path)
 		target := filepath.Join(root, rel)
 		if inside, err := filepath.Rel(root, target); err != nil || !filepath.IsLocal(inside) {
 			return fmt.Errorf("it holds a file at %q, which is outside its folder", file.Path)

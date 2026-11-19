@@ -1,9 +1,7 @@
 package cmd
 
 import (
-	"crypto/rand"
 	"encoding/base64"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -231,7 +229,7 @@ func printAgentVaultSkillsTable(cmd *cobra.Command, skills []api.AgentVaultSkill
 func findAgentVaultSkill(httpClient *resty.Client, projectID, name string) (api.AgentVaultSkill, bool, error) {
 	listed, err := api.CallListAgentVaultSkillsByName(httpClient, projectID, name)
 	if err != nil {
-		return api.AgentVaultSkill{}, false, fmt.Errorf("unable to look up the skill %q: %w", name, err)
+		return api.AgentVaultSkill{}, false, fmt.Errorf("unable to look up the skill %s: %w", quoted(name, "name"), err)
 	}
 	for _, skill := range listed.Skills {
 		if skill.Name == name {
@@ -307,11 +305,11 @@ func listAgentVaultSkills(httpClient *resty.Client, project agentVaultProject) (
 	}
 }
 
-// checkAgentVaultSkillPullTarget runs before anything is downloaded, so a pull that can't write fails fast. The
-// swap in replaceAgentVaultSkillFolder renames the folder, which a symlink, the working folder or one holding it
-// can't survive.
+// checkAgentVaultSkillPullTarget runs before anything is downloaded, so a pull that can't write fails fast.
 func checkAgentVaultSkillPullTarget(cmd *cobra.Command, args []string, folder string, force bool) error {
-	info, err := os.Lstat(folder)
+	// Clean drops a trailing slash, which would make Lstat follow a symlink and report the folder it points to.
+	cleaned := filepath.Clean(folder)
+	info, err := os.Lstat(cleaned)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
@@ -324,10 +322,8 @@ func checkAgentVaultSkillPullTarget(cmd *cobra.Command, args []string, folder st
 	if !info.IsDir() {
 		return errAgentVaultSkillPullTarget(folder, "already exists and is not a folder. Pass another folder.")
 	}
-	if !force {
-		return errAgentVaultSkillFolderExists(cmd, args, folder)
-	}
-	target, err := filepath.Abs(folder)
+	// Before the --force check, so the folder-exists error never suggests a --force that this would refuse.
+	target, err := filepath.Abs(cleaned)
 	if err == nil {
 		target, err = filepath.EvalSymlinks(target)
 	}
@@ -340,6 +336,9 @@ func checkAgentVaultSkillPullTarget(cmd *cobra.Command, args []string, folder st
 				return errAgentVaultSkillPullTargetHoldsWorkingFolder()
 			}
 		}
+	}
+	if !force {
+		return errAgentVaultSkillFolderExists(cmd, args, folder)
 	}
 	return nil
 }
@@ -364,7 +363,11 @@ func pullAgentVaultSkill(httpClient *resty.Client, project agentVaultProject, na
 		got, err := api.CallGetAgentVaultSkillVersion(httpClient, skill.ID, version)
 		var apiErr *api.APIError
 		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound && apiErr.Name != infisicalRouteMissingName {
-			// A member is answered 404 for any version but the latest, even one that exists.
+			// The 404 also comes when the skill was deleted since the lookup, so check it still exists before blaming
+			// the role. A member is answered 404 for any version but the latest, even one that exists.
+			if _, found, findErr := findAgentVaultSkill(httpClient, project.ID, name); findErr == nil && !found {
+				return "", errAgentVaultSkillNotFound(name, project)
+			}
 			return "", errAgentVaultSkillVersionAdminOnly(name, skill.LatestVersion, err)
 		}
 		if err != nil {
@@ -383,76 +386,53 @@ func pullAgentVaultSkill(httpClient *resty.Client, project agentVaultProject, na
 	return fmt.Sprintf("%s: v%d -> %s", util.SanitizeDisplay(skill.Name), version, folder), nil
 }
 
-// replaceAgentVaultSkillFolder writes the files next to folder and then swaps them in, so a write that fails
-// partway leaves the old folder as it was.
+// replaceAgentVaultSkillFolder writes the files to folder. With force, an existing folder is removed first and the
+// new one gets its permissions, so a folder the user made private stays private.
 func replaceAgentVaultSkillFolder(folder string, files []api.AgentVaultSkillFile, force bool) error {
-	target, err := filepath.Abs(folder)
+	// Checked before anything is removed, so a skill the writer would refuse leaves the old folder as it was.
+	if err := agentvault.CheckSkillFiles(files); err != nil {
+		return agentVaultSkillFolderError("write", folder, err)
+	}
+	target, err := filepath.Abs(filepath.Clean(folder))
 	if err != nil {
 		return agentVaultSkillFolderError("write", folder, err)
 	}
-	parent := filepath.Dir(target)
-	if err := os.MkdirAll(parent, 0o755); err != nil {
-		return agentVaultSkillFolderError("write", folder, err)
-	}
-	staging, err := makeAgentVaultSkillStagingFolder(parent, filepath.Base(target))
-	if err != nil {
-		return agentVaultSkillFolderError("write", folder, err)
-	}
-	if err := agentvault.WriteSkillFiles(staging, files); err != nil {
-		_ = os.RemoveAll(staging)
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return agentVaultSkillFolderError("write", folder, err)
 	}
 
+	var keepPerm fs.FileMode
+	replaced := false
 	if existing, err := os.Lstat(target); err == nil {
 		if !force {
-			_ = os.RemoveAll(staging)
 			return agentVaultSkillFolderError("write", folder, fs.ErrExist)
 		}
-		// A folder the user made private stays private when --force replaces it.
-		if err := os.Chmod(staging, existing.Mode().Perm()); err != nil {
-			_ = os.RemoveAll(staging)
+		// The target can change after checkAgentVaultSkillPullTarget, and only a real folder's mode is worth keeping.
+		if !existing.IsDir() {
+			return errAgentVaultSkillPullTarget(folder, "is no longer a folder. Pass a folder instead.")
+		}
+		keepPerm, replaced = existing.Mode().Perm(), true
+		if err := os.RemoveAll(target); err != nil {
 			return agentVaultSkillFolderError("replace", folder, err)
 		}
-		aside := staging + "-old"
-		if err := os.Rename(target, aside); err != nil {
-			_ = os.RemoveAll(staging)
-			return agentVaultSkillFolderError("replace", folder, err)
-		}
-		if err := os.Rename(staging, target); err != nil {
-			_ = os.Rename(aside, target)
-			_ = os.RemoveAll(staging)
-			return agentVaultSkillFolderError("replace", folder, err)
-		}
-		if err := os.RemoveAll(aside); err != nil {
-			return fmt.Errorf("pulled into %s, but unable to remove the old copy beside it (%s)", quoted(folder, "folder"), agentVaultSkillFolderErrorReason(err))
-		}
-		return nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return agentVaultSkillFolderError("write", folder, err)
 	}
-	if err := os.Rename(staging, target); err != nil {
-		_ = os.RemoveAll(staging)
+
+	// Mkdir applies the umask, like any folder the user creates.
+	if err := os.Mkdir(target, 0o755); err != nil {
+		return agentVaultSkillFolderError("write", folder, err)
+	}
+	if replaced {
+		if err := os.Chmod(target, keepPerm); err != nil {
+			return agentVaultSkillFolderError("write", folder, err)
+		}
+	}
+	if err := agentvault.WriteSkillFiles(target, files); err != nil {
+		_ = os.RemoveAll(target)
 		return agentVaultSkillFolderError("write", folder, err)
 	}
 	return nil
-}
-
-// makeAgentVaultSkillStagingFolder uses Mkdir rather than MkdirTemp, whose folder is always 0700, so the pulled
-// folder gets the umask's permissions like any other folder the user creates.
-func makeAgentVaultSkillStagingFolder(parent, base string) (string, error) {
-	for range 10 {
-		suffix := make([]byte, 6)
-		if _, err := rand.Read(suffix); err != nil {
-			return "", err
-		}
-		staging := filepath.Join(parent, "."+base+".pull-"+hex.EncodeToString(suffix))
-		err := os.Mkdir(staging, 0o755)
-		if err == nil {
-			return staging, nil
-		}
-		if !errors.Is(err, fs.ErrExist) {
-			return "", err
-		}
-	}
-	return "", fs.ErrExist
 }
 
 // withoutHiddenAgentVaultSkillFiles drops what push never uploads, so a skill written through the API can't plant
@@ -460,15 +440,7 @@ func makeAgentVaultSkillStagingFolder(parent, base string) (string, error) {
 func withoutHiddenAgentVaultSkillFiles(files []api.AgentVaultSkillFile) ([]api.AgentVaultSkillFile, int) {
 	kept := make([]api.AgentVaultSkillFile, 0, len(files))
 	for _, file := range files {
-		hidden := false
-		for _, segment := range strings.Split(strings.ReplaceAll(file.Path, `\`, "/"), "/") {
-			// "." and ".." are left to WriteSkillFiles, which refuses a path that leaves the folder.
-			if strings.HasPrefix(segment, ".") && segment != "." && segment != ".." {
-				hidden = true
-				break
-			}
-		}
-		if !hidden {
+		if !agentvault.IsHiddenSkillPath(file.Path) {
 			kept = append(kept, file)
 		}
 	}
@@ -576,7 +548,7 @@ func readAgentVaultSkillFolder(dir string) ([]api.AgentVaultSkillFile, string, e
 		if walkErr != nil {
 			return walkErr
 		}
-		if path != root && strings.HasPrefix(entry.Name(), ".") {
+		if path != root && agentvault.IsHiddenSkillPath(entry.Name()) {
 			// Hidden entries are tooling (.git, .DS_Store), never part of the skill.
 			if entry.IsDir() {
 				return filepath.SkipDir

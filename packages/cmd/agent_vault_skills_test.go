@@ -237,7 +237,9 @@ type fakeSkillsReadAPI struct {
 	skills   []api.AgentVaultSkill
 	files    map[string][]api.AgentVaultSkillFile
 	versions map[string][]api.AgentVaultSkillFile
-	calls    []string
+	// goneAfterVersion deletes every skill when a version answers 404, as if one was deleted mid-pull.
+	goneAfterVersion bool
+	calls            []string
 }
 
 func newFakeSkillsReadAPI(t *testing.T, f *fakeSkillsReadAPI) *resty.Client {
@@ -282,6 +284,9 @@ func newFakeSkillsReadAPI(t *testing.T, f *fakeSkillsReadAPI) *resty.Client {
 			f.calls = append(f.calls, "version "+parts[0]+" "+parts[2])
 			files, ok := f.versions[parts[0]+"@"+parts[2]]
 			if !ok {
+				if f.goneAfterVersion {
+					f.skills = nil
+				}
 				w.WriteHeader(http.StatusNotFound)
 				_ = json.NewEncoder(w).Encode(map[string]any{"statusCode": 404, "message": "Version " + parts[2] + " not found", "error": "NotFound"})
 				return
@@ -423,7 +428,7 @@ func TestPullAgentVaultSkillVersions(t *testing.T) {
 		{"an earlier version", 2, "find code-review,version sk1 2", "", "v2\n"},
 		{"the latest by number", 4, "find code-review,version sk1 4", "", "v4 by number\n"},
 		{"past the latest", 9, "find code-review", "has no version 9. Its latest version is 4", ""},
-		{"one the server won't give", 3, "find code-review,version sk1 3", "Only an Admin of the project can pull a version of \"code-review\" other than the latest (4)", ""},
+		{"one the server won't give", 3, "find code-review,version sk1 3,find code-review", "Only an Admin of the project can pull a version of \"code-review\" other than the latest (4)", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -684,6 +689,47 @@ func TestPullAgentVaultSkillErrorsDoNotRepeatTheFolder(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(parent, 0o755) })
 	_, err := pullAgentVaultSkill(newFakeSkillsReadAPI(t, codeReviewSkillAPI()), testSkillsProject, "code-review", filepath.Join(parent, "x"), 0, false)
 	if err == nil || strings.Contains(err.Error(), "ghp_") || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("err %v", err)
+	}
+}
+
+func TestPullAgentVaultSkillVersionOfASkillDeletedMidPull(t *testing.T) {
+	f := codeReviewSkillAPI()
+	f.goneAfterVersion = true
+	_, err := pullAgentVaultSkill(newFakeSkillsReadAPI(t, f), testSkillsProject, "code-review", filepath.Join(t.TempDir(), "x"), 3, false)
+	var cliErr *util.CLIError
+	if !errors.As(err, &cliErr) || cliErr.Code != errCodeSkillNotFound {
+		t.Fatalf("err %#v", err)
+	}
+	if got := strings.Join(f.calls, ","); got != "find code-review,version sk1 3,find code-review" {
+		t.Fatalf("calls %s", got)
+	}
+}
+
+func TestCheckAgentVaultSkillPullTargetSeesASymlinkWithATrailingSlash(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks needs privileges on Windows")
+	}
+	dir := t.TempDir()
+	link := filepath.Join(dir, "mylink")
+	if err := os.Symlink(t.TempDir(), link); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkAgentVaultSkillPullTarget(pullTestCmd(), nil, link+"/", true); err == nil || !strings.Contains(err.Error(), "symbolic link") {
+		t.Fatalf("err %v", err)
+	}
+	if err := replaceAgentVaultSkillFolder(link+"/", codeReviewSkillAPI().files["sk1"], true); err == nil {
+		t.Fatal("the replace wrote over a symlink")
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the symlink was replaced: %v %v", info, err)
+	}
+}
+
+func TestPullIntoTheCurrentFolderGetsTheRealReasonWithoutForce(t *testing.T) {
+	t.Chdir(t.TempDir())
+	err := checkAgentVaultSkillPullTarget(pullTestCmd(), []string{"code-review", "."}, ".", false)
+	if err == nil || !strings.Contains(err.Error(), "is, or holds, the current folder") {
 		t.Fatalf("err %v", err)
 	}
 }
