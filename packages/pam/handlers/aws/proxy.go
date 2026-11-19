@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
@@ -34,19 +35,50 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"golang.org/x/sync/semaphore"
 )
 
 const (
-	maxPEMSize        = 1 << 20   // 1 MiB
-	maxLoggedBodySize = 1 << 20   // 1 MiB of each body goes to the session log
-	maxHashedBodySize = 128 << 20 // a body the client sent without its hash is buffered to hash it
+	maxPEMSize           = 1 << 20   // 1 MiB
+	maxLoggedBodySize    = 1 << 20   // 1 MiB of each body goes to the session log
+	maxHashedBodySize    = 128 << 20 // a body the client sent without its hash is buffered to hash it
+	maxUncountedBodySize = 1 << 20   // a body up to this size is buffered without drawing on hashedBodies
+
+	// A body that trickles in would otherwise keep its share of hashedBodies for as long as it liked
+	hashedBodyReadTimeout = 5 * time.Minute
 
 	unsignedPayloadTrailer = "STREAMING-UNSIGNED-PAYLOAD-TRAILER"
 )
 
-// Every session on the gateway shares this, so parallel connections can't buffer more than it between them
-var hashedBodies = semaphore.NewWeighted(2 * maxHashedBodySize)
+// The memory every session on the gateway shares for bodies it buffers to hash. A session can hold one body's
+// worth at most, so it can't take all of it from the others.
+var hashedBodies = &hashBudget{free: 2 * maxHashedBodySize, bySession: map[string]int64{}}
+
+type hashBudget struct {
+	mu        sync.Mutex
+	free      int64
+	bySession map[string]int64
+}
+
+func (b *hashBudget) reserve(sessionID string, n int64) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if n > b.free || b.bySession[sessionID]+n > maxHashedBodySize {
+		return false
+	}
+	b.free -= n
+	b.bySession[sessionID] += n
+	return true
+}
+
+func (b *hashBudget) release(sessionID string, n int64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.free += n
+	b.bySession[sessionID] -= n
+	if b.bySession[sessionID] <= 0 {
+		delete(b.bySession, sessionID)
+	}
+}
 
 // The domains AWS serves its APIs from. The gateway only signs requests bound for these, so a session
 // can't use it to reach anything else on the gateway's network.
@@ -269,15 +301,17 @@ func (p *AWSProxy) handleRequest(ctx context.Context, w io.Writer, req *http.Req
 			writeError(w, req, http.StatusRequestEntityTooLarge, "request body is too large for the gateway to sign")
 			return false, nil
 		}
-		reserved := int64(maxHashedBodySize)
-		if req.ContentLength >= 0 {
-			reserved = req.ContentLength
+		reserved := req.ContentLength
+		if reserved < 0 {
+			reserved = maxHashedBodySize
 		}
-		if !hashedBodies.TryAcquire(reserved) {
-			writeError(w, req, http.StatusServiceUnavailable, "the gateway is busy with other large requests; try again shortly")
-			return false, nil
+		if reserved > maxUncountedBodySize {
+			if !hashedBodies.reserve(p.config.SessionID, reserved) {
+				writeError(w, req, http.StatusServiceUnavailable, "the gateway is busy with other large requests; try again shortly")
+				return false, nil
+			}
+			defer hashedBodies.release(p.config.SessionID, reserved)
 		}
-		defer hashedBodies.Release(reserved)
 	}
 
 	if strings.EqualFold(req.Header.Get("Expect"), "100-continue") {
@@ -292,7 +326,14 @@ func (p *AWSProxy) handleRequest(ctx context.Context, w io.Writer, req *http.Req
 	contentLength := req.ContentLength
 
 	if hashBody {
+		deadliner, _ := w.(interface{ SetReadDeadline(time.Time) error })
+		if deadliner != nil {
+			_ = deadliner.SetReadDeadline(time.Now().Add(hashedBodyReadTimeout))
+		}
 		buffered, err := io.ReadAll(io.LimitReader(body, maxHashedBodySize+1))
+		if deadliner != nil {
+			_ = deadliner.SetReadDeadline(time.Time{})
+		}
 		if err != nil {
 			return false, fmt.Errorf("failed to read request body: %w", err)
 		}

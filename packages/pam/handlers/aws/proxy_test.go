@@ -565,45 +565,55 @@ func TestProxyCapsRequestHeaders(t *testing.T) {
 func TestProxyLimitsMemoryForBodiesItHashes(t *testing.T) {
 	server, received := fakeAWS(t)
 	const host = "dynamodb.us-east-1.amazonaws.com"
-	describeTable := func() *http.Request {
-		return signedRequest(t, http.MethodPost, "https://"+host+"/", "dynamodb", "us-east-1", "",
-			`{"TableName":"t"}`, map[string]string{"X-Amz-Target": "DynamoDB_20120810.DescribeTable", "Content-Type": "application/x-amz-json-1.0"})
+
+	// The gateway answers from the headers alone when it won't buffer a body, so none of it is sent
+	statusFor := func(contentLength int) int {
+		t.Helper()
+		conn, pool, _ := startProxy(t, server)
+		tlsConn := connect(t, conn, pool, host)
+		head := "POST / HTTP/1.1\r\nHost: " + host + "\r\n" +
+			"Authorization: AWS4-HMAC-SHA256 Credential=AKID/20261118/us-east-1/dynamodb/aws4_request, SignedHeaders=host, Signature=abc\r\n" +
+			"Content-Length: " + strconv.Itoa(contentLength) + "\r\n\r\n"
+		if _, err := io.WriteString(tlsConn, head); err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.ReadResponse(bufio.NewReader(tlsConn), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode
 	}
 
-	if !hashedBodies.TryAcquire(2 * maxHashedBodySize) {
-		t.Fatal("the shared budget is already in use")
+	if status := statusFor(maxHashedBodySize + 1); status != http.StatusRequestEntityTooLarge {
+		t.Errorf("oversized body: status = %d, want 413", status)
 	}
+
+	if !hashedBodies.reserve("test-session", maxHashedBodySize) {
+		t.Fatal("the budget is already in use")
+	}
+	status := statusFor(2 << 20)
+	hashedBodies.release("test-session", maxHashedBodySize)
+	if status != http.StatusServiceUnavailable {
+		t.Errorf("a second large body in one session: status = %d, want 503", status)
+	}
+
+	if !hashedBodies.reserve("other-1", maxHashedBodySize) || !hashedBodies.reserve("other-2", maxHashedBodySize) {
+		t.Fatal("the budget is already in use")
+	}
+	defer hashedBodies.release("other-1", maxHashedBodySize)
+	defer hashedBodies.release("other-2", maxHashedBodySize)
+	if status := statusFor(2 << 20); status != http.StatusServiceUnavailable {
+		t.Errorf("a large body with the budget full: status = %d, want 503", status)
+	}
+
 	conn, pool, _ := startProxy(t, server)
 	tlsConn := connect(t, conn, pool, host)
-	resp := roundTrip(t, tlsConn, bufio.NewReader(tlsConn), describeTable())
-	hashedBodies.Release(2 * maxHashedBodySize)
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("status with the budget used up = %d, want 503", resp.StatusCode)
-	}
-
-	conn, pool, _ = startProxy(t, server)
-	tlsConn = connect(t, conn, pool, host)
-	if resp := roundTrip(t, tlsConn, bufio.NewReader(tlsConn), describeTable()); resp.StatusCode != http.StatusOK {
-		t.Fatalf("status once the budget is free = %d", resp.StatusCode)
+	describeTable := signedRequest(t, http.MethodPost, "https://"+host+"/", "dynamodb", "us-east-1", "",
+		`{"TableName":"t"}`, map[string]string{"X-Amz-Target": "DynamoDB_20120810.DescribeTable", "Content-Type": "application/x-amz-json-1.0"})
+	if resp := roundTrip(t, tlsConn, bufio.NewReader(tlsConn), describeTable); resp.StatusCode != http.StatusOK {
+		t.Fatalf("a small call with the budget full: status = %d", resp.StatusCode)
 	}
 	if got := <-received; got.err != nil {
 		t.Fatalf("AWS rejected the signature: %v", got.err)
-	}
-
-	// Refused from its declared length, before the client sends any of it
-	conn, pool, _ = startProxy(t, server)
-	tlsConn = connect(t, conn, pool, host)
-	oversized := "POST / HTTP/1.1\r\nHost: " + host + "\r\n" +
-		"Authorization: AWS4-HMAC-SHA256 Credential=AKID/20261118/us-east-1/dynamodb/aws4_request, SignedHeaders=host, Signature=abc\r\n" +
-		"Content-Length: " + strconv.Itoa(maxHashedBodySize+1) + "\r\n\r\n"
-	if _, err := io.WriteString(tlsConn, oversized); err != nil {
-		t.Fatal(err)
-	}
-	resp, err := http.ReadResponse(bufio.NewReader(tlsConn), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusRequestEntityTooLarge {
-		t.Fatalf("status for an oversized body = %d, want 413", resp.StatusCode)
 	}
 }
