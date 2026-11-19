@@ -40,7 +40,7 @@ func agentVaultClaudeMCPConfig(services []api.AgentVaultSessionService, bypasses
 			continue
 		}
 		if service.Status != "ready" {
-			leftOut = append(leftOut, quoted(service.Name, "name")+": set up your personal values for it in Agent Vault first")
+			leftOut = append(leftOut, quoted(service.Name, "name")+": "+agentVaultNotReadyReason(service))
 			continue
 		}
 		// Claude Code expands ${VAR} in its MCP configuration, which would send a variable from this host's
@@ -77,6 +77,15 @@ func agentVaultClaudeMCPConfig(services []api.AgentVaultSessionService, bypasses
 		return "", nil, leftOut
 	}
 	return string(encoded), names, leftOut
+}
+
+// The server's howToUse says what the service is waiting for (personal values, a member's sign-in, or an admin's),
+// which the status alone can't tell apart.
+func agentVaultNotReadyReason(service api.AgentVaultSessionService) string {
+	if howToUse := strings.TrimSuffix(strings.TrimSpace(util.RedactCredentials(util.SanitizeDisplay(service.HowToUse))), "."); howToUse != "" {
+		return howToUse
+	}
+	return "set up your personal values for it in Agent Vault first"
 }
 
 func agentVaultMCPCredentialValue(header, credentialType string) string {

@@ -123,6 +123,12 @@ type AgentVaultService struct {
 	PersonalValuesMissing bool `json:"personalValuesMissing"`
 	// Any credential field is left to each member. Older servers never send it, which decodes to false.
 	MemberProvided bool `json:"memberProvided"`
+	// The OAuth variable an inline service signed in with was deleted. Older servers never send it, which decodes to
+	// false, and send personalValuesMissing with it so a proxy that does not know it still refuses the service.
+	CredentialRemoved bool `json:"credentialRemoved"`
+	// The OAuth variable the service signs in with isn't connected. Older servers never send it, which decodes to false,
+	// and send personalValuesMissing with it so a proxy that does not know it still refuses the service.
+	CredentialNotConnected bool `json:"credentialNotConnected"`
 	// Nil for a service sent inline with the session.
 	AccessBundleID *string `json:"accessBundleId"`
 	// Asked before each request, or each database or SSH connection. Nil when the service has none.
@@ -496,6 +502,8 @@ type AgentVaultSessionService struct {
 	// "ready", or "needs-personal-values" until the user sets them; the proxy refuses requests to such a service.
 	Status     string                             `json:"status"`
 	Credential AgentVaultSessionServiceCredential `json:"credential"`
+	// What to do with the service, or for one not ready, what has to happen first. Empty from older servers.
+	HowToUse string `json:"howToUse"`
 }
 
 type AgentVaultSessionServiceCredential struct {
