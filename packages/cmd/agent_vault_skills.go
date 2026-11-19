@@ -438,6 +438,8 @@ func replaceAgentVaultSkillFolder(folder string, files []api.AgentVaultSkillFile
 	}
 	if replacing {
 		if err := os.RemoveAll(target); err != nil {
+			// The chmod above may have made staging read-only, which would stop RemoveAll inside it.
+			_ = os.Chmod(staging, 0o700)
 			_ = os.RemoveAll(staging)
 			return fmt.Errorf("unable to replace %s: %s. Some of its files may already be removed; pull again once the cause is fixed",
 				quoted(folder, "folder"), agentVaultSkillFolderErrorReason(err))

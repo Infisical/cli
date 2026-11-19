@@ -82,3 +82,28 @@ func TestAgentVaultSkillStagingFolderIsPrivate(t *testing.T) {
 		t.Fatalf("final mode %o, want %o", finalPerm, want)
 	}
 }
+
+func TestPullAgentVaultSkillForceThatCannotRemoveAReadOnlyFolderLeavesNothingBehind(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can write to read-only folders")
+	}
+	parent := t.TempDir()
+	folder := filepath.Join(parent, "code-review")
+	if err := os.Mkdir(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(folder, "my-edits.md"), []byte("local"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(folder, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(folder, 0o755) })
+	if _, err := pullAgentVaultSkill(newFakeSkillsReadAPI(t, codeReviewSkillAPI()), testSkillsProject, "code-review", folder, 0, true); err == nil {
+		t.Fatal("the pull succeeded")
+	}
+	entries, err := os.ReadDir(parent)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("the failed pull left %d entries beside the folder: %v", len(entries), err)
+	}
+}
