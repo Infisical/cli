@@ -723,7 +723,7 @@ func TestTheProxysOwnRefusalsComeBeforeTheHook(t *testing.T) {
 func TestOnlyTheRequestsTheHookRulesPickAskTheHook(t *testing.T) {
 	fake := newFakeHook(t, answerHook(`{"decision":"deny","message":"Ask Ana first."}`))
 	ps, client, host, hits := newHookedPolicyFixture(t, fake,
-		api.AgentVaultHookRule{Service: "github", Methods: []string{"post"}, Paths: []string{"/v1/refunds/"}})
+		api.AgentVaultHookRule{Service: "GitHub", Methods: []string{"post"}, Paths: []string{"/v1/refunds/"}})
 	services, _ := ps.cache.get("agv_tok")
 	services[0].substitutions = append(services[0].substitutions, substitution{
 		placeholder: "__VERSION__", surfaces: map[string]bool{surfacePath: true}, value: []byte("v1")})
@@ -740,6 +740,8 @@ func TestOnlyTheRequestsTheHookRulesPickAskTheHook(t *testing.T) {
 		{http.MethodPost, "/v1/refunds/{{KEY}}", nil, true},
 		{http.MethodPut, "/v1/refunds/1", http.Header{"X-Http-Method-Override": {"POST"}}, true},
 		{http.MethodPost, "/v1/%72efunds/1", nil, true},
+		{http.MethodPut, "/v1/refunds/1?_method=post", nil, true},
+		{http.MethodPost, "/V1/Refunds/1", nil, true},
 		{http.MethodPost, "/__VERSION__/refunds/1", nil, true},
 		{http.MethodPost, "/__VERSION__/charges", nil, false},
 	} {

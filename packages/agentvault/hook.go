@@ -98,7 +98,9 @@ func toSessionHook(wire *api.AgentVaultHook) *sessionHook {
 	if len(wire.Rules) > 0 {
 		hook.rules = make(map[string][]hookRule, len(wire.Rules))
 		for _, rule := range wire.Rules {
-			hook.rules[rule.Service] = append(hook.rules[rule.Service], hookRule{
+			// Service names are lowercase slugs, so a rule saved with another case still names the service.
+			service := strings.ToLower(rule.Service)
+			hook.rules[service] = append(hook.rules[service], hookRule{
 				methods: toHookMethodSet(rule.Methods),
 				paths:   toHookPathPrefixes(rule.Paths),
 				tools:   toHookToolSet(rule.Tools),
@@ -120,7 +122,7 @@ func toHookPathPrefixes(prefixes []string) []string {
 	var out []string
 	for _, prefix := range prefixes {
 		if prefix = normalizePathPrefix(prefix); prefix != "" {
-			out = append(out, prefix)
+			out = append(out, strings.ToLower(prefix))
 		}
 	}
 	return out
@@ -141,7 +143,7 @@ func (h *sessionHook) covers(svc *resolvedService) bool {
 	if h.rules == nil {
 		return true
 	}
-	_, ok := h.rules[svc.name]
+	_, ok := h.rules[strings.ToLower(svc.name)]
 	return ok
 }
 
@@ -153,7 +155,7 @@ func (h *sessionHook) matches(svc *resolvedService, req *http.Request, mcp *hook
 	if h.rules == nil {
 		return true
 	}
-	for _, rule := range h.rules[svc.name] {
+	for _, rule := range h.rules[strings.ToLower(svc.name)] {
 		if rule.matches(svc, req, mcp) {
 			return true
 		}
@@ -179,13 +181,23 @@ func (r hookRule) matches(svc *resolvedService, req *http.Request, mcp *hookPayl
 }
 
 // An override header counts as the method, since a framework that honours it performs the method it names.
-// So does a form POST: Rails and Laravel take the method from a `_method` field in the body.
+// So does a form POST: Rails and Laravel take the method from a `_method` field in the body. Symfony and Laravel
+// also read `_method` from the query string whatever the body, and a query that can't be parsed matches.
 func (r hookRule) matchesMethod(req *http.Request) bool {
 	if r.methods[strings.ToUpper(req.Method)] {
 		return true
 	}
 	if req.Method == http.MethodPost && isFormBody(req.Header.Get("Content-Type")) {
 		return true
+	}
+	query, err := url.ParseQuery(req.URL.RawQuery)
+	if err != nil {
+		return true
+	}
+	for _, value := range query["_method"] {
+		if r.methods[strings.ToUpper(strings.TrimSpace(value))] {
+			return true
+		}
 	}
 	for _, name := range methodOverrideHeaders {
 		for _, value := range req.Header.Values(name) {
@@ -205,8 +217,11 @@ func isFormBody(contentType string) bool {
 
 // An ambiguous path matches, since the upstream may route it under a listed prefix. Past that check every escape
 // left is benign, so decoding the whole path can't merge segments, and `/v1/%72efunds` is `/v1/refunds` upstream.
+// Case is ignored, unlike the service allowlist: ASP.NET Core and IIS route paths case-insensitively, and for a
+// hook a miss lets the request through unchecked, so strictness goes the unsafe way. prefixes are lowercase.
 func hookPathMatches(escaped string, prefixes []string) bool {
-	return isAmbiguousPath(escaped) || matchesPrefix(escaped, prefixes) || matchesPrefix(decodeBenignEscapes(escaped), prefixes)
+	return isAmbiguousPath(escaped) || matchesPrefix(strings.ToLower(escaped), prefixes) ||
+		matchesPrefix(strings.ToLower(decodeBenignEscapes(escaped)), prefixes)
 }
 
 // A body that can't be parsed matches, and so does a call naming no tool, so a call can't get past the hook by
