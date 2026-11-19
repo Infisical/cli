@@ -83,6 +83,11 @@ type resolvedService struct {
 	native *nativeTarget
 	// Some credential field comes from each member, so a rejection is theirs to fix rather than an admin's.
 	memberProvided bool
+	// The OAuth variable the service signed in with was deleted, so it has no credential to send.
+	credentialRemoved bool
+	// The OAuth variable the service signs in with isn't connected, so it has no credential to send.
+	credentialNotConnected bool
+	// Asked before the credential is attached. Nil when the service has none.
 }
 
 // lastSeen and fetchedAt are wall-clock (Round(0)) so time asleep counts toward the grace and idle windows.
@@ -603,7 +608,11 @@ var (
 
 // Infisical answered a refresh with the token the upstream rejected, or with one the upstream rejected too.
 // The status is Infisical's view of the service's OAuth connection, kept for the agent's message.
-type refreshNotRecoveredError struct{ status string }
+type refreshNotRecoveredError struct {
+	status string
+	// The upstream answered the refreshed token with an insufficient_scope challenge of its own.
+	scopeChallenged bool
+}
 
 func (e *refreshNotRecoveredError) Error() string {
 	return fmt.Sprintf("the refresh did not produce a token the upstream accepts (status %q)", e.status)
@@ -705,9 +714,9 @@ func (c *sessionCache) rememberRefreshFailure(flightKey string, err error) {
 
 // rememberRejectedRefresh records that the token a refresh produced was rejected by the upstream as well, so
 // the next 401 for it gets its answer without asking Infisical again within the window.
-func (c *sessionCache) rememberRejectedRefresh(sessionToken, serviceID, hostPattern string, rejected *credential, status string) {
+func (c *sessionCache) rememberRejectedRefresh(sessionToken, serviceID, hostPattern string, rejected *credential, status string, scopeChallenged bool) {
 	flightKey := credentialFlightKey(sessionKey(sessionToken), serviceID, hostPattern, credentialHash(rejected), nil)
-	c.rememberRefreshFailure(flightKey, &refreshNotRecoveredError{status: status})
+	c.rememberRefreshFailure(flightKey, &refreshNotRecoveredError{status: status, scopeChallenged: scopeChallenged})
 }
 
 func (c *sessionCache) dropSession(key string, err error) {
@@ -774,6 +783,8 @@ func (c *sessionCache) currentCredential(key, serviceID, hostPattern string) (cr
 // cached credential wins over a delayed refresh, including the credential returned for retry.
 // A poll that removed the session or the service during the refresh revoked that access, so the fresh token
 // is refused rather than handed to a retry.
+// Every refreshable service still holding the replaced token gets the new one too: services on one OAuth
+// variable share its token, and one left on the replaced token would send it upstream until the next poll.
 func (c *sessionCache) swapCredential(key, serviceID, hostPattern, replacedHash string, cred credential) (credential, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -781,44 +792,55 @@ func (c *sessionCache) swapCredential(key, serviceID, hostPattern, replacedHash 
 	if !ok {
 		return credential{}, errSessionGone
 	}
-	for i, svc := range entry.services {
-		if svc.id != serviceID {
+	asking := slices.IndexFunc(entry.services, func(svc *resolvedService) bool { return svc.id == serviceID })
+	if asking < 0 {
+		return credential{}, errServiceRemoved
+	}
+	svc := entry.services[asking]
+	if svc.hostPattern != hostPattern {
+		return credential{}, errServiceHostChanged
+	}
+	if !svc.credential.refreshable {
+		return credential{}, errCredentialNotRefreshable
+	}
+	if credentialHash(&svc.credential) != replacedHash {
+		return svc.credential, nil
+	}
+
+	services := append([]*resolvedService(nil), entry.services...)
+	c.swapGen++
+	if entry.swaps == nil {
+		entry.swaps = make(map[string]*credentialSwap)
+	}
+	for i, holder := range services {
+		if !holder.credential.refreshable || credentialHash(&holder.credential) != replacedHash {
 			continue
 		}
-		if svc.hostPattern != hostPattern {
-			return credential{}, errServiceHostChanged
+		// A sibling keeps its own header settings and takes only the new token.
+		installed := cred
+		if holder.id != serviceID {
+			installed = holder.credential
+			installed.value = cred.value
 		}
-		if !svc.credential.refreshable {
-			return credential{}, errCredentialNotRefreshable
-		}
-		if credentialHash(&svc.credential) != replacedHash {
-			return svc.credential, nil
-		}
-		updated := *svc
-		updated.credential = cred
-		services := append([]*resolvedService(nil), entry.services...)
+		updated := *holder
+		updated.credential = installed
 		services[i] = &updated
-		entry.services = services
 
-		c.swapGen++
-		if entry.swaps == nil {
-			entry.swaps = make(map[string]*credentialSwap)
-		}
-		swap, ok := entry.swaps[serviceID]
+		swap, ok := entry.swaps[holder.id]
 		if !ok {
 			swap = &credentialSwap{replaced: make(map[string]bool)}
-			entry.swaps[serviceID] = swap
+			entry.swaps[holder.id] = swap
 		}
-		swap.installed = cred
-		if swap.hostPattern != hostPattern {
-			swap.hostPattern = hostPattern
+		swap.installed = installed
+		if swap.hostPattern != holder.hostPattern {
+			swap.hostPattern = holder.hostPattern
 			clear(swap.replaced)
 		}
 		swap.replaced[replacedHash] = true
 		swap.gen = c.swapGen
 		// A refresh can hand back the token it replaced, which is then current rather than stale.
 		delete(swap.replaced, credentialHash(&cred))
-		return cred, nil
 	}
-	return credential{}, errServiceRemoved
+	entry.services = services
+	return cred, nil
 }

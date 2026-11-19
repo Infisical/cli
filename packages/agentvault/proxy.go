@@ -983,6 +983,11 @@ func (ps *proxyServer) forward(req *http.Request, t tunnel) (*http.Response, *re
 		return nil, matched, outcome, fmt.Errorf(
 			"MCP service %q expects TLS; refusing to broker plain HTTP: %w", matched.name, errPolicyBlocked)
 	}
+	// An OAuth sign-in's token is only ever issued for https, and would otherwise cross a custom port in cleartext.
+	if matched != nil && scheme == "http" && matched.credential.refreshable {
+		return nil, matched, outcome, fmt.Errorf(
+			"service %q signs in with OAuth and expects TLS; refusing to broker plain HTTP: %w", matched.name, errPolicyBlocked)
+	}
 
 	if matched != nil {
 		watchHookStream = watchesHookStream(found.hook, matched, req)
@@ -1000,6 +1005,8 @@ func (ps *proxyServer) forward(req *http.Request, t tunnel) (*http.Response, *re
 			} else if matched.credential.refreshable {
 				bufferMCPRequest(req, maxMCPInspectBody)
 			}
+		} else if matched.credential.refreshable {
+			bufferRequestBody(req, maxMCPInspectBody)
 		}
 
 		if found.hook.covers(matched) {
@@ -1076,7 +1083,7 @@ func (ps *proxyServer) forward(req *http.Request, t tunnel) (*http.Response, *re
 		_ = resp.Body.Close()
 		log.Warn().Str("service", matched.name).Str("serviceId", matched.id).
 			Msg("agent-vault: the MCP server rejected the service's credential")
-		return upstreamAuthFailed(req, staticCredentialRejectedBody(matched)), matched, outcome, nil
+		return upstreamAuthFailed(req, http.StatusBadGateway, staticCredentialRejectedBody(matched), nil), matched, outcome, nil
 	}
 	if sent != nil {
 		resp, err = ps.handleUpstreamAuth(upstream, req, resp, matched, sessionToken, sent, replay, replayable)
