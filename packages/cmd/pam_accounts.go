@@ -112,9 +112,9 @@ func runPAMAccountsGet(cmd *cobra.Command, args []string) {
 	} else {
 		rows := make([][]string, 0, len(views))
 		for _, view := range views {
-			rows = append(rows, []string{util.SanitizeDisplay(view.Path), view.TypeLabel, pamAccessText(view), strings.Join(pamAccountNotes(view), ", ")})
+			rows = append(rows, []string{util.SanitizeDisplay(view.Path), view.TypeLabel, pamAccessText(view), strings.Join(pamAccountRequirements(view), ", ")})
 		}
-		visualize.GenericTable([]string{"PATH", "TYPE", "ACCESS", "NOTES"}, rows)
+		visualize.GenericTable([]string{"PATH", "TYPE", "ACCESS", "REQUIRES"}, rows)
 		printProjectsTip(cmd, "To connect, run: infisical pam access <folder/account> -- <command>. For one account's details, run: infisical pam accounts get <folder/account>")
 	}
 
@@ -171,13 +171,13 @@ func pamAccessText(view pamAccountView) string {
 	return view.Access
 }
 
-func pamAccountNotes(view pamAccountView) []string {
+func pamAccountRequirements(view pamAccountView) []string {
 	var notes []string
 	if view.RequireReason {
-		notes = append(notes, "reason required")
+		notes = append(notes, "reason")
 	}
 	if view.RequireMfa {
-		notes = append(notes, "MFA required")
+		notes = append(notes, "MFA")
 	}
 	return notes
 }
@@ -227,7 +227,7 @@ func printPAMAccountDetails(view pamAccountView) {
 	if view.Description != "" {
 		lines = append(lines, fmt.Sprintf("About:    %s", util.SanitizeDisplay(view.Description)))
 	}
-	if notes := pamAccountNotes(view); len(notes) > 0 {
+	if notes := pamAccountRequirements(view); len(notes) > 0 {
 		lines = append(lines, fmt.Sprintf("Requires: %s", strings.Join(notes, ", ")))
 	}
 	if display, ok := pam.ConnectionDisplayFor(view.Type); ok && display.RequiredPassword != "" {
