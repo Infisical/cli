@@ -441,6 +441,8 @@ func TestTheHookMatcher(t *testing.T) {
 	httpSvc := &resolvedService{name: "github", kind: serviceKindHTTP}
 	mcpSvc := &resolvedService{name: "linear", kind: serviceKindMCP}
 	pgSvc := &resolvedService{name: "db", kind: serviceKindPostgres}
+	substitutingSvc := &resolvedService{name: "github", kind: serviceKindHTTP, substitutions: []substitution{
+		subOn("__ORG__", "acme", surfacePath), subOn("{{TEAM}}", "core", surfacePath), subOn("__REPO__", "secret", surfaceQuery, surfaceHeader, surfaceBody)}}
 	get := func(path string) *http.Request { return httptest.NewRequest(http.MethodGet, "https://h"+path, nil) }
 	post := func(path string) *http.Request {
 		return httptest.NewRequest(http.MethodPost, "https://h"+path, strings.NewReader("{}"))
@@ -480,11 +482,35 @@ func TestTheHookMatcher(t *testing.T) {
 		{"method not in the set", []api.AgentVaultHookRule{rule("github", list("PUT"), nil, nil)}, httpSvc, get("/x"), nil, false},
 		{"method override counts", []api.AgentVaultHookRule{rule("github", list("DELETE"), nil, nil)}, httpSvc,
 			withHeader(post("/x"), "X-HTTP-Method-Override", "delete"), nil, true},
+		{"a form POST counts as any method", []api.AgentVaultHookRule{rule("github", list("DELETE"), nil, nil)}, httpSvc,
+			withHeader(post("/x"), "Content-Type", "application/x-www-form-urlencoded"), nil, true},
+		{"a multipart POST counts as any method", []api.AgentVaultHookRule{rule("github", list("DELETE"), nil, nil)}, httpSvc,
+			withHeader(post("/x"), "Content-Type", "Multipart/Form-Data; boundary=x"), nil, true},
+		{"a JSON POST is only a POST", []api.AgentVaultHookRule{rule("github", list("DELETE"), nil, nil)}, httpSvc,
+			withHeader(post("/x"), "Content-Type", "application/json"), nil, false},
+		{"a form PUT is only a PUT", []api.AgentVaultHookRule{rule("github", list("DELETE"), nil, nil)}, httpSvc,
+			withHeader(httptest.NewRequest(http.MethodPut, "https://h/x", nil), "Content-Type", "application/x-www-form-urlencoded"), nil, false},
+		{"a form POST still needs the path", []api.AgentVaultHookRule{rule("github", list("DELETE"), list("/repos"), nil)}, httpSvc,
+			withHeader(post("/user"), "Content-Type", "application/x-www-form-urlencoded"), nil, false},
 		{"path under a prefix", []api.AgentVaultHookRule{rule("github", nil, list("/repos/"), nil)}, httpSvc, get("/repos/a/b"), nil, true},
 		{"path equal to a prefix", []api.AgentVaultHookRule{rule("github", nil, list("/repos"), nil)}, httpSvc, get("/repos"), nil, true},
 		{"path sharing a prefix's letters", []api.AgentVaultHookRule{rule("github", nil, list("/repos"), nil)}, httpSvc, get("/repository"), nil, false},
 		{"path outside every prefix", []api.AgentVaultHookRule{rule("github", nil, list("/repos"), nil)}, httpSvc, get("/user"), nil, false},
 		{"an ambiguous path matches", []api.AgentVaultHookRule{rule("github", nil, list("/admin"), nil)}, httpSvc, get("/repos/..;/admin"), nil, true},
+		{"an encoded path matches its decoded prefix", []api.AgentVaultHookRule{rule("github", nil, list("/v1/refunds"), nil)}, httpSvc,
+			get("/v1/%72efunds/1"), nil, true},
+		{"an encoded path outside every prefix", []api.AgentVaultHookRule{rule("github", nil, list("/v1/refunds"), nil)}, httpSvc,
+			get("/v1/%63harges/1"), nil, false},
+		{"a substituted path matches", []api.AgentVaultHookRule{rule("github", nil, list("/repos/acme"), nil)}, substitutingSvc,
+			get("/repos/__ORG__/issues"), nil, true},
+		{"a substituted placeholder in escaped form matches", []api.AgentVaultHookRule{rule("github", nil, list("/teams/core"), nil)}, substitutingSvc,
+			get("/teams/%7b%7bTEAM%7d%7d/members"), nil, true},
+		{"the unsubstituted path still matches", []api.AgentVaultHookRule{rule("github", nil, list("/repos/__ORG__"), nil)}, substitutingSvc,
+			get("/repos/__ORG__/issues"), nil, true},
+		{"only path substitutions count", []api.AgentVaultHookRule{rule("github", nil, list("/repos/secret"), nil)}, substitutingSvc,
+			get("/repos/__REPO__/issues"), nil, false},
+		{"a substitution elsewhere in the path", []api.AgentVaultHookRule{rule("github", nil, list("/repos/acme"), nil)}, substitutingSvc,
+			get("/repos/other/__ORG__"), nil, false},
 		{"method and path both have to fit", []api.AgentVaultHookRule{rule("github", list("POST"), list("/repos"), nil)}, httpSvc, get("/repos/a"), nil, false},
 		{"another rule can pick it", []api.AgentVaultHookRule{rule("github", list("POST"), nil, nil), rule("github", nil, list("/repos"), nil)},
 			httpSvc, get("/repos/a"), nil, true},

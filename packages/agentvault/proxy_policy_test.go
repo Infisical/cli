@@ -722,8 +722,11 @@ func TestTheProxysOwnRefusalsComeBeforeTheHook(t *testing.T) {
 
 func TestOnlyTheRequestsTheHookRulesPickAskTheHook(t *testing.T) {
 	fake := newFakeHook(t, answerHook(`{"decision":"deny","message":"Ask Ana first."}`))
-	_, client, host, hits := newHookedPolicyFixture(t, fake,
+	ps, client, host, hits := newHookedPolicyFixture(t, fake,
 		api.AgentVaultHookRule{Service: "github", Methods: []string{"post"}, Paths: []string{"/v1/refunds/"}})
+	services, _ := ps.cache.get("agv_tok")
+	services[0].substitutions = append(services[0].substitutions, substitution{
+		placeholder: "__VERSION__", surfaces: map[string]bool{surfacePath: true}, value: []byte("v1")})
 
 	for _, tc := range []struct {
 		method, path string
@@ -736,6 +739,9 @@ func TestOnlyTheRequestsTheHookRulesPickAskTheHook(t *testing.T) {
 		// The path the agent sent, before {{KEY}} is substituted.
 		{http.MethodPost, "/v1/refunds/{{KEY}}", nil, true},
 		{http.MethodPut, "/v1/refunds/1", http.Header{"X-Http-Method-Override": {"POST"}}, true},
+		{http.MethodPost, "/v1/%72efunds/1", nil, true},
+		{http.MethodPost, "/__VERSION__/refunds/1", nil, true},
+		{http.MethodPost, "/__VERSION__/charges", nil, false},
 	} {
 		before := len(fake.calls())
 		resp, body := doHooked(t, client, tc.method, "https://"+host+tc.path, nil, tc.header)
@@ -747,8 +753,8 @@ func TestOnlyTheRequestsTheHookRulesPickAskTheHook(t *testing.T) {
 			t.Fatalf("%s %s: status %d: %s", tc.method, tc.path, resp.StatusCode, body)
 		}
 	}
-	if got := hits.Load(); got != 2 {
-		t.Fatalf("the upstream got %d requests, want the 2 the rules leave out", got)
+	if got := hits.Load(); got != 3 {
+		t.Fatalf("the upstream got %d requests, want the 3 the rules leave out", got)
 	}
 }
 

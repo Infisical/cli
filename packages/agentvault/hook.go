@@ -154,29 +154,37 @@ func (h *sessionHook) matches(svc *resolvedService, req *http.Request, mcp *hook
 		return true
 	}
 	for _, rule := range h.rules[svc.name] {
-		if rule.matches(svc.kind, req, mcp) {
+		if rule.matches(svc, req, mcp) {
 			return true
 		}
 	}
 	return false
 }
 
-func (r hookRule) matches(kind string, req *http.Request, mcp *hookPayloadMCP) bool {
-	if req == nil || isNativeKind(kind) {
+func (r hookRule) matches(svc *resolvedService, req *http.Request, mcp *hookPayloadMCP) bool {
+	if req == nil || isNativeKind(svc.kind) {
 		return true
 	}
-	if kind == serviceKindMCP {
+	if svc.kind == serviceKindMCP {
 		return r.tools == nil || callsAnyTool(req, mcp, r.tools)
 	}
 	if r.methods != nil && !r.matchesMethod(req) {
 		return false
 	}
-	return r.paths == nil || hookPathMatches(requestPath(req), r.paths)
+	if r.paths == nil {
+		return true
+	}
+	path := requestPath(req)
+	return hookPathMatches(path, r.paths) || hookPathMatches(pathAfterSubstitutions(path, svc.substitutions), r.paths)
 }
 
 // An override header counts as the method, since a framework that honours it performs the method it names.
+// So does a form POST: Rails and Laravel take the method from a `_method` field in the body.
 func (r hookRule) matchesMethod(req *http.Request) bool {
 	if r.methods[strings.ToUpper(req.Method)] {
+		return true
+	}
+	if req.Method == http.MethodPost && isFormBody(req.Header.Get("Content-Type")) {
 		return true
 	}
 	for _, name := range methodOverrideHeaders {
@@ -189,10 +197,16 @@ func (r hookRule) matchesMethod(req *http.Request) bool {
 	return false
 }
 
-// The path the agent sent, before substitution. An ambiguous one matches, since the upstream may route it under a
-// listed prefix.
+func isFormBody(contentType string) bool {
+	mediaType, _, _ := strings.Cut(contentType, ";")
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	return mediaType == "application/x-www-form-urlencoded" || mediaType == "multipart/form-data"
+}
+
+// An ambiguous path matches, since the upstream may route it under a listed prefix. Past that check every escape
+// left is benign, so decoding the whole path can't merge segments, and `/v1/%72efunds` is `/v1/refunds` upstream.
 func hookPathMatches(escaped string, prefixes []string) bool {
-	return isAmbiguousPath(escaped) || matchesPrefix(escaped, prefixes)
+	return isAmbiguousPath(escaped) || matchesPrefix(escaped, prefixes) || matchesPrefix(decodeBenignEscapes(escaped), prefixes)
 }
 
 // A body that can't be parsed matches, and so does a call naming no tool, so a call can't get past the hook by
