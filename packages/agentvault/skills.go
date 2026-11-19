@@ -232,3 +232,15 @@ func valueCloses(text string) bool {
 	}
 	return false
 }
+
+// IsHiddenSkillPath reports whether a skill file's slash-separated path has a hidden part, such as .git or .DS_Store.
+// push never uploads those and pull never writes them, so the two share this rule. "." and ".." aren't hidden: a path
+// with them is refused as outside the skill instead.
+func IsHiddenSkillPath(path string) bool {
+	for _, segment := range strings.Split(path, "/") {
+		if strings.HasPrefix(segment, ".") && segment != "." && segment != ".." {
+			return true
+		}
+	}
+	return false
+}

@@ -83,6 +83,26 @@
     "session-token": "|string|"
   },
   "infisical agent-vault skills": {},
+  "infisical agent-vault skills delete": {
+    "client-id": "|string|",
+    "client-secret": "|string|",
+    "output": "o|string|",
+    "project-id": "|string|",
+    "yes": "y|bool|false"
+  },
+  "infisical agent-vault skills get": {
+    "client-id": "|string|",
+    "client-secret": "|string|",
+    "output": "o|string|",
+    "project-id": "|string|"
+  },
+  "infisical agent-vault skills pull": {
+    "client-id": "|string|",
+    "client-secret": "|string|",
+    "force": "|bool|false",
+    "project-id": "|string|",
+    "version": "|int|0"
+  },
   "infisical agent-vault skills push": {
     "client-id": "|string|",
     "client-secret": "|string|",
@@ -149,6 +169,26 @@
     "session-token": "|string|"
   },
   "infisical av skills": {},
+  "infisical av skills delete": {
+    "client-id": "|string|",
+    "client-secret": "|string|",
+    "output": "o|string|",
+    "project-id": "|string|",
+    "yes": "y|bool|false"
+  },
+  "infisical av skills get": {
+    "client-id": "|string|",
+    "client-secret": "|string|",
+    "output": "o|string|",
+    "project-id": "|string|"
+  },
+  "infisical av skills pull": {
+    "client-id": "|string|",
+    "client-secret": "|string|",
+    "force": "|bool|false",
+    "project-id": "|string|",
+    "version": "|int|0"
+  },
   "infisical av skills push": {
     "client-id": "|string|",
     "client-secret": "|string|",
