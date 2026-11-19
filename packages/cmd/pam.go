@@ -80,7 +80,7 @@ with --mfa-session afterwards. Pass -o json to get errors as JSON with a stable 
 }
 
 func runPAMAccess(cmd *cobra.Command, args []string) {
-	path := args[0]
+	path := strings.Trim(strings.TrimSpace(args[0]), "/")
 	var command []string
 	if dash := cmd.ArgsLenAtDash(); dash >= 0 {
 		if dash != 1 {
@@ -89,6 +89,10 @@ func runPAMAccess(cmd *cobra.Command, args []string) {
 		command = args[1:]
 	} else if len(args) > 1 {
 		util.PrintErrorMessageAndExit(fmt.Sprintf("Unexpected argument %q. To run a command, put it after '--', for example:\n  infisical pam access %s -- uptime", args[1], path))
+	}
+
+	if !pamIsAccountPath(path) {
+		exitWithError(cmd, errPAMInvalidPath(args[0]))
 	}
 
 	reason, _ := cmd.Flags().GetString("reason")

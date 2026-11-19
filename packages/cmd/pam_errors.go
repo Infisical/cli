@@ -24,11 +24,29 @@ const pamPrefix = "infisical pam"
 
 // pamAccountArg returns path as it can safely appear in a suggested command.
 func pamAccountArg(path string) string {
-	trimmed := strings.Trim(strings.TrimSpace(path), "/")
-	if util.SuggestedValue("/"+trimmed, "x") == "/"+trimmed && strings.Contains(trimmed, "/") {
+	if trimmed, ok := pamSafePath(path); ok && pamIsAccountPath(trimmed) {
 		return trimmed
 	}
 	return "<folder/account>"
+}
+
+// pamLookupArg is pamAccountArg for arguments that may also name a folder.
+func pamLookupArg(path string) string {
+	if trimmed, ok := pamSafePath(path); ok {
+		return trimmed
+	}
+	return "<folder/account>"
+}
+
+func pamSafePath(path string) (string, bool) {
+	trimmed := strings.Trim(strings.TrimSpace(path), "/")
+	return trimmed, trimmed != "" && util.SuggestedValue("/"+trimmed, "x") == "/"+trimmed
+}
+
+// pamIsAccountPath mirrors the backend, which splits a path at its first slash.
+func pamIsAccountPath(path string) bool {
+	folder, account, found := strings.Cut(path, "/")
+	return found && folder != "" && account != ""
 }
 
 // pamAccessInvocation is what the caller ran, rebuilt for a suggestion. The command after '--' is
@@ -63,6 +81,23 @@ func errPAMAccountNotFound(path string, cause error) *util.CLIError {
 	return &util.CLIError{Code: errCodeAccountNotFound, Cause: cause,
 		Message: fmt.Sprintf("PAM account %s doesn't exist, or you don't have access to it.", pamAccountArg(path)),
 		Next:    []util.NextStep{{Purpose: "To list the accounts you can access", Command: pamPrefix + " accounts get"}}}
+}
+
+func errPAMAccountOrFolderNotFound(path string) *util.CLIError {
+	return &util.CLIError{Code: errCodeAccountNotFound,
+		Message: fmt.Sprintf("No PAM account or folder named %s exists, or you don't have access to it.", pamLookupArg(path)),
+		Next:    []util.NextStep{{Purpose: "To list the accounts you can access", Command: pamPrefix + " accounts get"}}}
+}
+
+func errPAMInvalidPath(path string) *util.CLIError {
+	next := []util.NextStep{{Purpose: "To list the accounts you can access", Command: pamPrefix + " accounts get"}}
+	name := pamLookupArg(path)
+	if name != "<folder/account>" {
+		next = append(next, util.NextStep{Purpose: "To list the accounts in folder " + name, Command: pamPrefix + " accounts get " + name})
+	}
+	return &util.CLIError{Code: errCodeInvalidArgument,
+		Message: fmt.Sprintf("%s isn't an account path. Name the account as folder/account, for example prod/orders-db.", name),
+		Next:    next}
 }
 
 func errPAMApprovalPending(invocation pamAccessInvocation, requestID string, regrant bool) *util.CLIError {

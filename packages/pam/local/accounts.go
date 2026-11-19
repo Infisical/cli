@@ -22,8 +22,9 @@ func AccountPath(account api.PAMAccessibleAccount) string {
 	return account.FolderName + "/" + account.Name
 }
 
-// ListAccessibleAccounts pages through every account the caller can see. It creates no sessions.
-func ListAccessibleAccounts(httpClient *resty.Client) ([]api.PAMAccessibleAccount, error) {
+// ListAccessibleAccounts pages through every account the caller can see whose name contains
+// search (all of them when it's empty). It creates no sessions.
+func ListAccessibleAccounts(httpClient *resty.Client, search string) ([]api.PAMAccessibleAccount, error) {
 	const pageSize = 100
 	// A server that ignored the offset would return the same page forever.
 	const maxPages = 1000
@@ -33,10 +34,10 @@ func ListAccessibleAccounts(httpClient *resty.Client) ([]api.PAMAccessibleAccoun
 
 	for pages := 0; ; pages++ {
 		if pages >= maxPages {
-			return nil, fmt.Errorf("failed to list PAM accounts: gave up after %d pages, which means the endpoint is not paging", maxPages)
+			return nil, fmt.Errorf("stopped after %d PAM accounts, which is too many to list. Look up one account instead: infisical pam accounts get <folder/account>", len(all))
 		}
 
-		page, err := api.CallPAMListAccessibleAccounts(httpClient, offset, pageSize)
+		page, err := api.CallPAMListAccessibleAccounts(httpClient, offset, pageSize, search)
 		if err != nil {
 			return nil, err
 		}
@@ -55,6 +56,31 @@ func ListAccessibleAccounts(httpClient *resty.Client) ([]api.PAMAccessibleAccoun
 }
 
 // FindAccessibleAccount matches a path case-insensitively, with or without a leading slash.
+func FilterAccountsByFolder(accounts []api.PAMAccessibleAccount, folder string) []api.PAMAccessibleAccount {
+	var matched []api.PAMAccessibleAccount
+	for _, account := range accounts {
+		if account.FolderName != "" && strings.EqualFold(account.FolderName, folder) {
+			matched = append(matched, account)
+		}
+	}
+	return matched
+}
+
+// LookupAccessibleAccount finds one account by path without listing every account.
+func LookupAccessibleAccount(httpClient *resty.Client, path string) (api.PAMAccessibleAccount, bool, error) {
+	key := strings.Trim(strings.TrimSpace(path), "/")
+	name := key[strings.LastIndex(key, "/")+1:]
+	if name == "" {
+		return api.PAMAccessibleAccount{}, false, nil
+	}
+	candidates, err := ListAccessibleAccounts(httpClient, name)
+	if err != nil {
+		return api.PAMAccessibleAccount{}, false, err
+	}
+	account, found := FindAccessibleAccount(candidates, key)
+	return account, found, nil
+}
+
 func FindAccessibleAccount(accounts []api.PAMAccessibleAccount, path string) (api.PAMAccessibleAccount, bool) {
 	key := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(path), "/"))
 	for _, account := range accounts {

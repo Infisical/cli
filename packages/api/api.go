@@ -1430,16 +1430,20 @@ func CallPAMAccess(httpClient *resty.Client, request PAMAccessRequest) (PAMAcces
 // CallPAMListAccessibleAccounts lists the PAM accounts the caller can see, one page at a time.
 // This is a read-only lookup: it does not create a session. The PAM project is resolved
 // server-side from the caller's organization, so no project ID is sent.
-func CallPAMListAccessibleAccounts(httpClient *resty.Client, offset, limit int) (PAMAccessibleAccountsResponse, error) {
+func CallPAMListAccessibleAccounts(httpClient *resty.Client, offset, limit int, search string) (PAMAccessibleAccountsResponse, error) {
 	var accessibleAccountsResponse PAMAccessibleAccountsResponse
+	params := map[string]string{
+		"offset": strconv.Itoa(offset),
+		"limit":  strconv.Itoa(limit),
+	}
+	if search != "" {
+		params["search"] = search
+	}
 	response, err := httpClient.
 		R().
 		SetResult(&accessibleAccountsResponse).
 		SetHeader("User-Agent", USER_AGENT).
-		SetQueryParams(map[string]string{
-			"offset": strconv.Itoa(offset),
-			"limit":  strconv.Itoa(limit),
-		}).
+		SetQueryParams(params).
 		Get(fmt.Sprintf("%v/v1/pam/accounts/accessible", config.INFISICAL_URL))
 
 	if err != nil {

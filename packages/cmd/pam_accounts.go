@@ -48,10 +48,11 @@ func buildPAMAccountsCmd() *cobra.Command {
 	}
 
 	getCmd := &cobra.Command{
-		Use:   "get [folder/account]",
+		Use:   "get [folder | folder/account]",
 		Short: "List the PAM accounts you can access, or show one",
 		Long: `List the PAM accounts you can access, with whether each is ready to use, needs
-approval, or has a request pending. Name one account to see how to connect to it.
+approval, or has a request pending. Name a folder to list only its accounts, or name one
+account to see how to connect to it.
 
 ACCESS is one of:
   ready           run 'infisical pam access <folder/account>' now
@@ -60,6 +61,7 @@ ACCESS is one of:
   approved        approved access is active until the time shown
   unavailable     the account can't be used right now; the reason is shown`,
 		Example: `  infisical pam accounts get
+  infisical pam accounts get prod
   infisical pam accounts get prod/orders-db
   infisical pam accounts get -o json`,
 		DisableFlagsInUseLine: true,
@@ -80,24 +82,37 @@ func runPAMAccountsGet(cmd *cobra.Command, args []string) {
 	defer stopAuth()
 	httpClient := newPAMHTTPClient(accessToken)
 
-	accounts, err := pam.ListAccessibleAccounts(httpClient)
+	if len(args) == 1 && !strings.HasSuffix(strings.TrimSpace(args[0]), "/") {
+		account, found, err := pam.LookupAccessibleAccount(httpClient, args[0])
+		if err != nil {
+			exitWithError(cmd, classifyPAMAPIError(err, ""), "Unable to look up the PAM account")
+		}
+		if found {
+			view := newPAMAccountView(account)
+			if outputFormat != "" {
+				printFormattedOutput(outputFormat, view)
+			} else {
+				printPAMAccountDetails(view)
+			}
+			Telemetry.CaptureEvent("cli-command:pam accounts get", posthog.NewProperties().Set("version", util.CLI_VERSION))
+			return
+		}
+		if strings.Contains(strings.Trim(strings.TrimSpace(args[0]), "/"), "/") {
+			exitWithError(cmd, errPAMAccountOrFolderNotFound(args[0]))
+		}
+	}
+
+	accounts, err := pam.ListAccessibleAccounts(httpClient, "")
 	if err != nil {
 		exitWithError(cmd, classifyPAMAPIError(err, ""), "Unable to list PAM accounts")
 	}
 
 	if len(args) == 1 {
-		account, found := pam.FindAccessibleAccount(accounts, args[0])
-		if !found {
-			exitWithError(cmd, errPAMAccountNotFound(args[0], nil))
+		folder := strings.Trim(strings.TrimSpace(args[0]), "/")
+		accounts = pam.FilterAccountsByFolder(accounts, folder)
+		if len(accounts) == 0 {
+			exitWithError(cmd, errPAMAccountOrFolderNotFound(args[0]))
 		}
-		view := newPAMAccountView(account)
-		if outputFormat != "" {
-			printFormattedOutput(outputFormat, view)
-		} else {
-			printPAMAccountDetails(view)
-		}
-		Telemetry.CaptureEvent("cli-command:pam accounts get", posthog.NewProperties().Set("version", util.CLI_VERSION))
-		return
 	}
 
 	views := make([]pamAccountView, 0, len(accounts))
