@@ -757,3 +757,13 @@ func TestPullAgentVaultSkillWithForceThatFailsToWriteKeepsTheOldFolder(t *testin
 		t.Fatalf("the failed pull left %d entries", len(entries))
 	}
 }
+
+func TestPullAgentVaultSkillIntoAFolderWithALongName(t *testing.T) {
+	folder := filepath.Join(t.TempDir(), strings.Repeat("a", 250))
+	if _, err := pullAgentVaultSkill(newFakeSkillsReadAPI(t, codeReviewSkillAPI()), testSkillsProject, "code-review", folder, 0, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(folder, "SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+}

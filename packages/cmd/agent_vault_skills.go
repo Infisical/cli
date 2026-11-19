@@ -419,11 +419,20 @@ func replaceAgentVaultSkillFolder(folder string, files []api.AgentVaultSkillFile
 		return agentVaultSkillFolderError("write", folder, err)
 	}
 
-	staging, err := makeAgentVaultSkillStagingFolder(parent, filepath.Base(target))
+	staging, finalPerm, err := makeAgentVaultSkillStagingFolder(parent, filepath.Base(target))
 	if err != nil {
 		return agentVaultSkillFolderError("write", folder, err)
 	}
+	if replacing {
+		finalPerm = keepPerm
+	}
 	if err := agentvault.WriteSkillFiles(staging, files); err != nil {
+		_ = os.RemoveAll(staging)
+		return agentVaultSkillFolderError("write", folder, err)
+	}
+	// After the write, so a read-only mode can't stop the files going in, and before the old folder goes, so a
+	// failure here leaves it as it was.
+	if err := os.Chmod(staging, finalPerm); err != nil {
 		_ = os.RemoveAll(staging)
 		return agentVaultSkillFolderError("write", folder, err)
 	}
@@ -438,33 +447,42 @@ func replaceAgentVaultSkillFolder(folder string, files []api.AgentVaultSkillFile
 		return fmt.Errorf("unable to move the pulled files into %s (%s). They are in the hidden folder %s beside it",
 			quoted(folder, "folder"), agentVaultSkillFolderErrorReason(err), quoted(filepath.Base(staging), "folder"))
 	}
-	// After the write, so a read-only folder's mode can't stop the files going in.
-	if replacing {
-		if err := os.Chmod(target, keepPerm); err != nil {
-			return agentVaultSkillFolderError("write", folder, err)
-		}
-	}
 	return nil
 }
 
-// makeAgentVaultSkillStagingFolder uses Mkdir rather than MkdirTemp, whose folder is always 0700, so the pulled
-// folder gets the umask's permissions like any other folder the user creates.
-func makeAgentVaultSkillStagingFolder(parent, base string) (string, error) {
+// makeAgentVaultSkillStagingFolder makes the hidden folder a pull writes into, private (0700) so other users can't
+// read the files while they are written. It also returns the mode the umask gives a new folder, which a pull into a
+// folder that didn't exist ends with. The folder's name keeps only the start of base, so a name near the file system's
+// 255-byte limit still has room for the suffix.
+func makeAgentVaultSkillStagingFolder(parent, base string) (string, fs.FileMode, error) {
+	if runes := []rune(base); len(runes) > 32 {
+		base = string(runes[:32])
+	}
 	for range 10 {
 		suffix := make([]byte, 6)
 		if _, err := rand.Read(suffix); err != nil {
-			return "", err
+			return "", 0, err
 		}
 		staging := filepath.Join(parent, "."+base+".pull-"+hex.EncodeToString(suffix))
+		// Mkdir with 0755 rather than 0700 only to learn what the umask makes of it.
 		err := os.Mkdir(staging, 0o755)
+		if errors.Is(err, fs.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return "", 0, err
+		}
+		info, err := os.Stat(staging)
 		if err == nil {
-			return staging, nil
+			err = os.Chmod(staging, 0o700)
 		}
-		if !errors.Is(err, fs.ErrExist) {
-			return "", err
+		if err != nil {
+			_ = os.RemoveAll(staging)
+			return "", 0, err
 		}
+		return staging, info.Mode().Perm(), nil
 	}
-	return "", fs.ErrExist
+	return "", 0, fs.ErrExist
 }
 
 // withoutHiddenAgentVaultSkillFiles drops what push never uploads, so a skill written through the API can't plant

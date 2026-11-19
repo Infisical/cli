@@ -65,3 +65,20 @@ func TestPullAgentVaultSkillForceReplacesAnEmptyReadOnlyFolder(t *testing.T) {
 		t.Fatalf("folder %v %v, want mode 555", info, err)
 	}
 }
+
+func TestAgentVaultSkillStagingFolderIsPrivate(t *testing.T) {
+	parent := t.TempDir()
+	staging, finalPerm, err := makeAgentVaultSkillStagingFolder(parent, "code-review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(staging)
+	if err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("staging %v %v, want mode 700", info, err)
+	}
+	old := syscall.Umask(0)
+	syscall.Umask(old)
+	if want := 0o755 &^ os.FileMode(old); finalPerm != want {
+		t.Fatalf("final mode %o, want %o", finalPerm, want)
+	}
+}
