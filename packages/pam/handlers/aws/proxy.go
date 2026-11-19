@@ -34,6 +34,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/semaphore"
 )
 
 const (
@@ -43,6 +44,9 @@ const (
 
 	unsignedPayloadTrailer = "STREAMING-UNSIGNED-PAYLOAD-TRAILER"
 )
+
+// Every session on the gateway shares this, so parallel connections can't buffer more than it between them
+var hashedBodies = semaphore.NewWeighted(2 * maxHashedBodySize)
 
 // The domains AWS serves its APIs from. The gateway only signs requests bound for these, so a session
 // can't use it to reach anything else on the gateway's network.
@@ -258,6 +262,24 @@ func (p *AWSProxy) handleRequest(ctx context.Context, w io.Writer, req *http.Req
 		return false, nil
 	}
 
+	// Reserved before the client is told to send the body, so a refusal doesn't cost it the upload
+	hashBody := signed && payloadHash == ""
+	if hashBody {
+		if req.ContentLength > maxHashedBodySize {
+			writeError(w, req, http.StatusRequestEntityTooLarge, "request body is too large for the gateway to sign")
+			return false, nil
+		}
+		reserved := int64(maxHashedBodySize)
+		if req.ContentLength >= 0 {
+			reserved = req.ContentLength
+		}
+		if !hashedBodies.TryAcquire(reserved) {
+			writeError(w, req, http.StatusServiceUnavailable, "the gateway is busy with other large requests; try again shortly")
+			return false, nil
+		}
+		defer hashedBodies.Release(reserved)
+	}
+
 	if strings.EqualFold(req.Header.Get("Expect"), "100-continue") {
 		if _, err := io.WriteString(w, "HTTP/1.1 100 Continue\r\n\r\n"); err != nil {
 			return false, err
@@ -269,7 +291,7 @@ func (p *AWSProxy) handleRequest(ctx context.Context, w io.Writer, req *http.Req
 	var body io.Reader = io.TeeReader(requestBody, &limitedWriter{w: &loggedRequestBody, n: maxLoggedBodySize})
 	contentLength := req.ContentLength
 
-	if signed && payloadHash == "" {
+	if hashBody {
 		buffered, err := io.ReadAll(io.LimitReader(body, maxHashedBodySize+1))
 		if err != nil {
 			return false, fmt.Errorf("failed to read request body: %w", err)

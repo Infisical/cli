@@ -291,10 +291,27 @@ func awsProxyEnv(base []string, proxyURL, caPath string) []string {
 
 // The settings awsProxyEnv applies, as commands for a shell the CLI didn't start
 func awsProxyExports(proxyURL, caPath string) string {
-	return fmt.Sprintf("export HTTPS_PROXY=\"%[1]s\" https_proxy=\"%[1]s\" AWS_CA_BUNDLE=\"%[2]s\"\n"+
-		"export AWS_ACCESS_KEY_ID=\"%[3]s\" AWS_SECRET_ACCESS_KEY=\"%[3]s\"\n"+
+	return fmt.Sprintf("export HTTPS_PROXY=%[1]s https_proxy=%[1]s AWS_CA_BUNDLE=%[2]s\n"+
+		"export AWS_ACCESS_KEY_ID=%[3]s AWS_SECRET_ACCESS_KEY=%[3]s\n"+
 		"unset AWS_SESSION_TOKEN AWS_SECURITY_TOKEN NO_PROXY no_proxy\n",
-		proxyURL, caPath, awsProxyDummyCredential)
+		util.ShellQuote(proxyURL), util.ShellQuote(caPath), util.ShellQuote(awsProxyDummyCredential))
+}
+
+// writeTempFile creates a file only the user can read, and removes it if the content can't be written in full
+func writeTempFile(pattern string, content []byte) (string, error) {
+	file, err := os.CreateTemp("", pattern)
+	if err != nil {
+		return "", err
+	}
+	_, err = file.Write(content)
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		_ = os.Remove(file.Name())
+		return "", err
+	}
+	return file.Name(), nil
 }
 
 func startAWSGatewayAccess(httpClient *resty.Client, response *api.PAMAccessResponse, path, durationStr string, port int) {
@@ -360,29 +377,23 @@ func startAWSGatewayAccess(httpClient *resty.Client, response *api.PAMAccessResp
 
 	go proxy.Run()
 
-	caFile, err := os.CreateTemp("", "infisical-pam-aws-ca-*.pem")
+	caPath, err := writeTempFile("infisical-pam-aws-ca-*.pem", proxy.caCertPEM)
 	if err != nil {
 		proxy.Shutdown()
-		util.PrintErrorMessageAndExit(fmt.Sprintf("Failed to create CA file: %v", err))
+		util.PrintErrorMessageAndExit(fmt.Sprintf("Failed to write CA file: %v", err))
 		return
 	}
-	caPath := caFile.Name()
-	_, _ = caFile.Write(proxy.caCertPEM)
-	caFile.Close()
 
 	proxyURL := fmt.Sprintf("http://infisical:%s@127.0.0.1:%d", proxySecret, proxy.port)
 
 	// The printed tips point at this file, which only the user can read, so they never show the proxy password
-	envFile, err := os.CreateTemp("", "infisical-pam-aws-env-*.sh")
+	envPath, err := writeTempFile("infisical-pam-aws-env-*.sh", []byte(awsProxyExports(proxyURL, caPath)))
 	if err != nil {
 		proxy.Shutdown()
 		_ = os.Remove(caPath)
-		util.PrintErrorMessageAndExit(fmt.Sprintf("Failed to create environment file: %v", err))
+		util.PrintErrorMessageAndExit(fmt.Sprintf("Failed to write environment file: %v", err))
 		return
 	}
-	envPath := envFile.Name()
-	_, _ = envFile.WriteString(awsProxyExports(proxyURL, caPath))
-	envFile.Close()
 
 	cleanup := func() {
 		proxy.Shutdown()
@@ -485,7 +496,7 @@ func printAWSGatewaySessionInfo(folder, account string, metadata map[string]stri
 	} else {
 		fmt.Printf("  Point AWS tooling at this session, then run aws commands:\n")
 	}
-	util.PrintfStderr("    $ source \"%s\"\n", envPath)
+	util.PrintfStderr("    $ . %s\n", util.ShellQuote(envPath))
 	if !interactive {
 		util.PrintfStderr("    $ aws sts get-caller-identity\n")
 	}
