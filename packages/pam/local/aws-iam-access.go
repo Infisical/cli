@@ -92,6 +92,8 @@ func startAWSAccess(httpClient *resty.Client, response *api.PAMAccessResponse, p
 	select {
 	case sig := <-sigChan:
 		log.Info().Msgf("Received signal %v, cleaning up...", sig)
+		// A second Ctrl+C then exits at once, even if Infisical is slow to answer the end call
+		signal.Stop(sigChan)
 		cleanup()
 		endSession(httpClient, response.SessionId)
 	case <-time.After(remaining):
