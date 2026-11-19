@@ -201,8 +201,11 @@ func (r hookRule) matchesMethod(req *http.Request) bool {
 	}
 	for _, name := range methodOverrideHeaders {
 		for _, value := range req.Header.Values(name) {
-			if r.methods[strings.ToUpper(strings.TrimSpace(value))] {
-				return true
+			// Express's method-override takes the first of `DELETE, POST`, so every listed value is checked.
+			for _, item := range strings.Split(value, ",") {
+				if r.methods[strings.ToUpper(strings.TrimSpace(item))] {
+					return true
+				}
 			}
 		}
 	}

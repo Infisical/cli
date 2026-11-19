@@ -484,6 +484,8 @@ func TestTheHookMatcher(t *testing.T) {
 		{"method not in the set", []api.AgentVaultHookRule{rule("github", list("PUT"), nil, nil)}, httpSvc, get("/x"), nil, false},
 		{"method override counts", []api.AgentVaultHookRule{rule("github", list("DELETE"), nil, nil)}, httpSvc,
 			withHeader(post("/x"), "X-HTTP-Method-Override", "delete"), nil, true},
+		{"each comma-separated override counts", []api.AgentVaultHookRule{rule("github", list("DELETE"), nil, nil)}, httpSvc,
+			withHeader(post("/x"), "X-HTTP-Method-Override", "DELETE, POST"), nil, true},
 		{"a form POST counts as any method", []api.AgentVaultHookRule{rule("github", list("DELETE"), nil, nil)}, httpSvc,
 			withHeader(post("/x"), "Content-Type", "application/x-www-form-urlencoded"), nil, true},
 		{"a multipart POST counts as any method", []api.AgentVaultHookRule{rule("github", list("DELETE"), nil, nil)}, httpSvc,
