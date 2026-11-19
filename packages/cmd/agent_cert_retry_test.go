@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -94,7 +95,7 @@ func newRetryTestManager(t *testing.T, lifecycle CertificateLifecycleConfig, sta
 	cfg.FileConfig.PrivateKey.Path = filepath.Join(dir, "key.pem")
 	tm := &AgentManager{
 		accessToken:       "token",
-		retryConfig:       &RetryConfig{MaxRetries: 2, BaseDelay: "1ms", MaxDelay: "5ms"},
+		retryConfig:       &RetryConfig{MaxRetries: intPtr(2), BaseDelay: "1ms", MaxDelay: "5ms"},
 		certificates:      []CertificateWithID{{ID: 1, Certificate: *cfg}},
 		certificateStates: map[int]*CertificateState{1: state},
 	}
@@ -271,7 +272,7 @@ func TestCheckCertificateRenewals_RepeatedWriteFailuresStopAtRetryBudget(t *test
 }
 
 func TestCheckCertificateRenewals_ReissuesWhenFailedCertificateHasExpired(t *testing.T) {
-	server := &retryTestServer{certificatePEM: newResumeTestCertificatePEM(t, 2, time.Now().Add(90*24*time.Hour))}
+	server := &retryTestServer{notAfter: time.Now().Add(-time.Hour), certificatePEM: newResumeTestCertificatePEM(t, 2, time.Now().Add(90*24*time.Hour))}
 	server.start(t)
 	state := &CertificateState{Status: "failed", CertificateID: "cert-1", ExpiresAt: time.Now().Add(-time.Hour), LastRetry: time.Now().Add(-2 * time.Minute)}
 	tm, _ := newRetryTestManager(t, CertificateLifecycleConfig{FailureRetryInterval: "1m", RenewBeforeExpiry: "30d"}, state)
@@ -367,4 +368,89 @@ func TestCheckCertificateRenewals_StopsWhenFailedCertificateWasRevoked(t *testin
 	assert.Equal(t, int32(0), server.renewCalls.Load()+server.issueCalls.Load())
 	assert.Equal(t, int32(1), server.retrieveCalls.Load())
 	assert.Equal(t, "revoked", state.Status)
+}
+
+func intPtr(v int) *int { return &v }
+
+func TestCertificateClient_ExplicitZeroDisablesRetries(t *testing.T) {
+	t.Run("config", func(t *testing.T) {
+		server := &retryTestServer{retrieveStatus: http.StatusServiceUnavailable}
+		server.start(t)
+		tm, _ := newRetryTestManager(t, CertificateLifecycleConfig{}, &CertificateState{})
+		tm.retryConfig.MaxRetries = intPtr(0)
+
+		httpClient, err := tm.createAuthenticatedClient()
+		require.NoError(t, err)
+		_, err = api.CallRetrieveCertificate(httpClient, "cert-1")
+
+		require.Error(t, err)
+		assert.Equal(t, int32(1), server.retrieveCalls.Load())
+	})
+	t.Run("environment", func(t *testing.T) {
+		t.Setenv(util.INFISICAL_RETRY_MAX_RETRIES_NAME, "0")
+		server := &retryTestServer{retrieveStatus: http.StatusServiceUnavailable}
+		server.start(t)
+		tm, _ := newRetryTestManager(t, CertificateLifecycleConfig{}, &CertificateState{})
+
+		httpClient, err := tm.createAuthenticatedClient()
+		require.NoError(t, err)
+		_, err = api.CallRetrieveCertificate(httpClient, "cert-1")
+
+		require.Error(t, err)
+		assert.Equal(t, int32(1), server.retrieveCalls.Load())
+	})
+}
+
+func TestCheckCertificateRenewals_StopsWhenExpiredOrCSRCertificateWasRevoked(t *testing.T) {
+	cases := map[string]func(*AgentCertificateConfig, *CertificateState){
+		"expired locally": func(_ *AgentCertificateConfig, s *CertificateState) { s.ExpiresAt = time.Now().Add(-time.Hour) },
+		"csr":             func(c *AgentCertificateConfig, _ *CertificateState) { c.CSR = "csr" },
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			server := &retryTestServer{status: "revoked", notAfter: time.Now().Add(time.Hour)}
+			server.start(t)
+			state := &CertificateState{Status: "failed", CertificateID: "cert-1", ExpiresAt: time.Now().Add(time.Hour), RetryCount: 1, LastRetry: time.Now().Add(-2 * time.Minute)}
+			tm, cfg := newRetryTestManager(t, CertificateLifecycleConfig{FailureRetryInterval: "1m", RenewBeforeExpiry: "30d"}, state)
+			setup(cfg, state)
+
+			tm.CheckCertificateRenewals()
+
+			assert.Equal(t, int32(0), server.renewCalls.Load()+server.issueCalls.Load())
+			assert.Equal(t, "revoked", state.Status)
+		})
+	}
+}
+
+func TestCheckCertificateRenewals_ReplacementRunsTheRenewalHook(t *testing.T) {
+	server := &retryTestServer{notAfter: time.Now().Add(-time.Minute), certificatePEM: newResumeTestCertificatePEM(t, 2, time.Now().Add(90*24*time.Hour))}
+	server.start(t)
+	state := &CertificateState{Status: "active", CertificateID: "cert-1", ExpiresAt: time.Now().Add(time.Hour), NextRenewalCheck: time.Now().Add(-time.Second)}
+	tm, cfg := newRetryTestManager(t, CertificateLifecycleConfig{RenewBeforeExpiry: "30d"}, state)
+	require.NoError(t, os.WriteFile(cfg.FileConfig.Certificate.Path, []byte("old"), 0o600))
+	dir := t.TempDir()
+	cfg.PostHooks.OnRenewal.Command = "touch " + filepath.Join(dir, "renewal")
+	cfg.PostHooks.OnIssuance.Command = "touch " + filepath.Join(dir, "issuance")
+
+	tm.CheckCertificateRenewals()
+
+	require.Equal(t, int32(1), server.issueCalls.Load())
+	require.Eventually(t, func() bool { _, err := os.Stat(filepath.Join(dir, "renewal")); return err == nil }, 5*time.Second, 50*time.Millisecond)
+	_, err := os.Stat(filepath.Join(dir, "issuance"))
+	assert.True(t, os.IsNotExist(err), "a replacement must not run the issuance hook")
+}
+
+func TestIssuedCertificateValidity_StartsAtTheLaterOfNotBeforeAndTheRequest(t *testing.T) {
+	tm, cfg := newRetryTestManager(t, CertificateLifecycleConfig{}, &CertificateState{})
+	notAfter := time.Now().Add(2 * time.Hour).Truncate(time.Second)
+
+	backdatedNotBefore := time.Now().Add(-time.Hour).Truncate(time.Second)
+	requestedAt := time.Now().Add(-time.Minute)
+	issuedAt, expiresAt := tm.issuedCertificateValidity(cfg, newTestCertificatePEM(t, 2, backdatedNotBefore, notAfter), requestedAt)
+	assert.True(t, issuedAt.Equal(requestedAt), "a backdated NotBefore must not lengthen the lifetime")
+	assert.True(t, expiresAt.Equal(notAfter))
+
+	notBefore := time.Now().Add(-40 * time.Minute).Truncate(time.Second)
+	issuedAt, _ = tm.issuedCertificateValidity(cfg, newTestCertificatePEM(t, 3, notBefore, notAfter), time.Now().Add(-45*time.Minute))
+	assert.True(t, issuedAt.Equal(notBefore), "a late pickup starts the lifetime when the CA issued the certificate")
 }

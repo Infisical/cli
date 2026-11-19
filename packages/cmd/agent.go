@@ -98,7 +98,7 @@ type CacheManager struct {
 }
 
 type RetryConfig struct {
-	MaxRetries int    `yaml:"max-retries"`
+	MaxRetries *int   `yaml:"max-retries"`
 	BaseDelay  string `yaml:"base-delay"`
 	MaxDelay   string `yaml:"max-delay"`
 }
@@ -129,6 +129,7 @@ type CertificateState struct {
 	SerialNumber         string    `json:"serial_number"`
 	CommonName           string    `json:"common_name"`
 	IssuedAt             time.Time `json:"issued_at"`
+	RequestedAt          time.Time `json:"requested_at,omitempty"`
 	ExpiresAt            time.Time `json:"expires_at"`
 	NextRenewalCheck     time.Time `json:"next_renewal_check"`
 	Status               string    `json:"status"`
@@ -1495,7 +1496,9 @@ func (tm *AgentManager) SdkRetryConfig() *infisicalSdk.RetryRequestsConfig {
 	if tm.retryConfig != nil {
 		baseDelay = tm.retryConfig.BaseDelay
 		maxDelay = tm.retryConfig.MaxDelay
-		maxRetries = tm.retryConfig.MaxRetries
+		if tm.retryConfig.MaxRetries != nil {
+			maxRetries = *tm.retryConfig.MaxRetries
+		}
 	}
 
 	if envVarBaseDelay := os.Getenv(util.INFISICAL_RETRY_BASE_DELAY_NAME); envVarBaseDelay != "" {
@@ -2311,11 +2314,24 @@ func (tm *AgentManager) createAuthenticatedClient() (*resty.Client, error) {
 
 func (tm *AgentManager) certificateRetryPolicy() util.RetryPolicy {
 	backoff := tm.SdkRetryConfig().ExponentialBackoff
-	return util.RetryPolicy{
+	policy := util.RetryPolicy{
 		MaxRetries: backoff.MaxRetries,
 		BaseDelay:  backoff.BaseDelay,
 		MaxDelay:   backoff.MaxDelay,
 	}
+	if tm.retriesDisabled() {
+		policy.MaxRetries = 0
+	}
+	return policy
+}
+
+// SdkRetryConfig reads 0 as unset, so an explicit 0 is checked here to let it turn retries off.
+func (tm *AgentManager) retriesDisabled() bool {
+	if raw := os.Getenv(util.INFISICAL_RETRY_MAX_RETRIES_NAME); raw != "" {
+		maxRetries, err := strconv.Atoi(raw)
+		return err == nil && maxRetries == 0
+	}
+	return tm.retryConfig != nil && tm.retryConfig.MaxRetries != nil && *tm.retryConfig.MaxRetries == 0
 }
 
 func newAuthenticatedClient(token string, policy util.RetryPolicy) (*resty.Client, error) {
@@ -2421,14 +2437,32 @@ func nextCertificateCheck(certificate *AgentCertificateConfig, expiresAt time.Ti
 	return next
 }
 
-func (tm *AgentManager) issuedCertificateExpiry(certificate *AgentCertificateConfig, certificatePEM string, issuedAt time.Time) time.Time {
+// A CA may backdate NotBefore and a poller may pick a certificate up late, so the lifetime the
+// renewal guard measures starts at whichever is later: NotBefore or when the agent asked for it.
+func (tm *AgentManager) issuedCertificateValidity(certificate *AgentCertificateConfig, certificatePEM string, requestedAt time.Time) (time.Time, time.Time) {
 	if parsed, ok := parseLeafCertificate([]byte(certificatePEM)); ok {
-		return parsed.NotAfter
+		if requestedAt.After(parsed.NotBefore) {
+			return requestedAt, parsed.NotAfter
+		}
+		return parsed.NotBefore, parsed.NotAfter
 	}
+	issuedAt := time.Now()
 	if ttl, err := parseDurationWithDays(tm.getCertificateTTL(certificate)); err == nil {
-		return issuedAt.Add(ttl)
+		return issuedAt, issuedAt.Add(ttl)
 	}
-	return issuedAt.Add(24 * time.Hour)
+	return issuedAt, issuedAt.Add(24 * time.Hour)
+}
+
+func (tm *AgentManager) runDeliveryHook(replacing bool, certificateId int, certificate *AgentCertificateConfig) {
+	if replacing {
+		if certificate.PostHooks.OnRenewal.Command != "" {
+			tm.ExecutePostHook(certificate.PostHooks.OnRenewal.Command, certificate.PostHooks.OnRenewal.Timeout, "renewal", certificateId, certificate)
+		}
+		return
+	}
+	if certificate.PostHooks.OnIssuance.Command != "" {
+		tm.ExecutePostHook(certificate.PostHooks.OnIssuance.Command, certificate.PostHooks.OnIssuance.Timeout, "issuance", certificateId, certificate)
+	}
 }
 
 func resolveCertificateFrom(httpClient *resty.Client, certConfig *AgentCertificateConfig, fromCertificateID string) (*api.RetrieveCertificateResponse, error) {
@@ -2638,13 +2672,7 @@ func (tm *AgentManager) fetchCertificate(certificateId int, certConfig *AgentCer
 
 	log.Info().Str("Certificate", displayName).Str("serial", serialNumber).Msg("certificate fetched successfully")
 
-	if isRenewal {
-		if certConfig.PostHooks.OnRenewal.Command != "" {
-			tm.ExecutePostHook(certConfig.PostHooks.OnRenewal.Command, certConfig.PostHooks.OnRenewal.Timeout, "renewal", certificateId, certConfig)
-		}
-	} else if certConfig.PostHooks.OnIssuance.Command != "" {
-		tm.ExecutePostHook(certConfig.PostHooks.OnIssuance.Command, certConfig.PostHooks.OnIssuance.Timeout, "issuance", certificateId, certConfig)
-	}
+	tm.runDeliveryHook(isRenewal, certificateId, certConfig)
 
 	return nil
 }
@@ -2678,6 +2706,7 @@ func (tm *AgentManager) IssueCertificate(certificateId int, certificate *AgentCe
 		return err
 	}
 
+	state.RequestedAt = time.Now()
 	response, err := api.CallIssueCertificate(httpClient, request)
 	if err != nil {
 		markCertificateFailed(state, err.Error())
@@ -2696,11 +2725,12 @@ func (tm *AgentManager) IssueCertificate(certificateId int, certificate *AgentCe
 		}
 	}
 
+	replacing := state.CertificateID != "" && isReplacementOnDisk(certificate)
+
 	if response.Certificate != nil {
 		state.CertificateID = response.Certificate.CertificateID
 		state.SerialNumber = response.Certificate.SerialNumber
 		setCommonName()
-		state.IssuedAt = time.Now()
 		state.Status = "active"
 		state.LastError = ""
 	} else {
@@ -2713,7 +2743,7 @@ func (tm *AgentManager) IssueCertificate(certificateId int, certificate *AgentCe
 		return nil
 	}
 
-	state.ExpiresAt = tm.issuedCertificateExpiry(certificate, response.Certificate.Certificate, state.IssuedAt)
+	state.IssuedAt, state.ExpiresAt = tm.issuedCertificateValidity(certificate, response.Certificate.Certificate, state.RequestedAt)
 	state.NextRenewalCheck = nextCertificateCheck(certificate, state.ExpiresAt, time.Now())
 
 	err = tm.WriteCertificateFiles(certificate, response)
@@ -2727,9 +2757,7 @@ func (tm *AgentManager) IssueCertificate(certificateId int, certificate *AgentCe
 
 	log.Info().Str("Certificate", displayName).Str("serial", response.Certificate.SerialNumber).Msg("certificate issued successfully")
 
-	if certificate.PostHooks.OnIssuance.Command != "" {
-		tm.ExecutePostHook(certificate.PostHooks.OnIssuance.Command, certificate.PostHooks.OnIssuance.Timeout, "issuance", certificateId, certificate)
-	}
+	tm.runDeliveryHook(replacing, certificateId, certificate)
 
 	return nil
 }
@@ -2811,13 +2839,13 @@ func (tm *AgentManager) checkCertificateRequestStatus(certificateId int, certifi
 			return nil
 		}
 
+		replacing := state.CertificateID != "" && isReplacementOnDisk(certificate)
 		state.CertificateID = *response.CertificateID
 		state.SerialNumber = *response.SerialNumber
-		state.IssuedAt = time.Now()
 		state.Status = "active"
 		state.LastError = ""
 
-		state.ExpiresAt = tm.issuedCertificateExpiry(certificate, *response.Certificate, state.IssuedAt)
+		state.IssuedAt, state.ExpiresAt = tm.issuedCertificateValidity(certificate, *response.Certificate, state.RequestedAt)
 		state.NextRenewalCheck = nextCertificateCheck(certificate, state.ExpiresAt, time.Now())
 
 		certData := api.CertificateData{
@@ -2850,9 +2878,7 @@ func (tm *AgentManager) checkCertificateRequestStatus(certificateId int, certifi
 		displayName := tm.getCertificateDisplayName(certificateId, certificate)
 		log.Info().Str("Certificate", displayName).Str("serial", *response.SerialNumber).Msg("certificate issued successfully")
 
-		if certificate.PostHooks.OnIssuance.Command != "" {
-			tm.ExecutePostHook(certificate.PostHooks.OnIssuance.Command, certificate.PostHooks.OnIssuance.Timeout, "issuance", certificateId, certificate)
-		}
+		tm.runDeliveryHook(replacing, certificateId, certificate)
 
 	case "failed":
 		errorMsg := "unknown error"
@@ -3289,18 +3315,20 @@ func (tm *AgentManager) CheckCertificateRenewals() {
 				continue
 			}
 			certificateID := state.CertificateID
-			reissue := certificateID == "" || hasCSR || now.After(state.ExpiresAt)
+			reissue := certificateID == ""
 			if !reissue {
 				tm.mutex.Unlock()
 				existing := tm.retrieveCertificate(certificateID)
 				tm.mutex.Lock()
-				if existing != nil {
+				if existing == nil {
+					reissue = hasCSR || now.After(state.ExpiresAt)
+				} else {
 					status := effectiveCertificateStatus(existing)
 					if status == api.CertificateStatusRevoked {
 						tm.handleRevokedCertificate(cert.ID, &cert.Certificate, state)
 						continue
 					}
-					reissue = status == api.CertificateStatusExpired || existing.Certificate.RenewedByCertificateID != ""
+					reissue = hasCSR || status == api.CertificateStatusExpired || existing.Certificate.RenewedByCertificateID != ""
 				}
 			}
 			if reissue {
@@ -3462,6 +3490,7 @@ func (tm *AgentManager) RenewCertificate(certificateId int, certificate *AgentCe
 	request := api.RenewCertificateRequest{
 		RemoveRootsFromChain: omitRootFromChain(certificate),
 	}
+	state.RequestedAt = time.Now()
 	response, err := api.CallRenewCertificate(httpClient, state.CertificateID, request)
 	if err != nil {
 		return fmt.Errorf("failed to renew certificate: %v", err)
@@ -3489,10 +3518,9 @@ func (tm *AgentManager) handleImmediateRenewalResponse(certificateId int, certif
 
 	state.CertificateID = response.CertificateID
 	state.SerialNumber = response.SerialNumber
-	state.IssuedAt = time.Now()
 	state.Status = "active"
 	state.LastError = ""
-	state.ExpiresAt = tm.issuedCertificateExpiry(certificate, response.Certificate, state.IssuedAt)
+	state.IssuedAt, state.ExpiresAt = tm.issuedCertificateValidity(certificate, response.Certificate, state.RequestedAt)
 	state.NextRenewalCheck = nextCertificateCheck(certificate, state.ExpiresAt, time.Now())
 
 	certResponse := &api.CertificateResponse{
@@ -3578,11 +3606,10 @@ func (tm *AgentManager) PollCertificateRequestForRenewal(certificateId int, cert
 
 				state.CertificateID = certResponse.Certificate.CertificateID
 				state.SerialNumber = certResponse.Certificate.SerialNumber
-				state.IssuedAt = time.Now()
 				state.Status = "active"
 				state.LastError = ""
 				state.CertificateRequestID = requestID
-				state.ExpiresAt = tm.issuedCertificateExpiry(certificate, certResponse.Certificate.Certificate, state.IssuedAt)
+				state.IssuedAt, state.ExpiresAt = tm.issuedCertificateValidity(certificate, certResponse.Certificate.Certificate, state.RequestedAt)
 				state.NextRenewalCheck = nextCertificateCheck(certificate, state.ExpiresAt, time.Now())
 
 			case "failed":

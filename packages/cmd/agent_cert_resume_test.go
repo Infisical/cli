@@ -72,12 +72,17 @@ func (s *resumeTestServer) start(t *testing.T, renewed *api.RenewCertificateResp
 
 func newResumeTestCertificatePEM(t *testing.T, serial int64, notAfter time.Time) string {
 	t.Helper()
+	return newTestCertificatePEM(t, serial, time.Now().Add(-time.Hour), notAfter)
+}
+
+func newTestCertificatePEM(t *testing.T, serial int64, notBefore, notAfter time.Time) string {
+	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(serial),
 		Subject:      pkix.Name{CommonName: "example.com"},
-		NotBefore:    time.Now().Add(-time.Hour),
+		NotBefore:    notBefore,
 		NotAfter:     notAfter,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
