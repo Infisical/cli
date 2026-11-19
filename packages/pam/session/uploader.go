@@ -38,12 +38,14 @@ const (
 	ResourceTypeAzureCli          = "azure-cli"
 	ResourceTypeSnowflake         = "snowflake"
 	ResourceTypeClickhouse        = "clickhouse"
+	ResourceTypeWebApp            = "web-app"
 )
 
 var allResourceTypes = []string{
 	ResourceTypeSSH, ResourceTypePostgres, ResourceTypeRedis, ResourceTypeMysql, ResourceTypeMssql,
 	ResourceTypeKubernetes, ResourceTypeMongodb, ResourceTypeOracledb, ResourceTypeWindows,
 	ResourceTypeGcpServiceAccount, ResourceTypeAzureCli, ResourceTypeSnowflake, ResourceTypeClickhouse,
+	ResourceTypeWebApp,
 }
 
 type SessionFileInfo struct {

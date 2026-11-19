@@ -1185,6 +1185,8 @@ type PAMSessionCredentials struct {
 	Schema                string            `json:"schema,omitempty"`
 	Role                  string            `json:"role,omitempty"`
 	PrivateKeyPassphrase  string            `json:"privateKeyPassphrase,omitempty"`
+	StartURL              string            `json:"startUrl,omitempty"`
+	AllowedHosts          []string          `json:"allowedHosts,omitempty"`
 }
 
 type MFASessionStatus string

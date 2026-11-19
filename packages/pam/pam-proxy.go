@@ -27,6 +27,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/redis"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/snowflake"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/ssh"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/webapp"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/pam/session/masking"
 	"github.com/Infisical/infisical-merge/packages/util"
@@ -73,6 +74,9 @@ func GetSupportedResourceTypes() []string {
 	// session at connect time with ErrRdpUnavailable.
 	if rdp.IsSupported() {
 		types = append(types, session.ResourceTypeWindows)
+	}
+	if webapp.IsSupported() {
+		types = append(types, session.ResourceTypeWebApp)
 	}
 	return types
 }
@@ -664,6 +668,21 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 			Str("sessionId", pamConfig.SessionId).
 			Msg("Starting Azure CLI PAM proxy")
 		return proxy.HandleConnection(ctx, handlerConn)
+	case session.ResourceTypeWebApp:
+		// The raw connection, because screencast frames flow without any user input and must not
+		// keep an idle session alive. The handler reports viewer input through OnActivity instead.
+		proxy := webapp.NewWebAppProxy(webapp.WebAppProxyConfig{
+			SessionID:     pamConfig.SessionId,
+			StartURL:      credentials.StartURL,
+			AllowedHosts:  credentials.AllowedHosts,
+			SessionLogger: sessionLogger,
+			OnActivity:    pamConfig.OnActivity,
+		})
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Str("startUrl", webapp.MaskURL(credentials.StartURL)).
+			Msg("Starting web app PAM proxy")
+		return proxy.HandleConnection(ctx, conn)
 	default:
 		return fmt.Errorf("unsupported resource type: %s", pamConfig.ResourceType)
 	}
