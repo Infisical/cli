@@ -985,7 +985,7 @@ func (ps *proxyServer) forward(req *http.Request, t tunnel) (*http.Response, *re
 	}
 
 	if matched != nil {
-		watchHookStream = watchesHookStream(matched, req)
+		watchHookStream = watchesHookStream(found.hook, matched, req)
 		// Before anything is injected, so the names it records can only have come from the agent. Parsed
 		// only for a session log or a tool allowlist; with neither the body is still buffered for an OAuth
 		// credential, so a rejected token's request can be sent again.
@@ -1002,7 +1002,7 @@ func (ps *proxyServer) forward(req *http.Request, t tunnel) (*http.Response, *re
 			}
 		}
 
-		if matched.hook != nil {
+		if found.hook.covers(matched) {
 			if err := ps.askHook(req, t, matched, found, &outcome); err != nil {
 				return nil, matched, outcome, err
 			}

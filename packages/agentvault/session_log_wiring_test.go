@@ -16,6 +16,7 @@ import (
 
 type grantingResolver struct {
 	services []*resolvedService
+	hook     *sessionHook
 }
 
 func (g grantingResolver) resolve(string, *sessionLogGrant) (*resolveResult, error) {
@@ -23,6 +24,7 @@ func (g grantingResolver) resolve(string, *sessionLogGrant) (*resolveResult, err
 		SessionID:  "s1",
 		Services:   g.services,
 		SessionLog: &sessionLogGrant{sessionID: "s1", key: make([]byte, 32)},
+		Hook:       g.hook,
 	}, nil
 }
 

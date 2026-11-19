@@ -64,9 +64,11 @@ func newFakeHook(t *testing.T, answer http.HandlerFunc) *fakeHook {
 	return f
 }
 
-func (f *fakeHook) hook() *serviceHook {
-	u, _ := url.Parse(f.server.URL + "/agent-vault/hook")
-	return &serviceHook{url: u, secret: []byte(testHookSecret)}
+// No rules, so it is asked about every request of the session, unless rules are given.
+func (f *fakeHook) hook(rules ...api.AgentVaultHookRule) *sessionHook {
+	name := "refund-gate"
+	return toSessionHook(&api.AgentVaultHook{ID: "hook-1", Name: &name, URL: f.server.URL + "/agent-vault/hook", Secret: testHookSecret,
+		Mode: "gate", Rules: rules})
 }
 
 func (f *fakeHook) calls() []hookHit {
@@ -181,7 +183,7 @@ func TestAHookCallIsResentWhenThePooledConnectionWasClosed(t *testing.T) {
 	}))
 	defer srv.Close()
 	u, _ := url.Parse(srv.URL)
-	hook := &serviceHook{url: u, secret: []byte(testHookSecret)}
+	hook := &sessionHook{url: u, secret: []byte(testHookSecret)}
 	client := newHookClient(nil)
 
 	for i := range 2 {
@@ -209,7 +211,7 @@ func TestAHookRedirectIsNotFollowed(t *testing.T) {
 	defer srv.Close()
 	u, _ := url.Parse(srv.URL + "/hook")
 
-	result := newHookClient(nil).ask(context.Background(), &serviceHook{url: u, secret: []byte(testHookSecret)}, testHookPayload())
+	result := newHookClient(nil).ask(context.Background(), &sessionHook{url: u, secret: []byte(testHookSecret)}, testHookPayload())
 	if result.Decision != hookFailed || result.Cause != hookCauseRedirect || followed {
 		t.Fatalf("outcome = %+v, followed = %v", result, followed)
 	}
@@ -223,7 +225,7 @@ func TestAHookRedirectToABadURLLogsNoTarget(t *testing.T) {
 	defer srv.Close()
 	u, _ := url.Parse(srv.URL + "/hook")
 
-	result := newHookClient(nil).ask(context.Background(), &serviceHook{url: u, secret: []byte(testHookSecret)}, testHookPayload())
+	result := newHookClient(nil).ask(context.Background(), &sessionHook{url: u, secret: []byte(testHookSecret)}, testHookPayload())
 	if result.Decision != hookFailed || result.Cause != hookCauseRedirect {
 		t.Fatalf("outcome = %+v (%v)", result, result.err)
 	}
@@ -317,7 +319,7 @@ func TestAHookInfisicalSentUnusableAlwaysFails(t *testing.T) {
 		{"://bad", testHookSecret},
 		{"https://hooks.example.com/x", ""},
 	} {
-		hook := toServiceHook(&api.AgentVaultHook{URL: wire.url, Secret: wire.secret})
+		hook := toSessionHook(&api.AgentVaultHook{URL: wire.url, Secret: wire.secret})
 		if hook == nil {
 			t.Fatalf("%+v mapped to no hook, which would skip it", wire)
 		}
@@ -326,7 +328,7 @@ func TestAHookInfisicalSentUnusableAlwaysFails(t *testing.T) {
 			t.Fatalf("%+v: outcome = %+v", wire, result)
 		}
 	}
-	if toServiceHook(nil) != nil {
+	if toSessionHook(nil) != nil {
 		t.Fatal("a service with no hook got one")
 	}
 }
@@ -340,7 +342,7 @@ func TestAFailedHookCallLogsNoPathOrQuery(t *testing.T) {
 	_ = ln.Close()
 	u, _ := url.Parse("http://" + addr + "/services/T123/tok-in-path?x=tok-in-query")
 
-	result := newHookClient(nil).ask(context.Background(), &serviceHook{url: u, secret: []byte(testHookSecret)}, testHookPayload())
+	result := newHookClient(nil).ask(context.Background(), &sessionHook{url: u, secret: []byte(testHookSecret)}, testHookPayload())
 	if result.Decision != hookFailed || result.Cause != hookCauseUnreachable {
 		t.Fatalf("outcome = %+v (%v)", result, result.err)
 	}
@@ -410,7 +412,7 @@ func TestAnHTTPSHookIsVerifiedAgainstTheTrustedRoots(t *testing.T) {
 	srv := httptest.NewTLSServer(answerHook(`{"decision":"allow"}`))
 	defer srv.Close()
 	u, _ := url.Parse(srv.URL)
-	hook := &serviceHook{url: u, secret: []byte(testHookSecret)}
+	hook := &sessionHook{url: u, secret: []byte(testHookSecret)}
 
 	if result := newHookClient(nil).ask(context.Background(), hook, testHookPayload()); result.Decision != hookFailed || result.Cause != hookCauseUnreachable {
 		t.Fatalf("an untrusted certificate gave %+v", result)
@@ -432,5 +434,110 @@ func TestTheSessionLogCopyOfAHookOutcomeLeavesOutTheMessage(t *testing.T) {
 	}
 	if (&hookOutcome{Decision: hookAllow}).sessionLogHook() != nil {
 		t.Fatal("an allowed call was recorded")
+	}
+}
+
+func TestTheHookMatcher(t *testing.T) {
+	httpSvc := &resolvedService{name: "github", kind: serviceKindHTTP}
+	mcpSvc := &resolvedService{name: "linear", kind: serviceKindMCP}
+	pgSvc := &resolvedService{name: "db", kind: serviceKindPostgres}
+	get := func(path string) *http.Request { return httptest.NewRequest(http.MethodGet, "https://h"+path, nil) }
+	post := func(path string) *http.Request {
+		return httptest.NewRequest(http.MethodPost, "https://h"+path, strings.NewReader("{}"))
+	}
+	calls := func(tools ...string) *hookPayloadMCP {
+		out := &hookPayloadMCP{Calls: []hookMCPCall{{Method: "initialize"}}, Parsed: true}
+		for _, tool := range tools {
+			out.Calls = append(out.Calls, hookMCPCall{Method: mcpMethodToolsCall, Tool: tool})
+		}
+		return out
+	}
+	withHeader := func(req *http.Request, name, value string) *http.Request {
+		req.Header.Set(name, value)
+		return req
+	}
+	rule := func(service string, methods, paths, tools []string) api.AgentVaultHookRule {
+		return api.AgentVaultHookRule{Service: service, Methods: methods, Paths: paths, Tools: tools}
+	}
+	list := func(values ...string) []string { return values }
+
+	for _, tc := range []struct {
+		name  string
+		rules []api.AgentVaultHookRule
+		svc   *resolvedService
+		req   *http.Request
+		mcp   *hookPayloadMCP
+		want  bool
+	}{
+		{"no rules picks every HTTP request", nil, httpSvc, get("/x"), nil, true},
+		{"no rules picks every MCP request", nil, mcpSvc, post("/mcp"), calls("a"), true},
+		{"no rules picks every connection", nil, pgSvc, nil, nil, true},
+		{"empty rules are no rules", []api.AgentVaultHookRule{}, httpSvc, get("/x"), nil, true},
+		{"service only", []api.AgentVaultHookRule{rule("github", nil, nil, nil)}, httpSvc, get("/x"), nil, true},
+		{"unknown name", []api.AgentVaultHookRule{rule("gitlab", nil, nil, nil)}, httpSvc, get("/x"), nil, false},
+		{"names compare exactly", []api.AgentVaultHookRule{rule("GitHub", nil, nil, nil)}, httpSvc, get("/x"), nil, false},
+		{"method in the set", []api.AgentVaultHookRule{rule("github", list("get", "PUT"), nil, nil)}, httpSvc, get("/x"), nil, true},
+		{"method not in the set", []api.AgentVaultHookRule{rule("github", list("PUT"), nil, nil)}, httpSvc, get("/x"), nil, false},
+		{"method override counts", []api.AgentVaultHookRule{rule("github", list("DELETE"), nil, nil)}, httpSvc,
+			withHeader(post("/x"), "X-HTTP-Method-Override", "delete"), nil, true},
+		{"path under a prefix", []api.AgentVaultHookRule{rule("github", nil, list("/repos/"), nil)}, httpSvc, get("/repos/a/b"), nil, true},
+		{"path equal to a prefix", []api.AgentVaultHookRule{rule("github", nil, list("/repos"), nil)}, httpSvc, get("/repos"), nil, true},
+		{"path sharing a prefix's letters", []api.AgentVaultHookRule{rule("github", nil, list("/repos"), nil)}, httpSvc, get("/repository"), nil, false},
+		{"path outside every prefix", []api.AgentVaultHookRule{rule("github", nil, list("/repos"), nil)}, httpSvc, get("/user"), nil, false},
+		{"an ambiguous path matches", []api.AgentVaultHookRule{rule("github", nil, list("/admin"), nil)}, httpSvc, get("/repos/..;/admin"), nil, true},
+		{"method and path both have to fit", []api.AgentVaultHookRule{rule("github", list("POST"), list("/repos"), nil)}, httpSvc, get("/repos/a"), nil, false},
+		{"another rule can pick it", []api.AgentVaultHookRule{rule("github", list("POST"), nil, nil), rule("github", nil, list("/repos"), nil)},
+			httpSvc, get("/repos/a"), nil, true},
+		{"an empty list doesn't narrow", []api.AgentVaultHookRule{rule("github", list(), list(), nil)}, httpSvc, get("/x"), nil, true},
+		{"tools on an HTTP service pick the whole service", []api.AgentVaultHookRule{rule("github", nil, nil, list("a"))}, httpSvc, get("/x"), nil, true},
+		{"a listed tool", []api.AgentVaultHookRule{rule("linear", nil, nil, list("delete_issue"))}, mcpSvc, post("/mcp"), calls("delete_issue"), true},
+		{"an unlisted tool", []api.AgentVaultHookRule{rule("linear", nil, nil, list("delete_issue"))}, mcpSvc, post("/mcp"), calls("create_issue"), false},
+		{"tools compare exactly", []api.AgentVaultHookRule{rule("linear", nil, nil, list("delete_issue"))}, mcpSvc, post("/mcp"), calls("Delete_Issue"), false},
+		{"a listed tool in a batch", []api.AgentVaultHookRule{rule("linear", nil, nil, list("delete_issue"))}, mcpSvc, post("/mcp"),
+			calls("create_issue", "delete_issue"), true},
+		{"a tools/call naming no tool", []api.AgentVaultHookRule{rule("linear", nil, nil, list("delete_issue"))}, mcpSvc, post("/mcp"), calls(""), true},
+		{"a tool named only in Mcp-Name", []api.AgentVaultHookRule{rule("linear", nil, nil, list("delete_issue"))}, mcpSvc,
+			withHeader(post("/mcp"), mcpNameHeader, "delete_issue"), calls("create_issue"), true},
+		{"an unparseable MCP body", []api.AgentVaultHookRule{rule("linear", nil, nil, list("delete_issue"))}, mcpSvc, post("/mcp"),
+			&hookPayloadMCP{Calls: []hookMCPCall{}}, true},
+		{"an MCP request with no body", []api.AgentVaultHookRule{rule("linear", nil, nil, list("delete_issue"))}, mcpSvc, get("/sse"), nil, false},
+		{"methods on an MCP service pick the whole service", []api.AgentVaultHookRule{rule("linear", list("DELETE"), list("/x"), nil)}, mcpSvc,
+			post("/mcp"), calls("a"), true},
+		{"native by name", []api.AgentVaultHookRule{rule("db", nil, nil, nil)}, pgSvc, nil, nil, true},
+		{"native ignores narrowing", []api.AgentVaultHookRule{rule("db", list("GET"), list("/x"), list("a"))}, pgSvc, nil, nil, true},
+		{"native under another name", []api.AgentVaultHookRule{rule("warehouse", nil, nil, nil)}, pgSvc, nil, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hook := toSessionHook(&api.AgentVaultHook{ID: "h", URL: "https://hook.example", Secret: "s", Rules: tc.rules})
+			if got := hook.matches(tc.svc, tc.req, tc.mcp); got != tc.want {
+				t.Fatalf("matches = %v, want %v", got, tc.want)
+			}
+			if tc.want && !hook.covers(tc.svc) {
+				t.Fatal("a hook that matches has to cover the service")
+			}
+		})
+	}
+
+	var none *sessionHook
+	if none.covers(httpSvc) || none.matches(httpSvc, get("/x"), nil) {
+		t.Fatal("a session with no hook matched")
+	}
+}
+
+func TestTheHookPayloadNamesTheHookAndTheSessionMetadata(t *testing.T) {
+	ps := &proxyServer{}
+	svc := &resolvedService{id: "svc-1", name: "github", kind: serviceKindHTTP}
+	session := &api.AgentVaultResolvedSession{Actor: api.AgentVaultSessionActor{Type: "user", ID: "u-1", Name: "Ana"},
+		Metadata: map[string]string{"ticket": "T-1"}}
+
+	inline := &sessionHook{id: "h-2"}
+	body, _ := encodeJSON(ps.newHookPayload(svc, cacheLookup{sessionID: "s1", session: session, hook: inline}))
+	if !bytes.Contains(body, []byte(`"hook":{"id":"h-2","name":null}`)) || !bytes.Contains(body, []byte(`"metadata":{"ticket":"T-1"}`)) {
+		t.Fatalf("payload = %s", body)
+	}
+
+	body, _ = encodeJSON(ps.newHookPayload(svc, cacheLookup{sessionID: "s1", hook: inline}))
+	if !bytes.Contains(body, []byte(`"metadata":{}`)) {
+		t.Fatalf("a session with no metadata should send an empty object: %s", body)
 	}
 }

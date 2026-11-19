@@ -152,8 +152,13 @@ func (u *mcpUpstream) host() string { return strings.TrimPrefix(u.server.URL, "h
 // for a host no service matches.
 func newMCPRecordingProxy(t *testing.T, up *mcpUpstream, services []*resolvedService) (*http.Client, *sessionLogRecorder) {
 	t.Helper()
+	return newHookedMCPRecordingProxy(t, up, services, nil)
+}
 
-	ps, client := newTLSProxy(t, up.server, grantingResolver{services: services})
+func newHookedMCPRecordingProxy(t *testing.T, up *mcpUpstream, services []*resolvedService, hook *sessionHook) (*http.Client, *sessionLogRecorder) {
+	t.Helper()
+
+	ps, client := newTLSProxy(t, up.server, grantingResolver{services: services, hook: hook})
 	ps.sessionLogs = newSessionLogRecorder("proxy-1", &fakeShipper{})
 	client.Transport.(*http.Transport).TLSClientConfig.RootCAs.AddCert(up.server.Certificate())
 	return client, ps.sessionLogs

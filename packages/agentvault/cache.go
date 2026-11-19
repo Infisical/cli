@@ -83,8 +83,6 @@ type resolvedService struct {
 	native *nativeTarget
 	// Some credential field comes from each member, so a rejection is theirs to fix rather than an admin's.
 	memberProvided bool
-	// Asked before the credential is attached. Nil when the service has none.
-	hook *serviceHook
 }
 
 // lastSeen and fetchedAt are wall-clock (Round(0)) so time asleep counts toward the grace and idle windows.
@@ -96,7 +94,9 @@ type sessionEntry struct {
 	services   []*resolvedService
 	sessionLog *sessionLogGrant
 	// What a hook is told about the session. Nil from servers that don't send it.
-	session   *api.AgentVaultResolvedSession
+	session *api.AgentVaultResolvedSession
+	// Asked before the credential is attached, for the traffic its rules pick. Nil when the session has none.
+	hook      *sessionHook
 	lastSeen  time.Time
 	fetchedAt time.Time
 	// Keyed by service ID. A poll whose resolve began before a swap can return the token that swap replaced,
@@ -285,6 +285,7 @@ type cacheLookup struct {
 	services   []*resolvedService
 	sessionLog *sessionLogGrant
 	session    *api.AgentVaultResolvedSession
+	hook       *sessionHook
 }
 
 func (c *sessionCache) lookup(sessionToken string, admit func() bool) (cacheLookup, error) {
@@ -303,7 +304,7 @@ func (c *sessionCache) lookup(sessionToken string, admit func() bool) (cacheLook
 			c.forgetLocked(key, false)
 		} else {
 			entry.lastSeen = time.Now().Round(0)
-			found := cacheLookup{sessionID: entry.sessionID, services: entry.services, sessionLog: entry.sessionLog, session: entry.session}
+			found := cacheLookup{sessionID: entry.sessionID, services: entry.services, sessionLog: entry.sessionLog, session: entry.session, hook: entry.hook}
 			c.mu.Unlock()
 			return found, nil
 		}
@@ -344,12 +345,13 @@ func (c *sessionCache) lookup(sessionToken string, admit func() bool) (cacheLook
 			services:   result.Services,
 			sessionLog: result.SessionLog,
 			session:    result.Session,
+			hook:       result.Hook,
 			lastSeen:   time.Now().Round(0),
 			fetchedAt:  time.Now().Round(0),
 		}
 		c.tokens[key] = sessionToken
 		c.applyNativeLocked(key, result.Services, result.ExpiresAt)
-		return cacheLookup{sessionID: result.SessionID, services: result.Services, sessionLog: result.SessionLog, session: result.Session}, nil
+		return cacheLookup{sessionID: result.SessionID, services: result.Services, sessionLog: result.SessionLog, session: result.Session, hook: result.Hook}, nil
 	})
 	if err != nil {
 		return cacheLookup{}, err
@@ -467,6 +469,7 @@ func (c *sessionCache) refreshOne(key, token string) {
 		entry.services = keepNewerSwaps(entry, result.Services, startGen)
 		entry.sessionLog = result.SessionLog
 		entry.session = result.Session
+		entry.hook = result.Hook
 		entry.fetchedAt = time.Now().Round(0)
 		c.applyNativeLocked(key, entry.services, entry.expiresAt)
 		return
@@ -479,6 +482,7 @@ func (c *sessionCache) refreshOne(key, token string) {
 			services:   result.Services,
 			sessionLog: result.SessionLog,
 			session:    result.Session,
+			hook:       result.Hook,
 			lastSeen:   time.Now().Round(0),
 			fetchedAt:  time.Now().Round(0),
 		}

@@ -49,10 +49,12 @@ func (s *resolvedService) allowsMethod(method string) bool {
 	return s.allowedMethods[strings.ToUpper(method)]
 }
 
-// Rails, Laravel and Symfony all honour these, so a POST carrying one performs the method it names. The
-// wire method is what the allowlist judged, so where there is an allowlist the header has to go.
+// Rails, Laravel and Symfony all honour these, so a POST carrying one performs the method it names.
+var methodOverrideHeaders = []string{"X-HTTP-Method-Override", "X-Method-Override", "X-HTTP-Method"}
+
+// The wire method is what the allowlist judged, so where there is an allowlist the header has to go.
 func stripMethodOverrideHeaders(header http.Header) {
-	for _, name := range []string{"X-HTTP-Method-Override", "X-Method-Override", "X-HTTP-Method"} {
+	for _, name := range methodOverrideHeaders {
 		header.Del(name)
 	}
 }

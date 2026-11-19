@@ -404,8 +404,8 @@ func marshalJSONRPC(v any) []byte {
 
 // Only a legacy SSE client reads a hook's refusal from its event stream; a Streamable HTTP client gets it as the
 // answer to its POST, so its streams need no watching.
-func watchesHookStream(svc *resolvedService, req *http.Request) bool {
-	return svc.hook != nil && !streamableHTTPClient(req)
+func watchesHookStream(hook *sessionHook, svc *resolvedService, req *http.Request) bool {
+	return hook.covers(svc) && !streamableHTTPClient(req)
 }
 
 func streamableHTTPClient(req *http.Request) bool {
@@ -429,7 +429,7 @@ func streamableHTTPClient(req *http.Request) bool {
 // agent's Accept-Encoding so Go decompresses the response first; a body compressed anyway, one over the cap,
 // and anything that does not parse pass through untouched. An event stream's filter is returned, so the
 // proxy can also send refusals on it. A nil allowlist hides nothing and only watches an event stream, for a
-// hooked service whose refusals have to reach it.
+// service the session's hook covers, whose refusals have to reach it.
 func hideUnlistedTools(resp *http.Response, allowed map[string]bool) *sseToolsFilter {
 	if resp.Body == nil || resp.Body == http.NoBody {
 		return nil

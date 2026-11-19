@@ -55,37 +55,171 @@ const (
 
 	hookDeniedRequestMessage    = "Your organization's hook refused this request."
 	hookDeniedConnectionMessage = "Your organization's hook refused this connection."
-	hookFailedRequestMessage    = "The hook server for this service didn't give a usable answer, so the request was not sent."
-	hookFailedConnectionMessage = "The hook server for this service didn't give a usable answer, so the connection was not opened."
+	hookFailedRequestMessage    = "This session's hook didn't give a usable answer, so the request was not sent."
+	hookFailedConnectionMessage = "This session's hook didn't give a usable answer, so the connection was not opened."
 	hookFailedConnectionNote    = "The hook didn't give a usable answer, so the connection wasn't opened."
 	hookDeniedConnectionNote    = "The hook refused this connection"
 )
 
 var (
-	errHookDenied = errors.New("the service's hook refused the request")
-	errHookFailed = errors.New("the service's hook didn't give a usable answer")
+	errHookDenied = errors.New("the session's hook refused the request")
+	errHookFailed = errors.New("the session's hook didn't give a usable answer")
 )
 
-type serviceHook struct {
+type sessionHook struct {
+	id string
+	// Nil for a hook sent inline with the session.
+	name *string
 	// Nil when the URL or secret Infisical sent can't be used, so every call fails rather than the hook being skipped.
 	url    *url.URL
 	secret []byte
+	// Keyed by service name. Nil when the hook has no rules, which sends it every request of the session.
+	rules map[string][]hookRule
 }
 
-func toServiceHook(wire *api.AgentVaultHook) *serviceHook {
+// A nil field doesn't narrow. A field that doesn't fit the service's type is ignored, so such a rule matches the
+// whole service: inline service names mean the type isn't known when the rule is saved, and more traffic reaching
+// the hook is the safe side. An empty list is nil for the same reason.
+type hookRule struct {
+	methods map[string]bool
+	paths   []string
+	tools   map[string]bool
+}
+
+// The mode is not kept: gate is the only one, and a mode this proxy doesn't know is treated as gate.
+func toSessionHook(wire *api.AgentVaultHook) *sessionHook {
 	if wire == nil {
 		return nil
 	}
-	hook := &serviceHook{secret: []byte(wire.Secret)}
+	hook := &sessionHook{id: wire.ID, name: wire.Name, secret: []byte(wire.Secret)}
 	parsed, err := url.Parse(wire.URL)
 	if err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" && len(hook.secret) > 0 {
 		hook.url = parsed
 	}
+	if len(wire.Rules) > 0 {
+		hook.rules = make(map[string][]hookRule, len(wire.Rules))
+		for _, rule := range wire.Rules {
+			hook.rules[rule.Service] = append(hook.rules[rule.Service], hookRule{
+				methods: toHookMethodSet(rule.Methods),
+				paths:   toHookPathPrefixes(rule.Paths),
+				tools:   toHookToolSet(rule.Tools),
+			})
+		}
+	}
 	return hook
 }
 
+func toHookMethodSet(methods []string) map[string]bool {
+	if len(methods) == 0 {
+		return nil
+	}
+	return toMethodSet(methods)
+}
+
+// A list with nothing usable in it is nil, unlike toPathPrefixes: for a hook, no restriction is the safe side.
+func toHookPathPrefixes(prefixes []string) []string {
+	var out []string
+	for _, prefix := range prefixes {
+		if prefix = normalizePathPrefix(prefix); prefix != "" {
+			out = append(out, prefix)
+		}
+	}
+	return out
+}
+
+func toHookToolSet(tools []string) map[string]bool {
+	if len(tools) == 0 {
+		return nil
+	}
+	return toToolSet(tools)
+}
+
+// Whether any request to svc can be asked about, before the request itself is read.
+func (h *sessionHook) covers(svc *resolvedService) bool {
+	if h == nil {
+		return false
+	}
+	if h.rules == nil {
+		return true
+	}
+	_, ok := h.rules[svc.name]
+	return ok
+}
+
+// req is nil for a database or SSH connection. mcp is the parsed body of an MCP request, nil when it has none.
+func (h *sessionHook) matches(svc *resolvedService, req *http.Request, mcp *hookPayloadMCP) bool {
+	if !h.covers(svc) {
+		return false
+	}
+	if h.rules == nil {
+		return true
+	}
+	for _, rule := range h.rules[svc.name] {
+		if rule.matches(svc.kind, req, mcp) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r hookRule) matches(kind string, req *http.Request, mcp *hookPayloadMCP) bool {
+	if req == nil || isNativeKind(kind) {
+		return true
+	}
+	if kind == serviceKindMCP {
+		return r.tools == nil || callsAnyTool(req, mcp, r.tools)
+	}
+	if r.methods != nil && !r.matchesMethod(req) {
+		return false
+	}
+	return r.paths == nil || hookPathMatches(requestPath(req), r.paths)
+}
+
+// An override header counts as the method, since a framework that honours it performs the method it names.
+func (r hookRule) matchesMethod(req *http.Request) bool {
+	if r.methods[strings.ToUpper(req.Method)] {
+		return true
+	}
+	for _, name := range methodOverrideHeaders {
+		for _, value := range req.Header.Values(name) {
+			if r.methods[strings.ToUpper(strings.TrimSpace(value))] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// The path the agent sent, before substitution. An ambiguous one matches, since the upstream may route it under a
+// listed prefix.
+func hookPathMatches(escaped string, prefixes []string) bool {
+	return isAmbiguousPath(escaped) || matchesPrefix(escaped, prefixes)
+}
+
+// A body that can't be parsed matches, and so does a call naming no tool, so a call can't get past the hook by
+// being unreadable. Mcp-Name counts too, since a gateway may route on it.
+func callsAnyTool(req *http.Request, mcp *hookPayloadMCP, tools map[string]bool) bool {
+	for _, name := range req.Header.Values(mcpNameHeader) {
+		if tools[name] {
+			return true
+		}
+	}
+	if mcp == nil {
+		return false
+	}
+	if !mcp.Parsed {
+		return true
+	}
+	for _, call := range mcp.Calls {
+		if call.Method == mcpMethodToolsCall && (call.Tool == "" || tools[call.Tool]) {
+			return true
+		}
+	}
+	return false
+}
+
 // Only the scheme and host are ever logged: a hook's path can carry a token.
-func (h *serviceHook) origin() string {
+func (h *sessionHook) origin() string {
 	if h.url == nil {
 		return ""
 	}
@@ -135,6 +269,7 @@ type hookPayload struct {
 	Version    string                 `json:"version"`
 	DeliveryID string                 `json:"deliveryId"`
 	Proxy      hookPayloadProxy       `json:"proxy"`
+	Hook       hookPayloadHook        `json:"hook"`
 	Session    hookPayloadSession     `json:"session"`
 	Service    hookPayloadService     `json:"service"`
 	Request    *hookPayloadRequest    `json:"request"`
@@ -147,11 +282,17 @@ type hookPayloadProxy struct {
 	Version string `json:"version"`
 }
 
+type hookPayloadHook struct {
+	ID   string  `json:"id"`
+	Name *string `json:"name"`
+}
+
 type hookPayloadSession struct {
 	ID         string                           `json:"id"`
 	Label      *string                          `json:"label"`
 	Actor      *api.AgentVaultSessionActor      `json:"actor"`
 	OnBehalfOf *api.AgentVaultSessionOnBehalfOf `json:"onBehalfOf"`
+	Metadata   map[string]string                `json:"metadata"`
 }
 
 type hookPayloadService struct {
@@ -231,12 +372,19 @@ func (ps *proxyServer) newHookPayload(svc *resolvedService, found cacheLookup) h
 	payload := hookPayload{
 		Version: hookPayloadVersion,
 		Proxy:   hookPayloadProxy{ID: ps.opts.ProxyID, Version: util.CLI_VERSION},
-		Session: hookPayloadSession{ID: found.sessionID},
+		// Always an object, so a hook server can read a key without first checking for null.
+		Session: hookPayloadSession{ID: found.sessionID, Metadata: map[string]string{}},
 		Service: hookPayloadService{ID: svc.id, Name: svc.name, Type: toServiceKind(svc.kind)},
+	}
+	if hook := found.hook; hook != nil {
+		payload.Hook = hookPayloadHook{ID: hook.id, Name: hook.name}
 	}
 	if session := found.session; session != nil {
 		actor := session.Actor
 		payload.Session.Label, payload.Session.Actor, payload.Session.OnBehalfOf = session.Label, &actor, session.OnBehalfOf
+		if session.Metadata != nil {
+			payload.Session.Metadata = session.Metadata
+		}
 	}
 	if svc.accessBundleID != "" || svc.accessBundleName != "" {
 		payload.Service.AccessBundle = &hookPayloadBundle{ID: svc.accessBundleID, Name: svc.accessBundleName}
@@ -257,7 +405,7 @@ func signHook(secret []byte, id, timestamp string, body []byte) string {
 
 // ask never returns nil, and anything but a well-formed allow or deny is a failure, so a hook can only let a
 // request through by saying so.
-func (c *hookClient) ask(parent context.Context, hook *serviceHook, payload *hookPayload) *hookOutcome {
+func (c *hookClient) ask(parent context.Context, hook *sessionHook, payload *hookPayload) *hookOutcome {
 	start := time.Now()
 	id, err := uuid.NewV7()
 	if err != nil {
@@ -463,14 +611,33 @@ func hookMCPOf(prefix []byte, truncated bool, header http.Header) (*hookPayloadM
 }
 
 // askHook runs after the proxy's own checks and before substitutions, custom headers and the credential, so the
-// hook judges what the agent sent and never sees a value Infisical holds.
+// hook judges what the agent sent and never sees a value Infisical holds. A request the session hook's rules don't
+// pick is let through without asking.
 func (ps *proxyServer) askHook(req *http.Request, t tunnel, svc *resolvedService, found cacheLookup, outcome *forwardOutcome) error {
+	hook := found.hook
+	// Judged before the body is read, which only an MCP tool rule needs.
+	if svc.kind != serviceKindMCP && !hook.matches(svc, req, nil) {
+		return nil
+	}
 	prefix, truncated, err := hookBodyPrefix(req, maxHookBodyPrefix)
 	if err != nil {
 		return err
 	}
+	var mcp *hookPayloadMCP
+	var messages []jsonrpcMessage
+	if svc.kind == serviceKindMCP {
+		mcp, messages = hookMCPOf(prefix, truncated, req.Header)
+		inspected := mcp
+		if len(prefix) == 0 {
+			inspected = nil
+		}
+		if !hook.matches(svc, req, inspected) {
+			return nil
+		}
+	}
 	body, encoding := hookBodyText(prefix, truncated, req.Header)
 	payload := ps.newHookPayload(svc, found)
+	payload.MCP = mcp
 	payload.Request = &hookPayloadRequest{
 		Method:        req.Method,
 		Scheme:        t.scheme,
@@ -483,12 +650,8 @@ func (ps *proxyServer) askHook(req *http.Request, t tunnel, svc *resolvedService
 		BodyEncoding:  encoding,
 		BodyTruncated: truncated,
 	}
-	var messages []jsonrpcMessage
-	if svc.kind == serviceKindMCP {
-		payload.MCP, messages = hookMCPOf(prefix, truncated, req.Header)
-	}
 
-	result := sharedHookClient().ask(req.Context(), svc.hook, &payload)
+	result := sharedHookClient().ask(req.Context(), hook, &payload)
 	outcome.hook = result
 	if result.Decision == hookAllow {
 		return nil
@@ -524,7 +687,7 @@ func (ps *proxyServer) askNativeHook(ctx context.Context, svc *resolvedService, 
 		Port:     strconv.Itoa(svc.native.port),
 		Database: svc.native.database,
 	}
-	return sharedHookClient().ask(ctx, svc.hook, &payload)
+	return sharedHookClient().ask(ctx, found.hook, &payload)
 }
 
 func nativeHookRefusal(result *hookOutcome) nativeRefusal {

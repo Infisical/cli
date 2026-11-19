@@ -18,6 +18,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -30,10 +31,13 @@ type echoed struct {
 	Body    string              `json:"body"`
 }
 
-type fixedResolver struct{ services []*resolvedService }
+type fixedResolver struct {
+	services []*resolvedService
+	hook     *sessionHook
+}
 
 func (r fixedResolver) resolve(string, *sessionLogGrant) (*resolveResult, error) {
-	return &resolveResult{SessionID: "s1", Services: r.services}, nil
+	return &resolveResult{SessionID: "s1", Services: r.services, Hook: r.hook}, nil
 }
 
 // The whole path an agent's request takes: CONNECT, TLS terminated by the proxy's own CA, policy and
@@ -503,9 +507,9 @@ func TestAnInjectedMethodOverrideCannotOutrankTheAllowlist(t *testing.T) {
 	}
 }
 
-// An echoing TLS upstream that counts what reaches it, behind a proxy whose one service has a hook and carries a
+// An echoing TLS upstream that counts what reaches it, behind a proxy whose session has a hook and whose one service carries a
 // credential, a custom header and a substitution, none of which the hook may see.
-func newHookedPolicyFixture(t *testing.T, fake *fakeHook) (*proxyServer, *http.Client, string, *atomic.Int64) {
+func newHookedPolicyFixture(t *testing.T, fake *fakeHook, rules ...api.AgentVaultHookRule) (*proxyServer, *http.Client, string, *atomic.Int64) {
 	t.Helper()
 	hits := &atomic.Int64{}
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -521,9 +525,8 @@ func newHookedPolicyFixture(t *testing.T, fake *fakeHook) (*proxyServer, *http.C
 		[]substitution{{placeholder: "{{KEY}}", surfaces: map[string]bool{surfaceBody: true, surfaceHeader: true}, value: []byte("substituted-value-secret")}})
 	svc.id, svc.accessBundleID = "svc-1", "bundle-1"
 	svc.credential = credential{kind: credentialBearer, headerName: "Authorization", headerPrefix: "Bearer", value: []byte("credential-value-secret")}
-	svc.hook = fake.hook()
 
-	ps, client := newTLSProxy(t, upstream, grantingResolver{services: []*resolvedService{svc}})
+	ps, client := newTLSProxy(t, upstream, grantingResolver{services: []*resolvedService{svc}, hook: fake.hook(rules...)})
 	ps.opts.ProxyID = "proxy-1"
 	ps.sessionLogs = newSessionLogRecorder("proxy-1", &fakeShipper{})
 	ps.usage = newUsageReporter((&recordingSender{}).send, (&recordingSender{}).send)
@@ -580,7 +583,8 @@ func TestAnAllowedRequestIsSentWithItsCredentialAndTheHookSawOnlyTheAgentsReques
 	if h := p.Request.Headers; strings.Join(h["x-agent"], ",") != "a,b" || h["x-key"][0] != "{{KEY}}" || h["proxy-authorization"] != nil || h["authorization"] != nil || h["x-tenant"] != nil {
 		t.Fatalf("headers = %v", h)
 	}
-	if p.Version != "1" || p.Proxy.ID != "proxy-1" || p.Session.ID != "s1" || p.MCP != nil || p.Connection != nil {
+	if p.Version != "1" || p.Proxy.ID != "proxy-1" || p.Session.ID != "s1" || p.Session.Metadata == nil || p.MCP != nil || p.Connection != nil ||
+		p.Hook.ID != "hook-1" || p.Hook.Name == nil || *p.Hook.Name != "refund-gate" {
 		t.Fatalf("payload = %s", hit.body)
 	}
 	if p.Service != (hookPayloadService{ID: "svc-1", Name: "github", Type: "http", AccessBundle: p.Service.AccessBundle}) ||
@@ -713,5 +717,49 @@ func TestTheProxysOwnRefusalsComeBeforeTheHook(t *testing.T) {
 	}
 	if got := len(fake.calls()); got != 0 {
 		t.Fatalf("the hook was asked about a request the policy refused (%d calls)", got)
+	}
+}
+
+func TestOnlyTheRequestsTheHookRulesPickAskTheHook(t *testing.T) {
+	fake := newFakeHook(t, answerHook(`{"decision":"deny","message":"Ask Ana first."}`))
+	_, client, host, hits := newHookedPolicyFixture(t, fake,
+		api.AgentVaultHookRule{Service: "github", Methods: []string{"post"}, Paths: []string{"/v1/refunds/"}})
+
+	for _, tc := range []struct {
+		method, path string
+		header       http.Header
+		asked        bool
+	}{
+		{http.MethodGet, "/v1/refunds/1", nil, false},
+		{http.MethodPost, "/v1/charges", nil, false},
+		{http.MethodPost, "/v1/refunds/1", nil, true},
+		// The path the agent sent, before {{KEY}} is substituted.
+		{http.MethodPost, "/v1/refunds/{{KEY}}", nil, true},
+		{http.MethodPut, "/v1/refunds/1", http.Header{"X-Http-Method-Override": {"POST"}}, true},
+	} {
+		before := len(fake.calls())
+		resp, body := doHooked(t, client, tc.method, "https://"+host+tc.path, nil, tc.header)
+		asked := len(fake.calls()) > before
+		if asked != tc.asked {
+			t.Fatalf("%s %s: asked = %v, want %v", tc.method, tc.path, asked, tc.asked)
+		}
+		if asked && resp.StatusCode != http.StatusForbidden || !asked && resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s %s: status %d: %s", tc.method, tc.path, resp.StatusCode, body)
+		}
+	}
+	if got := hits.Load(); got != 2 {
+		t.Fatalf("the upstream got %d requests, want the 2 the rules leave out", got)
+	}
+}
+
+func TestAHookWhoseRulesNameAnotherServiceIsNotAsked(t *testing.T) {
+	fake := newFakeHook(t, answerHook(`{"decision":"deny"}`))
+	_, client, host, hits := newHookedPolicyFixture(t, fake, api.AgentVaultHookRule{Service: "stripe"})
+
+	if resp, body := doHooked(t, client, http.MethodPost, "https://"+host+"/v1/refunds", nil, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	}
+	if len(fake.calls()) != 0 || hits.Load() != 1 {
+		t.Fatalf("hook calls %d, upstream hits %d", len(fake.calls()), hits.Load())
 	}
 }

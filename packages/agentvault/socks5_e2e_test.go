@@ -887,8 +887,7 @@ func TestTheSocks5DoorAsksTheHook(t *testing.T) {
 	var f *socks5Fixture
 	f = newSocks5Fixture(t, resolverFunc(func() (*resolveResult, error) {
 		svc := bearerService("127.0.0.1:" + strconv.Itoa(int(f.upstreamPort(t))))
-		svc.hook = fake.hook()
-		return &resolveResult{SessionID: "s1", Services: []*resolvedService{svc}}, nil
+		return &resolveResult{SessionID: "s1", Services: []*resolvedService{svc}, Hook: fake.hook()}, nil
 	}), nil)
 
 	status, body := f.get(t, "127.0.0.1", f.upstreamPort(t))

@@ -125,13 +125,26 @@ type AgentVaultService struct {
 	MemberProvided bool `json:"memberProvided"`
 	// Nil for a service sent inline with the session.
 	AccessBundleID *string `json:"accessBundleId"`
-	// Asked before each request, or each database or SSH connection. Nil when the service has none.
-	Hook *AgentVaultHook `json:"hook"`
 }
 
+// The session's hook, asked before each request or database or SSH connection its rules pick.
 type AgentVaultHook struct {
-	URL    string `json:"url"`
-	Secret string `json:"secret"`
+	ID string `json:"id"`
+	// Nil for a hook sent inline with the session.
+	Name   *string `json:"name"`
+	URL    string  `json:"url"`
+	Secret string  `json:"secret"`
+	Mode   string  `json:"mode"`
+	// Empty means every request of the session goes to the hook.
+	Rules []AgentVaultHookRule `json:"rules"`
+}
+
+// Picks a service by name, optionally narrowed by HTTP methods and path prefixes, or by MCP tools.
+type AgentVaultHookRule struct {
+	Service string   `json:"service"`
+	Methods []string `json:"methods"`
+	Paths   []string `json:"paths"`
+	Tools   []string `json:"tools"`
 }
 
 // Who the session is for, as Infisical recorded it when the session was created. Older servers never send it.
@@ -139,6 +152,7 @@ type AgentVaultResolvedSession struct {
 	Label      *string                      `json:"label"`
 	Actor      AgentVaultSessionActor       `json:"actor"`
 	OnBehalfOf *AgentVaultSessionOnBehalfOf `json:"onBehalfOf"`
+	Metadata   map[string]string            `json:"metadata"`
 }
 
 type AgentVaultSessionActor struct {
@@ -184,6 +198,8 @@ type ResolveAgentVaultSessionResponse struct {
 	Services    []AgentVaultService        `json:"services"`
 	SessionLogs AgentVaultSessionLogGrant  `json:"sessionLogs"`
 	Session     *AgentVaultResolvedSession `json:"session"`
+	// Nil when the session has no hook.
+	Hook *AgentVaultHook `json:"hook"`
 }
 
 func CallResolveAgentVaultSession(httpClient *resty.Client, sessionToken string, request ResolveAgentVaultSessionRequest) (ResolveAgentVaultSessionResponse, error) {

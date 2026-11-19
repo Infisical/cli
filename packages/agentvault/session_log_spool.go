@@ -32,7 +32,7 @@ type sessionLogRecord struct {
 	ServiceType *string       `json:"serviceType"`
 	MCP         *mcpDetail    `json:"mcp,omitempty"`
 	Native      *nativeDetail `json:"native,omitempty"`
-	// Set when the service's hook refused the request or failed to answer. Never the payload sent to it.
+	// Set when the session's hook refused the request or failed to answer. Never the payload sent to it.
 	Hook *hookOutcome `json:"hook,omitempty"`
 
 	at time.Time

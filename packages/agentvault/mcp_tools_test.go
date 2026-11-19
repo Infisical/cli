@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
 )
 
@@ -1009,17 +1010,16 @@ func TestARepeatedEndpointKeepsOneRegistration(t *testing.T) {
 	}
 }
 
-func hookedMCPService(host string, hook *serviceHook) *resolvedService {
+func hookedMCPService(host string) *resolvedService {
 	svc := mcpService(host)
 	svc.name = "github-mcp"
-	svc.hook = hook
 	return svc
 }
 
 func TestEveryMCPRequestAsksTheHook(t *testing.T) {
 	fake := newFakeHook(t, answerHook(`{"decision":"allow"}`))
 	up := newMCPUpstream(t)
-	client, _ := newMCPRecordingProxy(t, up, []*resolvedService{hookedMCPService(up.host(), fake.hook())})
+	client, _ := newHookedMCPRecordingProxy(t, up, []*resolvedService{hookedMCPService(up.host())}, fake.hook())
 
 	for _, body := range []string{
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,
@@ -1046,7 +1046,7 @@ func TestEveryMCPRequestAsksTheHook(t *testing.T) {
 func TestAHookDenialOfAToolCallIsAToolErrorResult(t *testing.T) {
 	fake := newFakeHook(t, answerHook(`{"decision":"deny","message":"Ask Ana first.","reason":"needs approval"}`))
 	up := newMCPUpstream(t)
-	client, log := newMCPRecordingProxy(t, up, []*resolvedService{hookedMCPService(up.host(), fake.hook())})
+	client, log := newHookedMCPRecordingProxy(t, up, []*resolvedService{hookedMCPService(up.host())}, fake.hook())
 
 	body := `{"jsonrpc":"2.0","id":"abc","method":"tools/call","params":{"name":"merge_pull_request","arguments":{}}}`
 	res := proxiedPost(t, client, up.server.URL+"/mcp", "application/json", body, http.Header{"Accept": {streamableAccept}})
@@ -1070,7 +1070,7 @@ func TestAHookDenialOfAToolCallIsAToolErrorResult(t *testing.T) {
 func TestAHookFailureOnAnotherMCPRequestIsAJSONRPCError(t *testing.T) {
 	fake := newFakeHook(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) })
 	up := newMCPUpstream(t)
-	client, log := newMCPRecordingProxy(t, up, []*resolvedService{hookedMCPService(up.host(), fake.hook())})
+	client, log := newHookedMCPRecordingProxy(t, up, []*resolvedService{hookedMCPService(up.host())}, fake.hook())
 
 	res := proxiedPost(t, client, up.server.URL+"/mcp", "application/json", `{"jsonrpc":"2.0","id":7,"method":"tools/list"}`, http.Header{"Accept": {streamableAccept}})
 	assertUpstreamSawNothing(t, up)
@@ -1089,7 +1089,7 @@ func TestAHookFailureOnAnotherMCPRequestIsAJSONRPCError(t *testing.T) {
 func TestAHookRefusalAnswersEveryIDInABatch(t *testing.T) {
 	fake := newFakeHook(t, answerHook(`{"decision":"deny","message":"no"}`))
 	up := newMCPUpstream(t)
-	client, _ := newMCPRecordingProxy(t, up, []*resolvedService{hookedMCPService(up.host(), fake.hook())})
+	client, _ := newHookedMCPRecordingProxy(t, up, []*resolvedService{hookedMCPService(up.host())}, fake.hook())
 
 	batch := `[{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"a"}},{"jsonrpc":"2.0","id":2,"method":"tools/list"},{"jsonrpc":"2.0","method":"notifications/initialized"}]`
 	res := proxiedPost(t, client, up.server.URL+"/mcp", "application/json", batch, http.Header{"Accept": {streamableAccept}})
@@ -1176,7 +1176,7 @@ func TestAHookRefusedBatchGivesTheHooksTextToTheFirstToolCall(t *testing.T) {
 func TestAnMCPHookFailureTellsTheClientWhenToRetry(t *testing.T) {
 	fake := newFakeHook(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) })
 	up := newMCPUpstream(t)
-	client, _ := newMCPRecordingProxy(t, up, []*resolvedService{hookedMCPService(up.host(), fake.hook())})
+	client, _ := newHookedMCPRecordingProxy(t, up, []*resolvedService{hookedMCPService(up.host())}, fake.hook())
 
 	res := proxiedPost(t, client, up.server.URL+"/mcp", "application/json", `{"jsonrpc":`, http.Header{"Accept": {streamableAccept}})
 	assertUpstreamSawNothing(t, up)
@@ -1201,9 +1201,9 @@ func TestAHookRefusalReachesALegacySSEStreamWhenTheServiceSetsAccept(t *testing.
 	})
 	upstream, _ := newLegacySSEUpstream(t)
 	host := strings.TrimPrefix(upstream.URL, "https://")
-	svc := hookedMCPService(host, fake.hook())
+	svc := hookedMCPService(host)
 	svc.customHeaders = []customHeader{{name: "Accept", value: []byte(streamableAccept)}}
-	_, client := newTLSProxy(t, upstream, fixedResolver{services: []*resolvedService{svc}})
+	_, client := newTLSProxy(t, upstream, fixedResolver{services: []*resolvedService{svc}, hook: fake.hook()})
 
 	resp, err := client.Get(upstream.URL + "/sse")
 	if err != nil {
@@ -1243,7 +1243,7 @@ func TestAHookedMCPServiceWithoutAnAllowlistDropsAcceptEncodingOnlyForLegacyClie
 			}))
 			t.Cleanup(upstream.Close)
 			host := strings.TrimPrefix(upstream.URL, "https://")
-			_, client := newTLSProxy(t, upstream, fixedResolver{services: []*resolvedService{hookedMCPService(host, fake.hook())}})
+			_, client := newTLSProxy(t, upstream, fixedResolver{services: []*resolvedService{hookedMCPService(host)}, hook: fake.hook()})
 
 			res := proxiedPost(t, client, upstream.URL+"/mcp", "application/json", `{"jsonrpc":"2.0","id":3,"method":"tools/list"}`,
 				http.Header{"Accept": {tc.accept}, "Accept-Encoding": {"br, deflate"}})
@@ -1270,7 +1270,7 @@ func TestAHookRefusalReachesALegacySSEStream(t *testing.T) {
 	})
 	upstream, posts := newLegacySSEUpstream(t)
 	host := strings.TrimPrefix(upstream.URL, "https://")
-	_, client := newTLSProxy(t, upstream, fixedResolver{services: []*resolvedService{hookedMCPService(host, fake.hook())}})
+	_, client := newTLSProxy(t, upstream, fixedResolver{services: []*resolvedService{hookedMCPService(host)}, hook: fake.hook()})
 
 	resp, err := client.Get(upstream.URL + "/sse")
 	if err != nil {
@@ -1294,5 +1294,39 @@ func TestAHookRefusalReachesALegacySSEStream(t *testing.T) {
 	case got := <-posts:
 		t.Fatalf("the upstream got a refused call: %s", got)
 	default:
+	}
+}
+
+func TestAToolRuleAsksTheHookOnlyAboutThoseTools(t *testing.T) {
+	fake := newFakeHook(t, answerHook(`{"decision":"deny","message":"Ask Ana first."}`))
+	up := newMCPUpstream(t)
+	hook := fake.hook(api.AgentVaultHookRule{Service: "github-mcp", Tools: []string{"delete_issue"}})
+	client, _ := newHookedMCPRecordingProxy(t, up, []*resolvedService{hookedMCPService(up.host())}, hook)
+
+	for _, tc := range []struct {
+		name, body string
+		asked      bool
+	}{
+		{"another method", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`, false},
+		{"another tool", `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"create_issue"}}`, false},
+		{"the tool", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"delete_issue"}}`, true},
+		{"the tool in a batch", `[{"jsonrpc":"2.0","id":4,"method":"tools/list"},{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"delete_issue"}}]`, true},
+		{"a body that doesn't parse", `{"jsonrpc":"2.0","id":6,"method":`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := len(fake.calls())
+			proxiedPost(t, client, up.server.URL+"/mcp", "application/json", tc.body, http.Header{"Accept": {streamableAccept}})
+			if asked := len(fake.calls()) > before; asked != tc.asked {
+				t.Fatalf("asked = %v, want %v", asked, tc.asked)
+			}
+			if tc.asked {
+				assertUpstreamSawNothing(t, up)
+				return
+			}
+			if got := <-up.bodies; string(got) != tc.body {
+				t.Fatalf("upstream got %s", got)
+			}
+			<-up.auth
+		})
 	}
 }
