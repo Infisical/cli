@@ -52,6 +52,9 @@ var errorCodes = []string{
 	errCodeSessionTokenRequired, errCodeProxyRequired, errCodeProxyUnreachable, errCodeProxyUntrusted,
 	errCodeProxyNotSupported, errCodeServiceNotFound, errCodeNoServices, errCodeServiceRefused,
 	errCodeSessionInvalid, errCodeLocalPortUnavailable,
+	errCodeAccountNotFound, errCodeApprovalPending, errCodeApprovalRequired, errCodeApprovalNotConfigured,
+	errCodeReasonRequired, errCodeMFARequired, errCodeSessionExpired, errCodeCommandNotSupported,
+	errCodeCommandRemoved,
 }
 
 const secretsManagerPrefix = "infisical " + secretsManagerCommandName

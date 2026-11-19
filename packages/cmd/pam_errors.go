@@ -1,0 +1,144 @@
+package cmd
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/Infisical/infisical-merge/packages/util"
+)
+
+const (
+	errCodeAccountNotFound       = "account_not_found"
+	errCodeApprovalPending       = "approval_pending"
+	errCodeApprovalRequired      = "approval_required"
+	errCodeApprovalNotConfigured = "approval_not_configured"
+	errCodeReasonRequired        = "reason_required"
+	errCodeMFARequired           = "mfa_required"
+	errCodeSessionExpired        = "session_expired"
+	errCodeCommandNotSupported   = "command_not_supported"
+	errCodeCommandRemoved        = "command_removed"
+)
+
+const pamPrefix = "infisical pam"
+
+// pamAccountArg returns path as it can safely appear in a suggested command.
+func pamAccountArg(path string) string {
+	trimmed := strings.Trim(strings.TrimSpace(path), "/")
+	if util.SuggestedValue("/"+trimmed, "x") == "/"+trimmed && strings.Contains(trimmed, "/") {
+		return trimmed
+	}
+	return "<folder/account>"
+}
+
+// pamAccessInvocation is what the caller ran, rebuilt for a suggestion. The command after '--' is
+// never echoed: it is arbitrary text.
+type pamAccessInvocation struct {
+	Path       string
+	HasCommand bool
+}
+
+func (i pamAccessInvocation) accessCommand(extra string) string {
+	line := pamPrefix + " access " + pamAccountArg(i.Path)
+	if extra != "" {
+		line += " " + extra
+	}
+	if i.HasCommand {
+		line += " -- <command>"
+	}
+	return line
+}
+
+func (i pamAccessInvocation) statusStep() util.NextStep {
+	return util.NextStep{Purpose: "To check whether access was approved", Command: pamPrefix + " accounts get " + pamAccountArg(i.Path)}
+}
+
+func errPAMAuthRequired(cause error) *util.CLIError {
+	return &util.CLIError{Code: errCodeAuthRequired, Cause: cause,
+		Message: "You're not logged in, or your login has expired. A person has to log in; an agent can't do it for them.",
+		Next:    []util.NextStep{{Purpose: "To log in", Command: "infisical login"}}}
+}
+
+func errPAMAccountNotFound(path string, cause error) *util.CLIError {
+	return &util.CLIError{Code: errCodeAccountNotFound, Cause: cause,
+		Message: fmt.Sprintf("PAM account %s doesn't exist, or you don't have access to it.", pamAccountArg(path)),
+		Next:    []util.NextStep{{Purpose: "To list the accounts you can access", Command: pamPrefix + " accounts get"}}}
+}
+
+func errPAMApprovalPending(invocation pamAccessInvocation, requestID string, regrant bool) *util.CLIError {
+	what := "needs approval"
+	if regrant {
+		what = "had its approved access expire, and needs approval again"
+	}
+	filed := "An access request is waiting for a person to approve it in Infisical"
+	if requestID != "" {
+		filed = fmt.Sprintf("Access request %s was filed and is waiting for a person to approve it in Infisical", quoted(requestID, "request ID"))
+	}
+	return &util.CLIError{Code: errCodeApprovalPending,
+		Message: fmt.Sprintf("%s %s. %s. Don't look for another way to reach this account.", pamAccountArg(invocation.Path), what, filed),
+		Next:    []util.NextStep{invocation.statusStep(), {Purpose: "To connect once it's approved", Command: invocation.accessCommand("")}}}
+}
+
+func errPAMApprovalRequired(invocation pamAccessInvocation) *util.CLIError {
+	return &util.CLIError{Code: errCodeApprovalRequired,
+		Message: fmt.Sprintf("%s needs approval, and --no-approval-request was set, so no access request was filed.", pamAccountArg(invocation.Path)),
+		Next:    []util.NextStep{{Purpose: "To file an access request", Command: invocation.accessCommand("--reason \"<reason>\"")}}}
+}
+
+func errPAMApprovalNotConfigured(invocation pamAccessInvocation) *util.CLIError {
+	return &util.CLIError{Code: errCodeApprovalNotConfigured,
+		Message: fmt.Sprintf("%s needs approval, but its folder has no approvers, so nobody can approve a request. Ask a folder admin to add approvers on the folder's Approvals tab.", pamAccountArg(invocation.Path))}
+}
+
+func errPAMReasonRequired(invocation pamAccessInvocation, forRequest bool) *util.CLIError {
+	message := fmt.Sprintf("%s requires a reason, which is recorded for audit.", pamAccountArg(invocation.Path))
+	if forRequest {
+		message = fmt.Sprintf("%s needs approval, and its access request requires a reason. No request was filed.", pamAccountArg(invocation.Path))
+	}
+	return &util.CLIError{Code: errCodeReasonRequired, Message: message,
+		Next: []util.NextStep{{Purpose: "To try again with a reason", Command: invocation.accessCommand("--reason \"<reason>\"")}}}
+}
+
+func errPAMMFARequired(invocation pamAccessInvocation, url, mfaSessionID string) *util.CLIError {
+	return &util.CLIError{Code: errCodeMFARequired,
+		Message: fmt.Sprintf("%s requires MFA. Ask the person you're working for to open %s and complete verification, then run the command again with --mfa-session.", pamAccountArg(invocation.Path), url),
+		Next:    []util.NextStep{{Purpose: "To connect after verification", Command: invocation.accessCommand("--mfa-session " + util.SuggestedValue(mfaSessionID, "mfa-session-id"))}}}
+}
+
+func errPAMSessionExpired(invocation pamAccessInvocation, duration time.Duration) *util.CLIError {
+	return &util.CLIError{Code: errCodeSessionExpired,
+		Message: fmt.Sprintf("The PAM session for %s ended after %s, before the command finished, so the command was stopped.", pamAccountArg(invocation.Path), duration),
+		Next:    []util.NextStep{{Purpose: "To run it again with a longer session", Command: invocation.accessCommand("--duration 2h")}}}
+}
+
+func errPAMCommandNotSupported(invocation pamAccessInvocation, typeLabel string) *util.CLIError {
+	return &util.CLIError{Code: errCodeCommandNotSupported,
+		Message: fmt.Sprintf("%s is a %s account, which can't run a command after '--'. Drop the '--' to start an interactive session instead.", pamAccountArg(invocation.Path), typeLabel),
+		Next:    []util.NextStep{{Purpose: "To start a session", Command: pamPrefix + " access " + pamAccountArg(invocation.Path)}}}
+}
+
+func errPAMAgenticRemoved() *util.CLIError {
+	return &util.CLIError{Code: errCodeCommandRemoved,
+		Message: "infisical pam agentic access was removed. Agents now run the PAM commands directly: list accounts, then run one command against an account.",
+		Next: []util.NextStep{
+			{Purpose: "To list the accounts you can access", Command: pamPrefix + " accounts get"},
+			{Purpose: "To run a command against one", Command: pamPrefix + " access <folder/account> -- <command>"},
+		}}
+}
+
+func errPAMInvalidDuration(value string) *util.CLIError {
+	return &util.CLIError{Code: errCodeInvalidFlagValue,
+		Message: fmt.Sprintf("--duration %s isn't a positive duration: use a format like 30m, 1h or 2h30m.", quoted(value, "duration"))}
+}
+
+func errPAMServiceToken() *util.CLIError {
+	return &util.CLIError{Code: errCodeServiceTokenUnsupported,
+		Message: "PAM doesn't accept service tokens. Use a machine identity access token or credentials, or log in as a user.",
+		Next:    []util.NextStep{{Purpose: "To log in as a user", Command: "infisical login"}}}
+}
+
+func errPAMPermissionDenied(cause error) *util.CLIError {
+	return &util.CLIError{Code: errCodePermissionDenied, Cause: cause,
+		Message: "You don't have permission to launch sessions on this account. Ask a folder admin for the Connector role on it.",
+		Next:    []util.NextStep{{Purpose: "To list the accounts you can access", Command: pamPrefix + " accounts get"}}}
+}

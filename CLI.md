@@ -96,6 +96,15 @@ With `-o json`, the same error is JSON on stderr:
 | `service_refused` | The proxy refused a database or SSH service, for example because personal values aren't set or the stored SSH key can't be used, or it can't serve one right now. The message is the proxy's. With `connect --all`, only when it refused every service |
 | `session_invalid` | `agent-vault connect` with a session that has ended, or that belongs to a different Agent Vault project than the proxy, as Infisical or the proxy reports it |
 | `local_port_unavailable` | `agent-vault connect` can't open a port on 127.0.0.1, such as a `--port` another program holds |
+| `account_not_found` | `pam access` or `pam accounts get` names a PAM account that doesn't exist or that the caller can't access (404, or missing from the accessible accounts) |
+| `approval_pending` | `pam access` without a terminal on an account that needs approval. An access request was filed, or one is already waiting. Suggests `pam accounts get` to check |
+| `approval_required` | `pam access --no-approval-request` on an account that needs approval. Nothing is filed |
+| `approval_not_configured` | `pam access` on an account that needs approval, in a folder with no approvers |
+| `reason_required` | `pam access` without `--reason` on an account whose template requires one, or whose access request requires one. Nothing is filed |
+| `mfa_required` | `pam access` without a terminal on an account that requires MFA. The message has the link a person opens; suggests re-running with `--mfa-session` |
+| `session_expired` | `pam access -- <command>`: the session's duration ran out before the command finished, so the command was stopped |
+| `command_not_supported` | `pam access -- <command>` on an account type that can't run one (Windows, cloud accounts). The session is ended |
+| `command_removed` | A removed command that is kept hidden, such as `pam agentic access`. Suggests its replacement |
 | `secret_exists` | `secrets create` on a key that exists. Nothing is written |
 | `secret_not_found` | `secrets update` on a key that doesn't exist. Nothing is written |
 | `folder_not_found` | `folders get`, `update` or `delete` on a folder that doesn't exist at `--path` |
