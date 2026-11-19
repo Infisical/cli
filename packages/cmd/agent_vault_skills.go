@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -386,10 +388,10 @@ func pullAgentVaultSkill(httpClient *resty.Client, project agentVaultProject, na
 	return fmt.Sprintf("%s: v%d -> %s", util.SanitizeDisplay(skill.Name), version, folder), nil
 }
 
-// replaceAgentVaultSkillFolder writes the files to folder. With force, an existing folder is removed first and the
-// new one gets its permissions, so a folder the user made private stays private.
+// replaceAgentVaultSkillFolder writes the files to a hidden folder beside folder, and only then removes the old
+// folder (with force) and renames the new one into place, so a write that fails never touches the old folder. A
+// replaced folder keeps its permissions, so a folder the user made private stays private.
 func replaceAgentVaultSkillFolder(folder string, files []api.AgentVaultSkillFile, force bool) error {
-	// Checked before anything is removed, so a skill the writer would refuse leaves the old folder as it was.
 	if err := agentvault.CheckSkillFiles(files); err != nil {
 		return agentVaultSkillFolderError("write", folder, err)
 	}
@@ -397,12 +399,13 @@ func replaceAgentVaultSkillFolder(folder string, files []api.AgentVaultSkillFile
 	if err != nil {
 		return agentVaultSkillFolderError("write", folder, err)
 	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+	parent := filepath.Dir(target)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return agentVaultSkillFolderError("write", folder, err)
 	}
 
 	var keepPerm fs.FileMode
-	replaced := false
+	replacing := false
 	if existing, err := os.Lstat(target); err == nil {
 		if !force {
 			return agentVaultSkillFolderError("write", folder, fs.ErrExist)
@@ -411,28 +414,57 @@ func replaceAgentVaultSkillFolder(folder string, files []api.AgentVaultSkillFile
 		if !existing.IsDir() {
 			return errAgentVaultSkillPullTarget(folder, "is no longer a folder. Pass a folder instead.")
 		}
-		keepPerm, replaced = existing.Mode().Perm(), true
-		if err := os.RemoveAll(target); err != nil {
-			return agentVaultSkillFolderError("replace", folder, err)
-		}
+		keepPerm, replacing = existing.Mode().Perm(), true
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return agentVaultSkillFolderError("write", folder, err)
 	}
 
-	// Mkdir applies the umask, like any folder the user creates.
-	if err := os.Mkdir(target, 0o755); err != nil {
+	staging, err := makeAgentVaultSkillStagingFolder(parent, filepath.Base(target))
+	if err != nil {
 		return agentVaultSkillFolderError("write", folder, err)
 	}
-	if replaced {
+	if err := agentvault.WriteSkillFiles(staging, files); err != nil {
+		_ = os.RemoveAll(staging)
+		return agentVaultSkillFolderError("write", folder, err)
+	}
+	if replacing {
+		if err := os.RemoveAll(target); err != nil {
+			_ = os.RemoveAll(staging)
+			return fmt.Errorf("unable to replace %s: %s. Some of its files may already be removed; pull again once the cause is fixed",
+				quoted(folder, "folder"), agentVaultSkillFolderErrorReason(err))
+		}
+	}
+	if err := os.Rename(staging, target); err != nil {
+		return fmt.Errorf("unable to move the pulled files into %s (%s). They are in the hidden folder %s beside it",
+			quoted(folder, "folder"), agentVaultSkillFolderErrorReason(err), quoted(filepath.Base(staging), "folder"))
+	}
+	// After the write, so a read-only folder's mode can't stop the files going in.
+	if replacing {
 		if err := os.Chmod(target, keepPerm); err != nil {
 			return agentVaultSkillFolderError("write", folder, err)
 		}
 	}
-	if err := agentvault.WriteSkillFiles(target, files); err != nil {
-		_ = os.RemoveAll(target)
-		return agentVaultSkillFolderError("write", folder, err)
-	}
 	return nil
+}
+
+// makeAgentVaultSkillStagingFolder uses Mkdir rather than MkdirTemp, whose folder is always 0700, so the pulled
+// folder gets the umask's permissions like any other folder the user creates.
+func makeAgentVaultSkillStagingFolder(parent, base string) (string, error) {
+	for range 10 {
+		suffix := make([]byte, 6)
+		if _, err := rand.Read(suffix); err != nil {
+			return "", err
+		}
+		staging := filepath.Join(parent, "."+base+".pull-"+hex.EncodeToString(suffix))
+		err := os.Mkdir(staging, 0o755)
+		if err == nil {
+			return staging, nil
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return "", err
+		}
+	}
+	return "", fs.ErrExist
 }
 
 // withoutHiddenAgentVaultSkillFiles drops what push never uploads, so a skill written through the API can't plant

@@ -733,3 +733,27 @@ func TestPullIntoTheCurrentFolderGetsTheRealReasonWithoutForce(t *testing.T) {
 		t.Fatalf("err %v", err)
 	}
 }
+
+func TestPullAgentVaultSkillWithForceThatFailsToWriteKeepsTheOldFolder(t *testing.T) {
+	f := codeReviewSkillAPI()
+	// The backend's path checks allow both, and the second can't be written once the first is a file.
+	f.files["sk1"] = append(f.files["sk1"], skillFileOf("a", "0644", "x"), skillFileOf("a/b", "0644", "y"))
+	parent := t.TempDir()
+	folder := filepath.Join(parent, "code-review")
+	if err := os.Mkdir(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(folder, "my-edits.md"), []byte("local"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pullAgentVaultSkill(newFakeSkillsReadAPI(t, f), testSkillsProject, "code-review", folder, 0, true); err == nil {
+		t.Fatal("the pull succeeded")
+	}
+	if got := readTestFile(t, filepath.Join(folder, "my-edits.md")); got != "local" {
+		t.Fatalf("the old folder was changed: %q", got)
+	}
+	entries, _ := os.ReadDir(parent)
+	if len(entries) != 1 {
+		t.Fatalf("the failed pull left %d entries", len(entries))
+	}
+}

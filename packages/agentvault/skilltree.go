@@ -434,8 +434,8 @@ func writeSkillMarker(root string, marker skillMarker) error {
 	return nil
 }
 
-// CheckSkillFiles refuses a skill WriteSkillFiles would stop partway through, so a caller can check before it removes
-// anything.
+// CheckSkillFiles refuses a skill whose paths leave its folder or whose contents aren't valid base64, so a caller can
+// refuse it before writing anything. Write failures such as a full disk can still happen.
 func CheckSkillFiles(files []api.AgentVaultSkillFile) error {
 	for _, file := range files {
 		rel := filepath.FromSlash(file.Path)
