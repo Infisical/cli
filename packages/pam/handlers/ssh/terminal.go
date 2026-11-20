@@ -233,19 +233,31 @@ func (e *echoedCommand) hold(text string, channel session.SessionChannelType, ba
 }
 
 // settle applies a held command to the first line committed after it. A longer line
-// means the shell echoed it, so that line is the record.
-func (e *echoedCommand) settle(line string) (session.SessionEvent, bool) {
+// means the shell echoed it, so that line is the record and echoedAt is where the
+// command starts on it (-1 otherwise).
+func (e *echoedCommand) settle(line string) (unechoed session.SessionEvent, ok bool, echoedAt int) {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
 	if e.text == "" {
-		return session.SessionEvent{}, false
+		return session.SessionEvent{}, false, -1
 	}
 	if utf8.RuneCountInString(line) > e.baseline {
 		e.text = ""
-		return session.SessionEvent{}, false
+		return session.SessionEvent{}, false, e.baseline
 	}
-	return e.takeUnsafe()
+	unechoed, ok = e.takeUnsafe()
+	return unechoed, ok, -1
+}
+
+// commandOnLine returns what was typed after the prompt on a committed line, or "" when
+// the line no longer reaches where typing began (the shell redrew it shorter).
+func commandOnLine(line string, start int) string {
+	runes := []rune(line)
+	if start >= len(runes) {
+		return ""
+	}
+	return strings.TrimSpace(string(runes[start:]))
 }
 
 func (e *echoedCommand) take() (session.SessionEvent, bool) {

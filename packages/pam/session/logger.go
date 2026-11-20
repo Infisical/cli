@@ -52,6 +52,7 @@ type SessionEvent struct {
 	ChannelType SessionChannelType `json:"channelType,omitempty"` // Channel kind (SSH shell/exec/sftp or RDP)
 	Data        []byte             `json:"data"`                  // SSH: gateway-rendered text; RDP: JSON envelope (base64-marshaled)
 	Rendered    bool               `json:"rendered,omitempty"`    // Data is display-ready; absent on recordings that stored raw bytes
+	Command     string             `json:"command,omitempty"`     // On the output line where a typed command was echoed: the command without its prompt
 	ElapsedTime float64            `json:"elapsedTime"`           // Seconds since session start (for replay)
 }
 
@@ -306,6 +307,7 @@ func (sl *EncryptedSessionLogger) LogSessionEvent(event SessionEvent) error {
 		// happened to match a substring of the JSON or base64.
 		if event.ChannelType != SessionChannelRDP {
 			event.Data = sl.applyMasking(event.Data)
+			event.Command = sl.applyMaskingString(event.Command)
 		}
 		return json.Marshal(event)
 	})
@@ -313,6 +315,7 @@ func (sl *EncryptedSessionLogger) LogSessionEvent(event SessionEvent) error {
 
 func (sl *EncryptedSessionLogger) LogHttpEvent(event HttpEvent) error {
 	return sl.writeEvent(func() ([]byte, error) {
+		event.URL = sl.applyMaskingString(event.URL)
 		event.Body = sl.applyMasking(event.Body)
 		return json.Marshal(event)
 	})

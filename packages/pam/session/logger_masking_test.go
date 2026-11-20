@@ -1,8 +1,13 @@
 package session
 
 import (
+	"bytes"
+	"encoding/base64"
+	"fmt"
 	"regexp"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session/masking"
 )
@@ -80,5 +85,50 @@ func TestApplyMaskingNoPatterns(t *testing.T) {
 	byteResult := logger.applyMasking(byteInput)
 	if string(byteResult) != string(byteInput) {
 		t.Errorf("with no patterns, expected bytes unchanged")
+	}
+}
+
+func TestSessionLoggerMasksCommandAndURL(t *testing.T) {
+	setupTestDir(t)
+	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
+	expiresAt := time.Now().Add(time.Hour)
+	masker := masking.New([]*regexp.Regexp{regexp.MustCompile(`-p\S+`)}, false, nil, "sess-mask")
+
+	logger, err := NewSessionLogger("sess-mask", key, expiresAt, "ssh", masker)
+	if err != nil {
+		t.Fatalf("NewSessionLogger: %v", err)
+	}
+	if err := logger.LogSessionEvent(SessionEvent{
+		Timestamp:   time.Now(),
+		EventType:   SessionEventOutput,
+		ChannelType: SessionChannelShell,
+		Data:        []byte("user@host:~$ mysql -pS3cret"),
+		Command:     "mysql -pS3cret",
+	}); err != nil {
+		t.Fatalf("LogSessionEvent: %v", err)
+	}
+	if err := logger.LogHttpEvent(HttpEvent{
+		Timestamp: time.Now(),
+		EventType: HttpEventRequest,
+		RequestId: "r1",
+		Method:    "GET",
+		URL:       "/api/v1/exec?command=-pS3cret",
+	}); err != nil {
+		t.Fatalf("LogHttpEvent: %v", err)
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	filename := fmt.Sprintf("pam_session_sess-mask_ssh_expires_%d.enc", expiresAt.Unix())
+	payload, _, _, _, err := readFromOffset(filename, key, 0, 1<<20)
+	if err != nil {
+		t.Fatalf("readFromOffset: %v", err)
+	}
+	if strings.Contains(string(payload), "S3cret") {
+		t.Errorf("recording kept a masked secret: %s", payload)
+	}
+	if !strings.Contains(string(payload), `"command":"mysql [MASKED]"`) {
+		t.Errorf("recording lost the masked command: %s", payload)
 	}
 }
