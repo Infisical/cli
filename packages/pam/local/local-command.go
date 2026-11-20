@@ -24,6 +24,7 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/go-resty/resty/v2"
+	"github.com/mattn/go-isatty"
 	"github.com/rs/zerolog/log"
 	"k8s.io/client-go/tools/clientcmd"
 	k8sapi "k8s.io/client-go/tools/clientcmd/api"
@@ -138,14 +139,21 @@ func (w *interruptWatch) setupFinished() (int, bool) {
 	return signalExitCode(w.caught), true
 }
 
-// commandFinished makes an interrupt during teardown exit at once, since ending the session can
-// block on the network.
+// Ending the session can block on the network, so an interrupt during teardown exits at once. A
+// SIGINT right after the command exited is the terminal Ctrl+C that stopped it, and is ignored.
 func (w *interruptWatch) commandFinished() {
+	finished := time.Now()
 	go func() {
-		select {
-		case sig := <-w.signals:
-			w.exit(sig)
-		case <-w.torndown:
+		for {
+			select {
+			case sig := <-w.signals:
+				if sig == syscall.SIGINT && time.Since(finished) < time.Second {
+					continue
+				}
+				w.exit(sig)
+			case <-w.torndown:
+				return
+			}
 		}
 	}()
 }
@@ -310,14 +318,15 @@ func RunLocalCommand(httpClient *resty.Client, response *api.PAMAccessResponse, 
 }
 
 func runLocalChild(command []string, env []string, expiry time.Time, interrupts *interruptWatch) (int, error) {
-	// A terminal's Ctrl+C already reaches the child through its process group, so SIGINT is only
-	// forwarded without one. Catching signals keeps this process alive long enough to end the session.
-	noTerminal := !hasControllingTerminal()
+	// A terminal's Ctrl+C already reaches a child in the foreground group, so SIGINT is only forwarded
+	// when no stream is a terminal. Catching signals keeps this process alive to end the session.
+	ownGroup := !hasControllingTerminal()
+	forwardInterrupt := !isatty.IsTerminal(os.Stdin.Fd()) && !isatty.IsTerminal(os.Stdout.Fd()) && !isatty.IsTerminal(os.Stderr.Fd())
 
 	child := exec.Command(command[0], command[1:]...)
 	child.Env = env
 	child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if noTerminal {
+	if ownGroup {
 		startInOwnGroup(child)
 	}
 	if err := child.Start(); err != nil {
@@ -327,7 +336,7 @@ func runLocalChild(command []string, env []string, expiry time.Time, interrupts 
 	expired := make(chan struct{})
 	timer := time.AfterFunc(time.Until(expiry), func() {
 		close(expired)
-		killCommand(child, noTerminal)
+		killCommand(child, ownGroup)
 	})
 	defer timer.Stop()
 
@@ -336,8 +345,8 @@ func runLocalChild(command []string, env []string, expiry time.Time, interrupts 
 		for {
 			select {
 			case sig := <-interrupts.signals:
-				if sig != syscall.SIGINT || noTerminal {
-					signalCommand(child, sig, noTerminal)
+				if sig != syscall.SIGINT || forwardInterrupt {
+					signalCommand(child, sig, ownGroup)
 				}
 			case <-done:
 				return

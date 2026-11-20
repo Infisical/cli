@@ -166,7 +166,7 @@ func errPAMMissingCommand(path string) *util.CLIError {
 func errPAMCommandNotSupported(invocation pamAccessInvocation, typeLabel string) *util.CLIError {
 	return &util.CLIError{Code: errCodeCommandNotSupported,
 		Message: fmt.Sprintf("%s is a %s account, which can't run a command after '--'. Drop the '--' to start an RDP proxy, then open the .rdp file it prints with an RDP client. The proxy runs until you stop it, so start it in the background.", pamAccountArg(invocation.Path), typeLabel),
-		Next:    []util.NextStep{{Purpose: "To start the proxy in the background", Command: pamPrefix + " access " + pamAccountArg(invocation.Path) + " > infisical-rdp.log 2>&1 &"}}}
+		Next:    []util.NextStep{{Purpose: "To start the proxy in the background", Command: pamPrefix + " access " + pamAccountArg(invocation.Path) + " < /dev/null > infisical-rdp.log 2>&1 &"}}}
 }
 
 func errPAMAgenticRemoved() *util.CLIError {

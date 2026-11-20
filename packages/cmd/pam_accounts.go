@@ -246,7 +246,7 @@ func pamExampleCommand(view pamAccountView) string {
 	case pam.AccountTypeAwsIam:
 		return base + " -- aws sts get-caller-identity"
 	case pam.AccountTypeWindows, pam.AccountTypeWindowsAd:
-		return base + " > infisical-rdp.log 2>&1 &"
+		return base + " < /dev/null > infisical-rdp.log 2>&1 &"
 	}
 	return base
 }

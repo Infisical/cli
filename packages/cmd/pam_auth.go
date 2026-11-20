@@ -119,7 +119,7 @@ func authenticateMachineIdentity(cmd *cobra.Command) (accessToken func() string,
 
 	valid, strategy := util.IsAuthMethodValid(authMethod, false)
 	if !valid {
-		util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid auth method %q. Supported: %s.", authMethod, pamAuthMethods))
+		util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid auth method %s. Supported: %s.", quoted(authMethod, "auth method"), pamAuthMethods))
 	}
 
 	customHeaders, err := util.GetInfisicalCustomHeadersMap()
