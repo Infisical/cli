@@ -125,14 +125,8 @@ func toHookToolSet(tools []string) map[string]bool {
 	return toToolSet(tools)
 }
 
-// req is nil for a database or SSH connection. mcp is the parsed body of an MCP request, nil when it has none.
+// mcp is the parsed body of an MCP request, nil when it has none.
 func (h *serviceHook) matches(svc *resolvedService, req *http.Request, mcp *hookPayloadMCP) bool {
-	if h == nil {
-		return false
-	}
-	if req == nil || isNativeKind(svc.kind) {
-		return true
-	}
 	if svc.kind == serviceKindMCP {
 		return h.tools == nil || callsAnyTool(req, mcp, h.tools)
 	}

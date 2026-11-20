@@ -64,7 +64,7 @@ func newFakeHook(t *testing.T, answer http.HandlerFunc) *fakeHook {
 	return f
 }
 
-// No narrowing, so it is asked about every request of its service, unless narrowing is given.
+// Asked about every request of its service unless narrowing is given.
 func (f *fakeHook) hook(narrowing ...api.AgentVaultServiceHook) *serviceHook {
 	var wire api.AgentVaultServiceHook
 	if len(narrowing) > 0 {
@@ -444,7 +444,6 @@ func TestTheSessionLogCopyOfAHookOutcomeLeavesOutTheMessage(t *testing.T) {
 func TestTheHookMatcher(t *testing.T) {
 	httpSvc := &resolvedService{name: "github", kind: serviceKindHTTP}
 	mcpSvc := &resolvedService{name: "linear", kind: serviceKindMCP}
-	pgSvc := &resolvedService{name: "db", kind: serviceKindPostgres}
 	substitutingSvc := &resolvedService{name: "github", kind: serviceKindHTTP, substitutions: []substitution{
 		subOn("__ORG__", "acme", surfacePath), subOn("{{TEAM}}", "core", surfacePath), subOn("__REPO__", "secret", surfaceQuery, surfaceHeader, surfaceBody)}}
 	get := func(path string) *http.Request { return httptest.NewRequest(http.MethodGet, "https://h"+path, nil) }
@@ -477,7 +476,6 @@ func TestTheHookMatcher(t *testing.T) {
 	}{
 		{"no narrowing picks every HTTP request", nil, httpSvc, get("/x"), nil, true},
 		{"no narrowing picks every MCP request", nil, mcpSvc, post("/mcp"), calls("a"), true},
-		{"no narrowing picks every connection", nil, pgSvc, nil, nil, true},
 		{"empty lists are no narrowing", narrow(list(), list(), list()), httpSvc, get("/x"), nil, true},
 		{"method in the set", narrow(list("get", "PUT"), nil, nil), httpSvc, get("/x"), nil, true},
 		{"method not in the set", narrow(list("PUT"), nil, nil), httpSvc, get("/x"), nil, false},
@@ -542,7 +540,6 @@ func TestTheHookMatcher(t *testing.T) {
 		{"an MCP request with no body", narrow(nil, nil, list("delete_issue")), mcpSvc, get("/sse"), nil, false},
 		{"methods on an MCP service pick the whole service", narrow(list("DELETE"), list("/x"), nil), mcpSvc,
 			post("/mcp"), calls("a"), true},
-		{"native ignores narrowing", narrow(list("GET"), list("/x"), list("a")), pgSvc, nil, nil, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			wire := api.AgentVaultServiceHook{}
@@ -554,11 +551,6 @@ func TestTheHookMatcher(t *testing.T) {
 				t.Fatalf("matches = %v, want %v", got, tc.want)
 			}
 		})
-	}
-
-	var none *serviceHook
-	if none.matches(httpSvc, get("/x"), nil) || none.matches(pgSvc, nil, nil) {
-		t.Fatal("a service with no hook matched")
 	}
 }
 

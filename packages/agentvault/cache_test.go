@@ -444,7 +444,7 @@ func TestTheSessionAHookIsToldAboutIsKeptAndRefreshed(t *testing.T) {
 
 	second := &api.AgentVaultResolvedSession{Actor: api.AgentVaultSessionActor{Type: "user", ID: "u-1", Name: "Ana"}}
 	edited := serviceWithSecret("v")
-	edited.hook = &serviceHook{secret: []byte("edited"), methods: map[string]bool{"POST": true}}
+	edited.hook = &serviceHook{secret: []byte("edited")}
 	resolver.mu.Lock()
 	resolver.result = &resolveResult{SessionID: "s1", Services: []*resolvedService{edited}, Session: second}
 	resolver.mu.Unlock()

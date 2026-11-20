@@ -257,7 +257,7 @@ func TestAResolveCarriesEachServicesHookAndTheSession(t *testing.T) {
 }
 
 // Servers before named hooks send only the URL and secret, which asks the hook about everything.
-func TestAnOlderServersHookCoversEveryRequestOfItsService(t *testing.T) {
+func TestAnOlderServersHookIsAskedAboutEveryRequestOfItsService(t *testing.T) {
 	res := resolveBody(t, `{"sessionId":"s1","services":[
 			{"id":"a","name":"stripe","hostPattern":"api.stripe.com","credential":{"type":"passthrough"},"hook":{"url":"https://hooks.example.com/stripe","secret":"`+testHookSecret+`"}}
 		],"sessionLogs":{"enabled":false}}`)
