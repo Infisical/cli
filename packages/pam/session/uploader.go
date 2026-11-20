@@ -38,12 +38,14 @@ const (
 	ResourceTypeAzureCli          = "azure-cli"
 	ResourceTypeSnowflake         = "snowflake"
 	ResourceTypeClickhouse        = "clickhouse"
+	ResourceTypeAwsIam            = "aws-iam"
 )
 
 var allResourceTypes = []string{
 	ResourceTypeSSH, ResourceTypePostgres, ResourceTypeRedis, ResourceTypeMysql, ResourceTypeMssql,
 	ResourceTypeKubernetes, ResourceTypeMongodb, ResourceTypeOracledb, ResourceTypeWindows,
 	ResourceTypeGcpServiceAccount, ResourceTypeAzureCli, ResourceTypeSnowflake, ResourceTypeClickhouse,
+	ResourceTypeAwsIam,
 }
 
 type SessionFileInfo struct {
@@ -702,7 +704,7 @@ func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
 		return api.CallUploadPamSessionLogs(su.httpClient, fileInfo.SessionID, api.UploadPAMSessionLogsRequest{Logs: logs})
 	}
 
-	if fileInfo.ResourceType == ResourceTypeKubernetes || fileInfo.ResourceType == ResourceTypeGcpServiceAccount || fileInfo.ResourceType == ResourceTypeAzureCli {
+	if fileInfo.ResourceType == ResourceTypeKubernetes || fileInfo.ResourceType == ResourceTypeGcpServiceAccount || fileInfo.ResourceType == ResourceTypeAzureCli || fileInfo.ResourceType == ResourceTypeAwsIam {
 		httpEvents, err := ReadEncryptedHttpEventsFromFile(fileInfo.Filename, encryptionKey)
 		if err != nil {
 			return fmt.Errorf("failed to read HTTP session file: %w", err)
