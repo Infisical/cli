@@ -182,3 +182,20 @@ func TestThePlainDoorAsksTheHookWithoutTheSessionToken(t *testing.T) {
 		t.Fatalf("the session token reached the hook: %s", hit.body)
 	}
 }
+
+func TestPlainHTTPToAnOAuthServiceIsRefused(t *testing.T) {
+	client, host := newPlaintextFixture(t, func(h string) *resolvedService {
+		svc := policyService(h, nil, nil, nil, nil)
+		svc.kind = serviceKindHTTP
+		svc.credential = credential{kind: credentialBearer, headerPrefix: "Bearer", value: []byte("real-oauth-token"), refreshable: true}
+		return svc
+	})
+
+	status, body := do(t, client, http.MethodGet, "http://"+host+"/files", "")
+	if status != http.StatusForbidden || !strings.Contains(body, "signs in with OAuth and expects TLS") {
+		t.Fatalf("status = %d, want 403 naming the OAuth sign-in: %s", status, body)
+	}
+	if strings.Contains(body, "real-oauth-token") {
+		t.Fatalf("the token reached the upstream in cleartext: %s", body)
+	}
+}

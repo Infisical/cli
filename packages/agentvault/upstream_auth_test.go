@@ -208,8 +208,9 @@ func assertUpstreamAuthFailed(t *testing.T, resp *http.Response, body, want stri
 }
 
 const (
-	reauthorizeLinearBody = `{"error":"upstream_auth_failed","message":"The linear service needs to be reauthorized in Infisical Agent Vault."}`
-	linearUnavailableBody = `{"error":"upstream_auth_unavailable","message":"Couldn't get a valid credential for the linear service. Try again in a moment."}`
+	reauthorizeLinearBody  = `{"error":"upstream_auth_failed","message":"The sign-in used by the linear service has expired and has to be connected again. This can't be fixed from here."}`
+	missingScopeLinearBody = `{"error":"upstream_auth_failed","message":"The sign-in used by the linear service is missing a permission it needs and has to be connected again. This can't be fixed from here."}`
+	linearUnavailableBody  = `{"error":"upstream_auth_unavailable","message":"Couldn't get a valid credential for the linear service. Try again in a moment."}`
 )
 
 const mcpCallBody = `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_issue","arguments":{}}}`
@@ -281,8 +282,9 @@ func TestAn401TwiceGivesA502WithoutTheChallenge(t *testing.T) {
 func TestAnUnchangedTokenIsNotRetried(t *testing.T) {
 	// Infisical answers a refresh it could not do with the token it has and the connection's status.
 	for status, want := range map[string]string{
-		oauthStatusNeedsReauthorization:  reauthorizeLinearBody,
-		oauthStatusNeedsAdditionalScopes: reauthorizeLinearBody,
+		oauthStatusNeedsReauthorization: reauthorizeLinearBody,
+		// Shared by every service on a variable and kept through refreshes, so it says nothing about this 401.
+		oauthStatusNeedsAdditionalScopes: linearUnavailableBody,
 		oauthStatusConnected:             linearUnavailableBody,
 	} {
 		t.Run(status, func(t *testing.T) {
@@ -573,7 +575,7 @@ func TestInsufficientScopeIsReportedAndNotRetried(t *testing.T) {
 		})
 
 	resp, body := doWith(t, client, http.MethodPost, fmt.Sprintf("https://%s/mcp", host), "application/json", strings.NewReader(mcpCallBody))
-	assertUpstreamAuthFailed(t, resp, body, reauthorizeLinearBody)
+	assertUpstreamAuthFailed(t, resp, body, missingScopeLinearBody)
 	if got := len(up.recorded()); got != 1 {
 		t.Fatalf("upstream saw %d requests, want no retry", got)
 	}
@@ -1274,8 +1276,8 @@ func TestOpenAuthErrorBodiesDoNotBlockRecovery(t *testing.T) {
 	}{
 		{"401 then success", http.StatusUnauthorized, http.StatusOK, http.StatusOK, "", 1},
 		{"401 twice", http.StatusUnauthorized, http.StatusUnauthorized, http.StatusBadGateway, linearUnavailableBody, 1},
-		{"insufficient scope", http.StatusForbidden, 0, http.StatusBadGateway, reauthorizeLinearBody, 1},
-		{"401 then insufficient scope", http.StatusUnauthorized, http.StatusForbidden, http.StatusBadGateway, reauthorizeLinearBody, 2},
+		{"insufficient scope", http.StatusForbidden, 0, http.StatusBadGateway, missingScopeLinearBody, 1},
+		{"401 then insufficient scope", http.StatusUnauthorized, http.StatusForbidden, http.StatusBadGateway, missingScopeLinearBody, 2},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1432,5 +1434,190 @@ func TestAnOAuthResendAsksTheHookOnce(t *testing.T) {
 	}
 	if hit := fake.only(t); bytes.Contains(hit.body, []byte("old-token")) || bytes.Contains(hit.body, []byte("new-token")) {
 		t.Fatalf("a token reached the hook: %s", hit.body)
+	}
+}
+
+func oauthHTTPService(host string, token string) *resolvedService {
+	svc := oauthMCPService(host, token)
+	svc.kind = serviceKindHTTP
+	return svc
+}
+
+func TestAnHTTPServiceResendsAnyBufferedBodyAfterARefresh(t *testing.T) {
+	const upload = "raw-bytes-not-json"
+	cases := []struct {
+		name  string
+		build func(h string) *resolvedService
+		sent  string
+		want  string
+	}{
+		{"plain body", func(h string) *resolvedService { return oauthHTTPService(h, "old-token") }, upload, upload},
+		{"substituted body", func(h string) *resolvedService {
+			svc := oauthHTTPService(h, "old-token")
+			svc.substitutions = []substitution{{placeholder: "{{KEY}}", surfaces: map[string]bool{surfaceBody: true}, value: []byte("real-key")}}
+			return svc
+		}, "key={{KEY}}", "key=real-key"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resolver := &oauthResolver{issue: oauthToken("new-token"), status: oauthStatusConnected}
+			client, host, up := newOAuthFixture(t, resolver, tc.build, acceptOnly("new-token"))
+
+			resp, body := doWith(t, client, http.MethodPut, fmt.Sprintf("https://%s/files", host), "application/octet-stream", strings.NewReader(tc.sent))
+			if resp.StatusCode != http.StatusOK || body != "ok" {
+				t.Fatalf("the resent request should have succeeded, got %d: %s", resp.StatusCode, body)
+			}
+			hits := up.recorded()
+			if len(hits) != 2 || hits[1].auth != "Bearer new-token" || hits[0].body != tc.want || hits[1].body != tc.want {
+				t.Fatalf("upstream hits = %+v, want the original and a resend with the same body", hits)
+			}
+		})
+	}
+}
+
+func TestAnHTTPServiceDoesNotResendABodyOverTheLimit(t *testing.T) {
+	resolver := &oauthResolver{issue: oauthToken("new-token"), status: oauthStatusConnected}
+	client, host, up := newOAuthFixture(t, resolver, func(h string) *resolvedService { return oauthHTTPService(h, "old-token") }, acceptOnly("new-token"))
+
+	large := strings.Repeat("a", maxMCPInspectBody+1)
+	stream := io.MultiReader(strings.NewReader(large[:10]), strings.NewReader(large[10:]))
+	resp, body := doWith(t, client, http.MethodPut, fmt.Sprintf("https://%s/files", host), "application/octet-stream", stream)
+	assertUpstreamAuthFailed(t, resp, body, linearUnavailableBody)
+	if hits := up.recorded(); len(hits) != 1 || len(hits[0].body) != len(large) {
+		t.Fatalf("upstream saw %d requests; an oversize body must reach it whole and only once", len(hits))
+	}
+}
+
+func TestAnHTTPServiceGetsAStatusThatSaysWhatHappenedToItsSignIn(t *testing.T) {
+	cases := []struct {
+		name     string
+		resolver *oauthResolver
+		handler  func(w http.ResponseWriter, r *http.Request)
+		want     int
+		wantBody string
+	}{
+		{"dead sign-in", &oauthResolver{issue: oauthToken("old-token"), status: oauthStatusNeedsReauthorization}, acceptOnly("nothing"), http.StatusUnauthorized, reauthorizeLinearBody},
+		{"missing scopes reported by Infisical, during a brief outage", &oauthResolver{issue: oauthToken("old-token"), status: oauthStatusNeedsAdditionalScopes}, acceptOnly("nothing"), http.StatusBadGateway, linearUnavailableBody},
+		{"insufficient scope", &oauthResolver{}, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("WWW-Authenticate", `Bearer error="insufficient_scope", scope="write"`)
+			w.WriteHeader(http.StatusForbidden)
+		}, http.StatusForbidden, missingScopeLinearBody},
+		{"Infisical unreachable", &oauthResolver{err: errors.New("dial tcp: connection refused")}, acceptOnly("nothing"), http.StatusBadGateway, linearUnavailableBody},
+		{"refreshed token rejected too", &oauthResolver{issue: oauthToken("new-token"), status: oauthStatusConnected}, acceptOnly("nothing"), http.StatusBadGateway, linearUnavailableBody},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client, host, _ := newOAuthFixture(t, tc.resolver, func(h string) *resolvedService { return oauthHTTPService(h, "old-token") }, tc.handler)
+
+			resp, body := doWith(t, client, http.MethodGet, fmt.Sprintf("https://%s/files", host), "", nil)
+			if resp.StatusCode != tc.want || body != tc.wantBody {
+				t.Fatalf("got %d: %s, want %d: %s", resp.StatusCode, body, tc.want, tc.wantBody)
+			}
+			// RFC 9110 requires a challenge on a 401, and a client with an Authenticator (Java's HttpClient) throws
+			// without one. Nothing else gets one.
+			var want []string
+			if tc.want == http.StatusUnauthorized {
+				want = []string{`AgentVault realm="Infisical Agent Vault"`}
+			}
+			if got := resp.Header.Values("WWW-Authenticate"); !reflect.DeepEqual(got, want) {
+				t.Fatalf("WWW-Authenticate = %q, want %q", got, want)
+			}
+			if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+				t.Fatalf("content type = %q", ct)
+			}
+		})
+	}
+}
+
+func TestAMemberProvidedHTTPSignInKeepsItsWording(t *testing.T) {
+	resolver := &oauthResolver{issue: oauthToken("old-token"), status: oauthStatusNeedsReauthorization}
+	client, host, _ := newOAuthFixture(t, resolver, func(h string) *resolvedService {
+		svc := oauthHTTPService(h, "old-token")
+		svc.memberProvided = true
+		return svc
+	}, acceptOnly("nothing"))
+
+	resp, body := doWith(t, client, http.MethodGet, fmt.Sprintf("https://%s/files", host), "", nil)
+	want := `{"error":"upstream_auth_failed","message":"Reconnect your account for the linear service under Services in Infisical Agent Vault."}`
+	if resp.StatusCode != http.StatusUnauthorized || body != want {
+		t.Fatalf("got %d: %s, want 401: %s", resp.StatusCode, body, want)
+	}
+}
+
+// The OAuth variable's status is shared by every service on it and stays needs-additional-scopes through
+// refreshes, so it can't tell an agent holding a new token that the sign-in is dead.
+func TestASharedMissingScopeStatusDoesNotFailARequestARefreshRecovered(t *testing.T) {
+	resolver := &oauthResolver{issue: oauthToken("new-token"), status: oauthStatusNeedsAdditionalScopes}
+	client, host, up := newOAuthFixture(t, resolver, func(h string) *resolvedService { return oauthHTTPService(h, "old-token") }, acceptOnly("new-token"))
+
+	large := strings.Repeat("a", maxMCPInspectBody+1)
+	stream := io.MultiReader(strings.NewReader(large[:10]), strings.NewReader(large[10:]))
+	resp, body := doWith(t, client, http.MethodPut, fmt.Sprintf("https://%s/files", host), "application/octet-stream", stream)
+	assertUpstreamAuthFailed(t, resp, body, linearUnavailableBody)
+
+	stream = io.MultiReader(strings.NewReader(large[:10]), strings.NewReader(large[10:]))
+	resp, body = doWith(t, client, http.MethodPut, fmt.Sprintf("https://%s/files", host), "application/octet-stream", stream)
+	if resp.StatusCode != http.StatusOK || body != "ok" {
+		t.Fatalf("the identical retry should carry the refreshed token, got %d: %s", resp.StatusCode, body)
+	}
+	if hits := up.recorded(); len(hits) != 2 || hits[1].auth != "Bearer new-token" {
+		t.Fatalf("upstream hits = %d, want the rejected request and the retry with the new token", len(hits))
+	}
+}
+
+func TestARefreshedTokenRejectedUnderASharedMissingScopeStatusIsRetryable(t *testing.T) {
+	resolver := &oauthResolver{issue: oauthToken("new-token"), status: oauthStatusNeedsAdditionalScopes}
+	client, host, up := newOAuthFixture(t, resolver, func(h string) *resolvedService { return oauthHTTPService(h, "old-token") }, acceptOnly("nothing"))
+
+	for i := range 2 {
+		resp, body := doWith(t, client, http.MethodGet, fmt.Sprintf("https://%s/files", host), "", nil)
+		assertUpstreamAuthFailed(t, resp, body, linearUnavailableBody)
+		if got := len(resolver.refreshCalls()); got != 1 {
+			t.Fatalf("request %d: refresh called %d times, want 1", i, got)
+		}
+	}
+	if got := len(up.recorded()); got != 3 {
+		t.Fatalf("upstream saw %d requests, want the original, one retry and the repeat", got)
+	}
+}
+
+func TestARefreshInstallsTheNewTokenOnEveryServiceSharingIt(t *testing.T) {
+	resolver := &oauthResolver{issue: oauthToken("new-token"), status: oauthStatusConnected}
+	gdrive := &resolvedService{id: "svc-1", name: "gdrive", kind: serviceKindHTTP, hostPattern: "drive.example", credential: oauthToken("shared-token")}
+	gmail := &resolvedService{id: "svc-2", name: "gmail", kind: serviceKindHTTP, hostPattern: "gmail.example", credential: oauthToken("shared-token")}
+	other := &resolvedService{id: "svc-3", name: "linear", kind: serviceKindMCP, hostPattern: "linear.example", credential: oauthToken("other-token")}
+	gmail.credential.headerName = "X-Api-Key"
+	gmail.credential.headerPrefix = ""
+	resolver.setServices(gdrive, gmail, other)
+	cache := newTestCache(resolver)
+	if _, err := cache.get("tok"); err != nil {
+		t.Fatal(err)
+	}
+
+	sent := oauthToken("shared-token")
+	if _, _, err := cache.refreshCredential("tok", "svc-1", "drive.example", &sent); err != nil {
+		t.Fatal(err)
+	}
+	services, err := cache.get("tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, svc := range services {
+		got[svc.id] = string(svc.credential.value)
+		if svc.id == "svc-2" && (svc.credential.headerName != "X-Api-Key" || svc.credential.headerPrefix != "") {
+			t.Fatalf("gmail's header = %q %q, want its own X-Api-Key with no prefix", svc.credential.headerName, svc.credential.headerPrefix)
+		}
+	}
+	if want := map[string]string{"svc-1": "new-token", "svc-2": "new-token", "svc-3": "other-token"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("credentials = %v, want %v", got, want)
+	}
+
+	fresh, _, err := cache.refreshCredential("tok", "svc-2", "gmail.example", &sent)
+	if err != nil || string(fresh.value) != "new-token" {
+		t.Fatalf("gmail's refresh = %q, %v; want the token already installed", fresh.value, err)
+	}
+	if calls := len(resolver.refreshCalls()); calls != 1 {
+		t.Fatalf("Infisical was asked %d times, want once for both services", calls)
 	}
 }

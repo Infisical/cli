@@ -11,6 +11,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/agentvault"
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/util"
+	"github.com/spf13/cobra"
 )
 
 const (
@@ -29,6 +30,8 @@ const (
 	errCodeServiceRefused       = "service_refused"
 	errCodeSessionInvalid       = "session_invalid"
 	errCodeLocalPortUnavailable = "local_port_unavailable"
+
+	errCodeSkillNotFound = "skill_not_found"
 )
 
 func errAgentVaultInvalidOutput(format string) *util.CLIError {
@@ -239,4 +242,61 @@ func classifyAgentVaultConnectError(err error, proxyAddr string) error {
 	}
 	return &util.CLIError{Code: errCodeProxyUnreachable, Cause: err,
 		Message: fmt.Sprintf("The connection to the Agent Vault proxy at %s failed: %s.", proxyAddr, strings.TrimSuffix(err.Error(), "."))}
+}
+
+func errAgentVaultSkillNotFound(name string, project agentVaultProject) *util.CLIError {
+	return &util.CLIError{Code: errCodeSkillNotFound,
+		Message: fmt.Sprintf("No skill named %s in the Agent Vault project, or you don't have access to it.", quoted(name, "name")),
+		Next: []util.NextStep{{Purpose: "To see the skills in this project",
+			Command: "infisical agent-vault skills get --project-id " + util.SuggestedValue(project.ID, "project-id")}}}
+}
+
+func errAgentVaultSkillDeleteProjectRequired() *util.CLIError {
+	return &util.CLIError{Code: errCodeProjectRequired,
+		Message: fmt.Sprintf("Deleting a skill needs --project-id: a delete never uses %s or %s. Copy the ID from the Agent Vault project's settings in Infisical.",
+			agentVaultProjectIDEnv, util.INFISICAL_PROJECT_ID_NAME)}
+}
+
+func errAgentVaultSkillNameNotAFolder(name string) *util.CLIError {
+	return &util.CLIError{Code: errCodeInvalidArgument,
+		Message: fmt.Sprintf("%s can't be used as a folder name. Pass the folder to pull into after the skill's name.", quoted(name, "name"))}
+}
+
+func errAgentVaultSkillEmptyFolder() *util.CLIError {
+	return &util.CLIError{Code: errCodeInvalidArgument,
+		Message: "The folder to pull into is empty. Pass a folder, or leave it out to pull into a folder named after the skill."}
+}
+
+func errAgentVaultSkillVersionInvalid() *util.CLIError {
+	return &util.CLIError{Code: errCodeInvalidFlagValue,
+		Message: "--version must be 1 or more. Leave it out to pull the latest version."}
+}
+
+func errAgentVaultSkillVersionNotFound(name string, version, latest int) *util.CLIError {
+	return &util.CLIError{Code: errCodeInvalidFlagValue,
+		Message: fmt.Sprintf("Skill %s has no version %d. Its latest version is %d.", quoted(name, "name"), version, latest)}
+}
+
+// A member is answered 404 for every version but the latest, so the 404 can't say whether the version exists.
+func errAgentVaultSkillVersionAdminOnly(name string, latest int, cause error) *util.CLIError {
+	return &util.CLIError{Code: errCodePermissionDenied, Cause: cause,
+		Message: fmt.Sprintf("Only an Admin of the project can pull a version of %s other than the latest (%d). Leave out --version to pull the latest, or ask a project admin for access.",
+			quoted(name, "name"), latest)}
+}
+
+func errAgentVaultSkillPullTarget(folder, problem string) *util.CLIError {
+	return &util.CLIError{Code: errCodeInvalidArgument, Message: fmt.Sprintf("%s %s", quoted(folder, "folder"), problem)}
+}
+
+// The folder isn't named: "." or a path is rarely a safe identifier, so quoted would print a placeholder.
+func errAgentVaultSkillPullTargetHoldsWorkingFolder() *util.CLIError {
+	return &util.CLIError{Code: errCodeInvalidArgument,
+		Message: "The folder to pull into is, or holds, the current folder, so it can't be replaced. Run the command from somewhere else, or pass another folder."}
+}
+
+func errAgentVaultSkillFolderExists(cmd *cobra.Command, args []string, folder string) *util.CLIError {
+	return &util.CLIError{Code: errCodeInvalidArgument,
+		Message: fmt.Sprintf("%s already exists. Pass --force to replace it with the skill's files, which removes everything else in it.", quoted(folder, "folder")),
+		Next: []util.NextStep{{Purpose: "To replace it",
+			Command: strings.TrimSuffix(rerunWithYes(cmd, args, nil), " --yes") + " --force"}}}
 }

@@ -255,6 +255,17 @@ func TestAnMCPServerWaitingForPersonalValuesIsLeftOutWithAReason(t *testing.T) {
 	}
 }
 
+// A service on a sign-in only an admin can connect says so, rather than sending the member to set values.
+func TestAnMCPServerThatIsNotReadyIsLeftOutWithTheServersReason(t *testing.T) {
+	waiting := mcpService("gmail", "https://mcp.gmail.example/mcp", "streamable-http", "needs-personal-values", bearerByProxy)
+	waiting.HowToUse = "Not usable yet: the sign-in \"gmail\" uses isn't connected\x1b[2J in Agent Vault, and an Agent Vault admin has to sign it in.\n"
+	_, names, leftOut := agentVaultClaudeMCPConfig([]api.AgentVaultSessionService{waiting}, neverBypassed)
+	want := `"gmail": Not usable yet: the sign-in "gmail" uses isn't connected[2J in Agent Vault, and an Agent Vault admin has to sign it in`
+	if len(names) != 0 || !reflect.DeepEqual(leftOut, []string{want}) {
+		t.Fatalf("names %v, left out %q, want %q", names, leftOut, want)
+	}
+}
+
 // The configuration goes to Claude Code in a file only this user can read, never on the command line.
 func TestTheMCPConfigIsWrittenToAFileOnlyTheUserCanRead(t *testing.T) {
 	path, remove, err := writeAgentVaultMCPConfig("claude", `{"mcpServers":{}}`)

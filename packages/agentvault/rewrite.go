@@ -286,7 +286,8 @@ func applyBodySubstitutions(req *http.Request, serviceName string, subs []substi
 		// POST into a chunked request. Signing schemes and some gateways reject that.
 		req.Body = http.NoBody
 	} else {
-		req.Body = io.NopCloser(bytes.NewReader(rewritten))
+		// Held as a buffered body so an OAuth resend can send the substituted bytes again.
+		req.Body = &bufferedBody{Reader: bytes.NewReader(rewritten), data: rewritten}
 	}
 	req.ContentLength = int64(len(rewritten))
 	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(rewritten)))

@@ -21,6 +21,15 @@ func agentVaultConstructedErrors() []*util.CLIError {
 	cause := errors.New("cause")
 	return []*util.CLIError{
 		errAgentVaultInvalidOutput("xml"),
+		errAgentVaultSkillNotFound("code-review", agentVaultProject{ID: testProjectID}),
+		errAgentVaultSkillDeleteProjectRequired(),
+		errAgentVaultSkillNameNotAFolder("../x"),
+		errAgentVaultSkillVersionInvalid(),
+		errAgentVaultSkillVersionNotFound("code-review", 9, 4),
+		errAgentVaultSkillVersionAdminOnly("code-review", 4, cause),
+		errAgentVaultSkillPullTarget("code-review", "is a symbolic link. Pass a folder instead."),
+		errAgentVaultSkillPullTargetHoldsWorkingFolder(),
+		errAgentVaultSkillEmptyFolder(),
 		errAgentVaultAccessBundleRequired(),
 		errAgentVaultEmptyAccessBundle(),
 		errAgentVaultOneAccessBundle(),

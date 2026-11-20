@@ -18,7 +18,7 @@ infisical secrets-manager secrets get API_KEY --env prod
   - `create` fails if the item exists, and `update` fails if it doesn't. Don't add upserts like `set`.
 - **Workflow commands** act on a whole environment rather than one resource: `run` sits directly under the product, and `export` under the resource it writes out (`secrets-manager secrets export`). Agent Vault also has `agent-vault proxy`, which runs the proxy, and `agent-vault connect`, which opens local ports to a session's database and SSH services.
 - **Lifecycle actions** are for long-running things such as agents and services: `start`, `stop`, `install`, `uninstall`.
-- **Other resource actions** cover what CRUD can't say: `revoke` ends something that keeps existing (`agent-vault sessions revoke`), and `push` uploads a local copy (`agent-vault skills push`).
+- **Other resource actions** cover what CRUD can't say: `revoke` ends something that keeps existing (`agent-vault sessions revoke`), `push` uploads a local copy (`agent-vault skills push`), and `pull` downloads one to edit and push back (`agent-vault skills pull`).
 
 Adding a word to any of these lists is a design decision. Raise it in the PR, and update this file and `conventions_test.go` together.
 
@@ -81,7 +81,7 @@ With `-o json`, the same error is JSON on stderr:
 | `token_project_mismatch` | `secrets create` or `update` with a service token for a different project than the one selected. Nothing is written |
 | `invalid_argument` | An argument the command can't use, such as the same secret name given twice to `secrets create`, or a secret with no name or no value, or a name that starts with a number. Nothing is written |
 | `project_delete_protected` | `projects delete` on a project with delete protection on, read from its settings. Nothing is deleted |
-| `project_required` | A delete ran without `--projectId`. Deletes never use `INFISICAL_PROJECT_ID` or `.infisical.yaml`. For Agent Vault, no project from `--project-id`, `INFISICAL_AGENT_VAULT_PROJECT_ID` or `INFISICAL_PROJECT_ID` |
+| `project_required` | A delete ran without `--projectId`. Deletes never use `INFISICAL_PROJECT_ID` or `.infisical.yaml`. For Agent Vault, no project from `--project-id`, `INFISICAL_AGENT_VAULT_PROJECT_ID` or `INFISICAL_PROJECT_ID`, or `agent-vault skills delete` without `--project-id` |
 | `invalid_project_id` | An Agent Vault project ID from `--project-id` or a variable isn't a project ID |
 | `access_bundle_required` | `agent-vault sessions create` without `--access-bundle` or `INFISICAL_AGENT_VAULT_ACCESS_BUNDLE` |
 | `access_bundle_not_granted` | `agent-vault sessions create` with an access bundle the caller (or the user a session is on behalf of) can't use, or that doesn't exist (400 `AccessBundleNotGranted`) |
@@ -102,9 +102,10 @@ With `-o json`, the same error is JSON on stderr:
 | `approval_not_configured` | `pam access` on an account that needs approval, in a folder with no approvers |
 | `reason_required` | `pam access` without `--reason` on an account whose template requires one, or whose access request requires one. Nothing is filed |
 | `mfa_required` | `pam access` without a terminal on an account that requires MFA. The message has the link a person opens; suggests re-running with `--mfa-session` |
-| `session_expired` | `pam access -- <command>`: the session's duration ran out before the command finished, so the command was stopped |
+| `session_expired` | `pam access -- <command>`: the session's duration, or the AWS credentials of an account without a Gateway, ran out before the command finished, so the command was stopped |
 | `command_not_supported` | `pam access -- <command>` on an account type that can't run one (Windows). The session is ended |
 | `command_removed` | A removed command that is kept hidden, such as `pam agentic access`. Suggests its replacement |
+| `skill_not_found` | An Agent Vault skills command names a skill the project doesn't have, or that the caller can't see |
 | `secret_exists` | `secrets create` on a key that exists. Nothing is written |
 | `secret_not_found` | `secrets update` on a key that doesn't exist. Nothing is written |
 | `folder_not_found` | `folders get`, `update` or `delete` on a folder that doesn't exist at `--path` |

@@ -216,7 +216,7 @@ func lockSkillsDir(ctx context.Context, dir string) func() {
 }
 
 func installSkillFolder(dir string, skill api.AgentVaultSessionSkill) error {
-	if !validSkillFolderName(skill.Name) {
+	if !ValidSkillFolderName(skill.Name) {
 		return fmt.Errorf("the name %q cannot be used as a folder name", skill.Name)
 	}
 	dest := filepath.Join(dir, skill.Name)
@@ -404,7 +404,7 @@ func notInstalledByInfisical(dir, name string, info os.FileInfo) error {
 }
 
 // Skill names become folder names, so anything that could step outside the install directory is refused.
-func validSkillFolderName(name string) bool {
+func ValidSkillFolderName(name string) bool {
 	return name != "" && len(name) <= 64 && !strings.HasPrefix(name, ".") &&
 		!strings.ContainsAny(name, `/\:`) && filepath.IsLocal(name)
 }
@@ -417,7 +417,7 @@ func writeSkillFolder(root string, skill api.AgentVaultSessionSkill) error {
 	if err := writeSkillMarker(root, skillMarker{SkillID: skill.ID}); err != nil {
 		return err
 	}
-	if err := writeSkillFiles(root, skill.Files); err != nil {
+	if err := WriteSkillFiles(root, skill.Files); err != nil {
 		return err
 	}
 	return writeSkillMarker(root, skillMarker{SkillID: skill.ID, Sha256: skill.Sha256})
@@ -434,12 +434,27 @@ func writeSkillMarker(root string, marker skillMarker) error {
 	return nil
 }
 
-func writeSkillFiles(root string, files []api.AgentVaultSkillFile) error {
+// CheckSkillFiles refuses a skill whose paths leave its folder or whose contents aren't valid base64, so a caller can
+// refuse it before writing anything. Write failures such as a full disk can still happen.
+func CheckSkillFiles(files []api.AgentVaultSkillFile) error {
 	for _, file := range files {
 		rel := filepath.FromSlash(file.Path)
 		if file.Path == "" || strings.Contains(file.Path, `\`) || !filepath.IsLocal(rel) || filepath.Clean(rel) == "." {
 			return fmt.Errorf("it holds a file at %q, which is outside its folder", file.Path)
 		}
+		if _, err := base64.StdEncoding.DecodeString(file.ContentBase64); err != nil {
+			return fmt.Errorf("its file %q is not valid base64", file.Path)
+		}
+	}
+	return nil
+}
+
+func WriteSkillFiles(root string, files []api.AgentVaultSkillFile) error {
+	if err := CheckSkillFiles(files); err != nil {
+		return err
+	}
+	for _, file := range files {
+		rel := filepath.FromSlash(file.Path)
 		target := filepath.Join(root, rel)
 		if inside, err := filepath.Rel(root, target); err != nil || !filepath.IsLocal(inside) {
 			return fmt.Errorf("it holds a file at %q, which is outside its folder", file.Path)

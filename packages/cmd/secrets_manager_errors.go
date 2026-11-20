@@ -51,7 +51,7 @@ var errorCodes = []string{
 	errCodeAccessBundleRequired, errCodeInvalidAccessBundle, errCodeInvalidProjectID, errCodeAccessBundleNotGranted,
 	errCodeSessionTokenRequired, errCodeProxyRequired, errCodeProxyUnreachable, errCodeProxyUntrusted,
 	errCodeProxyNotSupported, errCodeServiceNotFound, errCodeNoServices, errCodeServiceRefused,
-	errCodeSessionInvalid, errCodeLocalPortUnavailable,
+	errCodeSessionInvalid, errCodeLocalPortUnavailable, errCodeSkillNotFound,
 	errCodeAccountNotFound, errCodeApprovalPending, errCodeApprovalRequired, errCodeApprovalNotConfigured,
 	errCodeReasonRequired, errCodeMFARequired, errCodeSessionExpired, errCodeCommandNotSupported,
 	errCodeCommandRemoved,

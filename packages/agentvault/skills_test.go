@@ -127,3 +127,14 @@ func TestSkillHeaderNameSaysWhichLineIsNotYAML(t *testing.T) {
 		t.Errorf("unclosed quote before the next key: got %v", err)
 	}
 }
+
+func TestIsHiddenSkillPath(t *testing.T) {
+	for path, want := range map[string]bool{
+		"SKILL.md": false, "scripts/lint.sh": false, ".git/config": true, "scripts/.env": true,
+		".DS_Store": true, "../escape.md": false, "a/./b": false, "..x/y": true,
+	} {
+		if got := IsHiddenSkillPath(path); got != want {
+			t.Errorf("IsHiddenSkillPath(%q) = %v, want %v", path, got, want)
+		}
+	}
+}
