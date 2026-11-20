@@ -232,6 +232,7 @@ func (tm *AgentManager) resumeCertificateFromDisk(certificateId int, certConfig 
 	state.LastReportedStatus = "active"
 	state.LastError = ""
 	state.RetryCount = 0
+	state.Delivered = true
 
 	state.NextRenewalCheck = nextCertificateCheck(certConfig, state.ExpiresAt, time.Now())
 

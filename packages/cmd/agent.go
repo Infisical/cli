@@ -130,6 +130,7 @@ type CertificateState struct {
 	CommonName           string    `json:"common_name"`
 	IssuedAt             time.Time `json:"issued_at"`
 	RequestedAt          time.Time `json:"requested_at,omitempty"`
+	Delivered            bool      `json:"delivered,omitempty"`
 	ExpiresAt            time.Time `json:"expires_at"`
 	NextRenewalCheck     time.Time `json:"next_renewal_check"`
 	Status               string    `json:"status"`
@@ -137,6 +138,8 @@ type CertificateState struct {
 	LastError            string    `json:"last_error,omitempty"`
 	RetryCount           int       `json:"retry_count"`
 	LastRetry            time.Time `json:"last_retry,omitempty"`
+
+	renewalWindowWarnedFor string
 }
 
 type InfisicalConfig struct {
@@ -1167,6 +1170,9 @@ type AgentManager struct {
 	revokeCredentialsOnShutdown     bool
 
 	isShuttingDown bool
+
+	hookMutex    sync.Mutex
+	lastHookDone map[int]chan struct{}
 
 	infisicalClient infisicalSdk.InfisicalClientInterface
 	cancelContext   context.CancelFunc
@@ -2391,16 +2397,17 @@ func claimFailureRetry(state *CertificateState, certificate *AgentCertificateCon
 	return state.LastRetry.IsZero() || now.Sub(state.LastRetry) >= failureRetryIntervalFor(certificate)
 }
 
-func (tm *AgentManager) retrieveCertificate(certificateID string) *api.RetrieveCertificateResponse {
+func (tm *AgentManager) retrieveCertificate(certificateID string) (*api.RetrieveCertificateResponse, error) {
 	httpClient, err := tm.createAuthenticatedClient()
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	existing, err := api.CallRetrieveCertificate(httpClient, certificateID)
-	if err != nil {
-		return nil
-	}
-	return existing
+	return api.CallRetrieveCertificate(httpClient, certificateID)
+}
+
+func isNotFoundError(err error) bool {
+	var apiErr *api.APIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound
 }
 
 func (tm *AgentManager) handleRevokedCertificate(certificateId int, certificate *AgentCertificateConfig, state *CertificateState) {
@@ -2410,7 +2417,7 @@ func (tm *AgentManager) handleRevokedCertificate(certificateId int, certificate 
 	state.LastError = "certificate has been revoked"
 	if certificate.PostHooks.OnFailure.Command != "" {
 		log.Info().Str("Certificate", displayName).Msg("executing revocation post-hook")
-		go tm.ExecutePostHook(certificate.PostHooks.OnFailure.Command, certificate.PostHooks.OnFailure.Timeout, "revocation", certificateId, certificate)
+		tm.ExecutePostHook(certificate.PostHooks.OnFailure.Command, certificate.PostHooks.OnFailure.Timeout, "revocation", certificateId, certificate)
 	}
 }
 
@@ -2725,7 +2732,7 @@ func (tm *AgentManager) IssueCertificate(certificateId int, certificate *AgentCe
 		}
 	}
 
-	replacing := state.CertificateID != "" && isReplacementOnDisk(certificate)
+	replacing := state.Delivered
 
 	if response.Certificate != nil {
 		state.CertificateID = response.Certificate.CertificateID
@@ -2754,6 +2761,7 @@ func (tm *AgentManager) IssueCertificate(certificateId int, certificate *AgentCe
 		return err
 	}
 	state.RetryCount = 0
+	state.Delivered = true
 
 	log.Info().Str("Certificate", displayName).Str("serial", response.Certificate.SerialNumber).Msg("certificate issued successfully")
 
@@ -2839,7 +2847,7 @@ func (tm *AgentManager) checkCertificateRequestStatus(certificateId int, certifi
 			return nil
 		}
 
-		replacing := state.CertificateID != "" && isReplacementOnDisk(certificate)
+		replacing := state.Delivered
 		state.CertificateID = *response.CertificateID
 		state.SerialNumber = *response.SerialNumber
 		state.Status = "active"
@@ -2874,6 +2882,7 @@ func (tm *AgentManager) checkCertificateRequestStatus(certificateId int, certifi
 			return err
 		}
 		state.RetryCount = 0
+		state.Delivered = true
 
 		displayName := tm.getCertificateDisplayName(certificateId, certificate)
 		log.Info().Str("Certificate", displayName).Str("serial", *response.SerialNumber).Msg("certificate issued successfully")
@@ -2914,7 +2923,7 @@ func (tm *AgentManager) handleFailedCertificateRequest(certificateId int, errorM
 	log.Error().Str("Certificate", displayName).Msgf("certificate request failed: %s", errorMsg)
 
 	if certificate != nil && certificate.PostHooks.OnFailure.Command != "" {
-		go tm.ExecutePostHook(certificate.PostHooks.OnFailure.Command, certificate.PostHooks.OnFailure.Timeout, "failure", certificateId, certificate)
+		tm.ExecutePostHook(certificate.PostHooks.OnFailure.Command, certificate.PostHooks.OnFailure.Timeout, "failure", certificateId, certificate)
 	}
 }
 
@@ -3191,13 +3200,35 @@ func (tm *AgentManager) ExecutePostHook(command string, timeoutSecs int64, hookT
 	displayName := tm.getCertificateDisplayName(certificateId, certificate)
 	log.Info().Str("Certificate", displayName).Msg("executing post-hook")
 
-	go func() {
+	tm.runHookInOrder(certificateId, func() {
 		err := ExecuteCommandWithTimeout(command, int64(timeout.Seconds()))
 		if err != nil {
 			log.Error().Str("Certificate", displayName).Msgf("post-hook execution failed: %v", err)
 		} else {
 			log.Info().Str("Certificate", displayName).Msg("post-hook execution successful")
 		}
+	})
+}
+
+// Hooks run in the background so a slow command never stalls monitoring, but one certificate's
+// hooks must finish in the order they fired: a failure hook must not land after the reload that
+// follows a replacement.
+func (tm *AgentManager) runHookInOrder(certificateId int, run func()) {
+	tm.hookMutex.Lock()
+	if tm.lastHookDone == nil {
+		tm.lastHookDone = map[int]chan struct{}{}
+	}
+	previous := tm.lastHookDone[certificateId]
+	done := make(chan struct{})
+	tm.lastHookDone[certificateId] = done
+	tm.hookMutex.Unlock()
+
+	go func() {
+		defer close(done)
+		if previous != nil {
+			<-previous
+		}
+		run()
 	}()
 }
 
@@ -3318,17 +3349,22 @@ func (tm *AgentManager) CheckCertificateRenewals() {
 			reissue := certificateID == ""
 			if !reissue {
 				tm.mutex.Unlock()
-				existing := tm.retrieveCertificate(certificateID)
+				existing, err := tm.retrieveCertificate(certificateID)
 				tm.mutex.Lock()
-				if existing == nil {
-					reissue = hasCSR || now.After(state.ExpiresAt)
-				} else {
+				switch {
+				case err != nil && isNotFoundError(err):
+					log.Warn().Str("Certificate", displayName).Str("certificateId", certificateID).Msg("certificate no longer exists in Infisical; issuing a new certificate")
+					reissue = true
+				case err != nil:
+					log.Warn().Str("Certificate", displayName).Str("certificateId", certificateID).Msgf("unable to look up the certificate before retrying: %v", err)
+					reissue = !state.Delivered || hasCSR || now.After(state.ExpiresAt)
+				default:
 					status := effectiveCertificateStatus(existing)
 					if status == api.CertificateStatusRevoked {
 						tm.handleRevokedCertificate(cert.ID, &cert.Certificate, state)
 						continue
 					}
-					reissue = hasCSR || status == api.CertificateStatusExpired || existing.Certificate.RenewedByCertificateID != ""
+					reissue = !state.Delivered || hasCSR || status == api.CertificateStatusExpired || existing.Certificate.RenewedByCertificateID != ""
 				}
 			}
 			if reissue {
@@ -3429,7 +3465,7 @@ func (tm *AgentManager) CheckCertificateStatus(certificateId int, infisicalCertI
 					if cert.Certificate.PostHooks.OnFailure.Command != "" {
 						displayName := tm.getCertificateDisplayName(certificateId, &cert.Certificate)
 						log.Info().Str("Certificate", displayName).Msg("executing expiration post-hook")
-						go tm.ExecutePostHook(cert.Certificate.PostHooks.OnFailure.Command, cert.Certificate.PostHooks.OnFailure.Timeout, "expiration", certificateId, &cert.Certificate)
+						tm.ExecutePostHook(cert.Certificate.PostHooks.OnFailure.Command, cert.Certificate.PostHooks.OnFailure.Timeout, "expiration", certificateId, &cert.Certificate)
 					}
 					break
 				}
@@ -3468,7 +3504,10 @@ func (tm *AgentManager) ShouldRenewCertificate(certificateId int) bool {
 		return false
 	}
 	if !renewAt.After(state.IssuedAt) {
-		log.Warn().Str("Certificate", tm.getCertificateDisplayName(certificateId, cert)).Msg("renew-before-expiry is longer than the certificate's lifetime; not renewing until it expires")
+		if state.renewalWindowWarnedFor != state.CertificateID {
+			log.Warn().Str("Certificate", tm.getCertificateDisplayName(certificateId, cert)).Msg("renew-before-expiry is longer than the certificate's lifetime; not renewing until it expires")
+			state.renewalWindowWarnedFor = state.CertificateID
+		}
 		return false
 	}
 	return true
@@ -3543,6 +3582,7 @@ func (tm *AgentManager) handleImmediateRenewalResponse(certificateId int, certif
 		return err
 	}
 	state.RetryCount = 0
+	state.Delivered = true
 
 	displayName := tm.getCertificateDisplayName(certificateId, certificate)
 	log.Info().Str("Certificate", displayName).Str("serial", response.SerialNumber).Msg("certificate renewed successfully")
@@ -3651,6 +3691,7 @@ func (tm *AgentManager) PollCertificateRequestForRenewal(certificateId int, cert
 				tm.mutex.Lock()
 				defer tm.mutex.Unlock()
 				tm.certificateStates[certificateId].RetryCount = 0
+				tm.certificateStates[certificateId].Delivered = true
 			}()
 
 			log.Info().Str("Certificate", displayName).Str("serial", certResponse.Certificate.SerialNumber).Msg("successfully renewed certificate")

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,8 @@ import (
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -173,7 +176,7 @@ func TestCheckCertificateRenewals_RetriesFailedIssuanceAfterInterval(t *testing.
 func TestCheckCertificateRenewals_RetriesFailedRenewal(t *testing.T) {
 	server := &retryTestServer{certificatePEM: newResumeTestCertificatePEM(t, 2, time.Now().Add(90*24*time.Hour))}
 	server.start(t)
-	state := &CertificateState{Status: "failed", CertificateID: "cert-1", ExpiresAt: time.Now().Add(time.Hour), RetryCount: 1, LastRetry: time.Now().Add(-2 * time.Minute)}
+	state := &CertificateState{Delivered: true, Status: "failed", CertificateID: "cert-1", ExpiresAt: time.Now().Add(time.Hour), RetryCount: 1, LastRetry: time.Now().Add(-2 * time.Minute)}
 	tm, _ := newRetryTestManager(t, CertificateLifecycleConfig{FailureRetryInterval: "1m", RenewBeforeExpiry: "30d"}, state)
 
 	tm.CheckCertificateRenewals()
@@ -187,7 +190,7 @@ func TestCheckCertificateRenewals_RetriesFailedRenewal(t *testing.T) {
 func TestCheckCertificateRenewals_StopsRetryingWhenBudgetIsExhausted(t *testing.T) {
 	server := &retryTestServer{renewStatus: http.StatusInternalServerError}
 	server.start(t)
-	state := &CertificateState{Status: "failed", CertificateID: "cert-1", ExpiresAt: time.Now().Add(time.Hour), LastRetry: time.Now().Add(-2 * time.Minute)}
+	state := &CertificateState{Delivered: true, Status: "failed", CertificateID: "cert-1", ExpiresAt: time.Now().Add(time.Hour), LastRetry: time.Now().Add(-2 * time.Minute)}
 	tm, _ := newRetryTestManager(t, CertificateLifecycleConfig{FailureRetryInterval: "1m", MaxFailureRetries: 2}, state)
 
 	tm.CheckCertificateRenewals()
@@ -425,7 +428,7 @@ func TestCheckCertificateRenewals_StopsWhenExpiredOrCSRCertificateWasRevoked(t *
 func TestCheckCertificateRenewals_ReplacementRunsTheRenewalHook(t *testing.T) {
 	server := &retryTestServer{notAfter: time.Now().Add(-time.Minute), certificatePEM: newResumeTestCertificatePEM(t, 2, time.Now().Add(90*24*time.Hour))}
 	server.start(t)
-	state := &CertificateState{Status: "active", CertificateID: "cert-1", ExpiresAt: time.Now().Add(time.Hour), NextRenewalCheck: time.Now().Add(-time.Second)}
+	state := &CertificateState{Delivered: true, Status: "active", CertificateID: "cert-1", ExpiresAt: time.Now().Add(time.Hour), NextRenewalCheck: time.Now().Add(-time.Second)}
 	tm, cfg := newRetryTestManager(t, CertificateLifecycleConfig{RenewBeforeExpiry: "30d"}, state)
 	require.NoError(t, os.WriteFile(cfg.FileConfig.Certificate.Path, []byte("old"), 0o600))
 	dir := t.TempDir()
@@ -453,4 +456,68 @@ func TestIssuedCertificateValidity_StartsAtTheLaterOfNotBeforeAndTheRequest(t *t
 	notBefore := time.Now().Add(-40 * time.Minute).Truncate(time.Second)
 	issuedAt, _ = tm.issuedCertificateValidity(cfg, newTestCertificatePEM(t, 3, notBefore, notAfter), time.Now().Add(-45*time.Minute))
 	assert.True(t, issuedAt.Equal(notBefore), "a late pickup starts the lifetime when the CA issued the certificate")
+}
+
+func TestCheckCertificateRenewals_UndeliveredCertificateIsReissuedWithTheIssuanceHook(t *testing.T) {
+	server := &retryTestServer{notAfter: time.Now().Add(time.Hour), certificatePEM: newResumeTestCertificatePEM(t, 2, time.Now().Add(90*24*time.Hour))}
+	server.start(t)
+	state := &CertificateState{Status: "failed", CertificateID: "cert-1", ExpiresAt: time.Now().Add(time.Hour), RetryCount: 1, LastRetry: time.Now().Add(-2 * time.Minute)}
+	tm, cfg := newRetryTestManager(t, CertificateLifecycleConfig{FailureRetryInterval: "1m", RenewBeforeExpiry: "30d"}, state)
+	dir := t.TempDir()
+	cfg.PostHooks.OnIssuance.Command = "touch " + filepath.Join(dir, "issuance")
+	cfg.PostHooks.OnRenewal.Command = "touch " + filepath.Join(dir, "renewal")
+
+	tm.CheckCertificateRenewals()
+
+	assert.Equal(t, int32(1), server.issueCalls.Load())
+	assert.Equal(t, int32(0), server.renewCalls.Load())
+	require.Eventually(t, func() bool { _, err := os.Stat(filepath.Join(dir, "issuance")); return err == nil }, 5*time.Second, 50*time.Millisecond)
+	_, err := os.Stat(filepath.Join(dir, "renewal"))
+	assert.True(t, os.IsNotExist(err), "a first delivery must not run the renewal hook")
+}
+
+func TestCheckCertificateRenewals_ReissuesWhenCertificateWasDeletedInInfisical(t *testing.T) {
+	server := &retryTestServer{retrieveStatus: http.StatusNotFound, certificatePEM: newResumeTestCertificatePEM(t, 2, time.Now().Add(90*24*time.Hour))}
+	server.start(t)
+	state := &CertificateState{Status: "failed", CertificateID: "cert-1", Delivered: true, ExpiresAt: time.Now().Add(time.Hour), RetryCount: 1, LastRetry: time.Now().Add(-2 * time.Minute)}
+	tm, _ := newRetryTestManager(t, CertificateLifecycleConfig{FailureRetryInterval: "1m", RenewBeforeExpiry: "30d"}, state)
+
+	tm.CheckCertificateRenewals()
+
+	assert.Equal(t, int32(1), server.issueCalls.Load())
+	assert.Equal(t, int32(0), server.renewCalls.Load())
+}
+
+func TestShouldRenewCertificate_WarnsOncePerCertificateWhenWindowCoversLifetime(t *testing.T) {
+	var logs bytes.Buffer
+	previous := log.Logger
+	log.Logger = zerolog.New(&logs)
+	t.Cleanup(func() { log.Logger = previous })
+	state := &CertificateState{Status: "active", CertificateID: "cert-1", IssuedAt: time.Now().Add(-time.Minute), ExpiresAt: time.Now().Add(time.Hour)}
+	tm, _ := newRetryTestManager(t, CertificateLifecycleConfig{RenewBeforeExpiry: "2h"}, state)
+
+	for range 3 {
+		assert.False(t, tm.ShouldRenewCertificate(1))
+	}
+	state.CertificateID = "cert-2"
+	assert.False(t, tm.ShouldRenewCertificate(1))
+
+	assert.Equal(t, 2, strings.Count(logs.String(), "longer than the certificate's lifetime"))
+}
+
+func TestExecutePostHook_RunsOneCertificatesHooksInOrder(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "order")
+	tm := &AgentManager{}
+	cfg := &AgentCertificateConfig{}
+
+	tm.ExecutePostHook("sleep 0.3; echo failure >> "+out, 10, "failure", 1, cfg)
+	tm.ExecutePostHook("echo renewal >> "+out, 10, "renewal", 1, cfg)
+
+	require.Eventually(t, func() bool {
+		data, _ := os.ReadFile(out)
+		return strings.Count(string(data), "\n") == 2
+	}, 5*time.Second, 50*time.Millisecond)
+	data, err := os.ReadFile(out)
+	require.NoError(t, err)
+	assert.Equal(t, "failure\nrenewal\n", string(data))
 }
