@@ -413,9 +413,11 @@ func GetAllEnvironmentVariables(params models.GetAllSecretsParameters, projectCo
 			secretsToReturn, errorToReturn = GetPlainTextSecretsViaServiceToken(params.InfisicalToken, params.Environment, params.SecretsPath, params.IncludeImport, params.Recursive, params.TagSlugs, params.ExpandSecretReferences, params.IncludePersonalOverrides)
 		} else if params.UniversalAuthAccessToken != "" {
 
-			if params.WorkspaceId == "" {
-				PrintErrorMessageAndExit("Project ID is required when using machine identity")
+			workspaceId, err := ResolveMachineIdentityWorkspaceId(params.WorkspaceId, projectConfigFilePath)
+			if err != nil {
+				PrintErrorMessageAndExit(err.Error())
 			}
+			params.WorkspaceId = workspaceId
 
 			log.Debug().Msg("Trying to fetch secrets using universal auth")
 			res, err := GetPlainTextSecretsV4(params.UniversalAuthAccessToken, params.WorkspaceId, params.Environment, params.SecretsPath, params.IncludeImport, params.Recursive, params.TagSlugs, params.ExpandSecretReferences, params.IncludePersonalOverrides, params.ViewSecretValue)
