@@ -251,21 +251,24 @@ func RunLocalCommand(httpClient *resty.Client, response *api.PAMAccessResponse, 
 }
 
 func runLocalChild(command []string, env []string, expiry time.Time, signals chan os.Signal) (int, error) {
+	// A terminal's Ctrl+C already reaches the child through its process group, so SIGINT is only
+	// forwarded without one. Catching signals keeps this process alive long enough to end the session.
+	noTerminal := !isatty.IsTerminal(os.Stdin.Fd())
+
 	child := exec.Command(command[0], command[1:]...)
 	child.Env = env
 	child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if noTerminal {
+		startInOwnGroup(child)
+	}
 	if err := child.Start(); err != nil {
 		return 127, &CommandStartError{Command: command[0], Err: err}
 	}
 
-	// A terminal's Ctrl+C already reaches the child through its process group, so SIGINT is only
-	// forwarded without one. Catching signals keeps this process alive long enough to end the session.
-	forwardInterrupt := !isatty.IsTerminal(os.Stdin.Fd())
-
 	expired := make(chan struct{})
 	timer := time.AfterFunc(time.Until(expiry), func() {
 		close(expired)
-		_ = child.Process.Kill()
+		killCommand(child, noTerminal)
 	})
 	defer timer.Stop()
 
@@ -274,8 +277,8 @@ func runLocalChild(command []string, env []string, expiry time.Time, signals cha
 		for {
 			select {
 			case sig := <-signals:
-				if sig != syscall.SIGINT || forwardInterrupt {
-					_ = child.Process.Signal(sig)
+				if sig != syscall.SIGINT || noTerminal {
+					signalCommand(child, sig, noTerminal)
 				}
 			case <-done:
 				return
