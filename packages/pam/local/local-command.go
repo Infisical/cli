@@ -24,7 +24,6 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/go-resty/resty/v2"
-	"github.com/mattn/go-isatty"
 	"github.com/rs/zerolog/log"
 	"k8s.io/client-go/tools/clientcmd"
 	k8sapi "k8s.io/client-go/tools/clientcmd/api"
@@ -78,10 +77,36 @@ type interruptWatch struct {
 	stopped  chan struct{}
 	doneOnce sync.Once
 	caught   os.Signal
+	torndown chan struct{}
+	stopOnce sync.Once
+	mu       sync.Mutex
+	temp     []string
+}
+
+func signalExitCode(sig os.Signal) int {
+	if s, ok := sig.(syscall.Signal); ok {
+		return 128 + int(s)
+	}
+	return 1
+}
+
+func (w *interruptWatch) removeOnExit(path string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.temp = append(w.temp, path)
+}
+
+func (w *interruptWatch) exit(sig os.Signal) {
+	w.mu.Lock()
+	for _, path := range w.temp {
+		_ = os.RemoveAll(path)
+	}
+	w.mu.Unlock()
+	os.Exit(signalExitCode(sig))
 }
 
 func watchInterrupts() *interruptWatch {
-	w := &interruptWatch{signals: make(chan os.Signal, 1), done: make(chan struct{}), stopped: make(chan struct{})}
+	w := &interruptWatch{signals: make(chan os.Signal, 1), done: make(chan struct{}), stopped: make(chan struct{}), torndown: make(chan struct{})}
 	w.ctx, w.cancel = context.WithCancel(context.Background())
 	signal.Notify(w.signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	go func() {
@@ -96,10 +121,7 @@ func watchInterrupts() *interruptWatch {
 		// A blocking setup step can't see the first interrupt; a second one exits at once.
 		select {
 		case sig := <-w.signals:
-			if s, ok := sig.(syscall.Signal); ok {
-				os.Exit(128 + int(s))
-			}
-			os.Exit(1)
+			w.exit(sig)
 		case <-w.done:
 		}
 	}()
@@ -113,14 +135,24 @@ func (w *interruptWatch) setupFinished() (int, bool) {
 	if w.caught == nil {
 		return 0, false
 	}
-	if sig, ok := w.caught.(syscall.Signal); ok {
-		return 128 + int(sig), true
-	}
-	return 1, true
+	return signalExitCode(w.caught), true
+}
+
+// commandFinished makes an interrupt during teardown exit at once, since ending the session can
+// block on the network.
+func (w *interruptWatch) commandFinished() {
+	go func() {
+		select {
+		case sig := <-w.signals:
+			w.exit(sig)
+		case <-w.torndown:
+		}
+	}()
 }
 
 func (w *interruptWatch) stop() {
 	w.doneOnce.Do(func() { close(w.done) })
+	w.stopOnce.Do(func() { close(w.torndown) })
 	signal.Stop(w.signals)
 	w.cancel()
 }
@@ -208,7 +240,7 @@ func RunLocalCommand(httpClient *resty.Client, response *api.PAMAccessResponse, 
 		if code, interrupted := interrupts.setupFinished(); interrupted {
 			return code, ErrInterrupted
 		}
-		code, err := runLocalChild(command, env, expiry, interrupts.signals)
+		code, err := runLocalChild(command, env, expiry, interrupts)
 		if credentialsFirst && errors.Is(err, ErrSessionExpired) {
 			return code, ErrCredentialsExpired
 		}
@@ -251,6 +283,7 @@ func RunLocalCommand(httpClient *resty.Client, response *api.PAMAccessResponse, 
 		return 1, fmt.Errorf("failed to create a temporary directory: %w", err)
 	}
 	defer os.RemoveAll(tempDir)
+	interrupts.removeOnExit(tempDir)
 
 	env, err := localCommandEnv(response, boundPort, tempDir, setup)
 	if err != nil {
@@ -273,13 +306,13 @@ func RunLocalCommand(httpClient *resty.Client, response *api.PAMAccessResponse, 
 	if code, interrupted := interrupts.setupFinished(); interrupted {
 		return code, ErrInterrupted
 	}
-	return runLocalChild(command, env, session.Expiry, interrupts.signals)
+	return runLocalChild(command, env, session.Expiry, interrupts)
 }
 
-func runLocalChild(command []string, env []string, expiry time.Time, signals chan os.Signal) (int, error) {
+func runLocalChild(command []string, env []string, expiry time.Time, interrupts *interruptWatch) (int, error) {
 	// A terminal's Ctrl+C already reaches the child through its process group, so SIGINT is only
 	// forwarded without one. Catching signals keeps this process alive long enough to end the session.
-	noTerminal := !isatty.IsTerminal(os.Stdin.Fd()) && !isatty.IsTerminal(os.Stdout.Fd()) && !isatty.IsTerminal(os.Stderr.Fd())
+	noTerminal := !hasControllingTerminal()
 
 	child := exec.Command(command[0], command[1:]...)
 	child.Env = env
@@ -302,7 +335,7 @@ func runLocalChild(command []string, env []string, expiry time.Time, signals cha
 	go func() {
 		for {
 			select {
-			case sig := <-signals:
+			case sig := <-interrupts.signals:
 				if sig != syscall.SIGINT || noTerminal {
 					signalCommand(child, sig, noTerminal)
 				}
@@ -314,6 +347,7 @@ func runLocalChild(command []string, env []string, expiry time.Time, signals cha
 
 	waitErr := child.Wait()
 	close(done)
+	interrupts.commandFinished()
 
 	select {
 	case <-expired:
@@ -388,6 +422,7 @@ func runAWSGatewayCommand(httpClient *resty.Client, response *api.PAMAccessRespo
 		return 1, fmt.Errorf("failed to write the CA file: %w", err)
 	}
 	defer os.Remove(caPath)
+	interrupts.removeOnExit(caPath)
 
 	proxyURL := fmt.Sprintf("http://infisical:%s@127.0.0.1:%d", proxySecret, proxy.port)
 	env := awsProxyEnv(os.Environ(), proxyURL, caPath)
@@ -395,7 +430,7 @@ func runAWSGatewayCommand(httpClient *resty.Client, response *api.PAMAccessRespo
 	if code, interrupted := interrupts.setupFinished(); interrupted {
 		return code, ErrInterrupted
 	}
-	return runLocalChild(command, env, expiry, interrupts.signals)
+	return runLocalChild(command, env, expiry, interrupts)
 }
 
 // awsCommandEnv hands the command the session's STS credentials, for AWS accounts without a gateway.

@@ -7,6 +7,10 @@ import (
 
 func startInOwnGroup(*exec.Cmd) {}
 
+func hasControllingTerminal() bool {
+	return true
+}
+
 func signalCommand(child *exec.Cmd, sig os.Signal, _ bool) {
 	_ = child.Process.Signal(sig)
 }

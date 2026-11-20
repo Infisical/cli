@@ -33,7 +33,7 @@ func pamConstructedErrors() []*util.CLIError {
 		errPAMAgenticRemoved(),
 		errPAMInvalidDuration("soon"),
 		errPAMServiceToken(),
-		errPAMPermissionDenied(cause),
+		errPAMPermissionDenied(cause, pamDeniedLaunch),
 	}
 }
 

@@ -92,6 +92,9 @@ func runPAMAccess(cmd *cobra.Command, args []string) {
 	path := strings.Trim(strings.TrimSpace(args[0]), "/")
 	var command []string
 	if dash := cmd.ArgsLenAtDash(); dash >= 0 {
+		if dash == 0 {
+			util.PrintErrorMessageAndExit("Name the account before '--', for example:\n  infisical pam access prod/orders-db -- psql -c \"select 1\"\nTo list the accounts you can access, run: infisical pam accounts get")
+		}
 		if dash != 1 {
 			util.PrintErrorMessageAndExit("Only one account path may be given. Put the command after '--', for example:\n  infisical pam access servers/prod-bastion -- uptime")
 		}
@@ -124,7 +127,7 @@ func runPAMAccess(cmd *cobra.Command, args []string) {
 		util.PrintErrorMessageAndExit("--proxy starts a local proxy for your own client, so it cannot also run a command. Drop one of the two.")
 	}
 
-	accessToken, stopAuth := resolvePAMAccessToken(cmd)
+	accessToken, stopAuth, _ := resolvePAMAccessToken(cmd)
 	defer stopAuth()
 	httpClient := newPAMHTTPClient(accessToken)
 
@@ -202,7 +205,7 @@ func handlePAMAccessError(cmd *cobra.Command, httpClient *resty.Client, err erro
 
 		requestID, requestErr := pam.RaiseAccessRequest(httpClient, opts.Path, strings.TrimSpace(opts.Reason), duration)
 		if requestErr != nil {
-			exitWithError(cmd, classifyPAMAPIError(requestErr, opts.Path), "Failed to file an access request")
+			exitWithError(cmd, classifyPAMAPIError(requestErr, opts.Path, pamDeniedRequest), "Failed to file an access request")
 		}
 		exitWithError(cmd, errPAMApprovalPending(invocation, requestID, gate.Expired))
 	}
@@ -215,11 +218,11 @@ func handlePAMAccessError(cmd *cobra.Command, httpClient *resty.Client, err erro
 		exitWithError(cmd, errPAMMFARequired(invocation, challenge.URL(), challenge.SessionID))
 	}
 
-	exitWithError(cmd, classifyPAMAPIError(err, opts.Path), "Failed to create PAM session")
+	exitWithError(cmd, classifyPAMAPIError(err, opts.Path, pamDeniedLaunch), "Failed to create PAM session")
 }
 
 // classifyPAMAPIError reads only the status code and the error names the backend guarantees.
-func classifyPAMAPIError(err error, path string) error {
+func classifyPAMAPIError(err error, path string, denied string) error {
 	var apiErr *api.APIError
 	if !errors.As(err, &apiErr) {
 		return err
@@ -228,7 +231,7 @@ func classifyPAMAPIError(err error, path string) error {
 	case apiErr.StatusCode == 401, apiErr.StatusCode == 403 && apiErr.Name == "TokenError":
 		return errPAMAuthRequired(err)
 	case apiErr.StatusCode == 403 && apiErr.Name == "PermissionDenied":
-		return errPAMPermissionDenied(err)
+		return errPAMPermissionDenied(err, denied)
 	case apiErr.StatusCode == 404 && path != "":
 		return errPAMAccountNotFound(path, err)
 	}

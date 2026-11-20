@@ -154,7 +154,7 @@ func errPAMSessionExpired(invocation pamAccessInvocation, ranFor time.Duration, 
 	}
 	return &util.CLIError{Code: errCodeSessionExpired,
 		Message: fmt.Sprintf("The PAM session for %s ended after %s, before the command finished, so the command was stopped.", pamAccountArg(invocation.Path), ranFor),
-		Next:    []util.NextStep{{Purpose: "To run it again with a longer session", Command: invocation.accessCommand("--duration 2h")}}}
+		Next:    []util.NextStep{{Purpose: "To run it again with a longer session, up to the account's maximum session length", Command: invocation.accessCommand("--duration 2h")}}}
 }
 
 func errPAMMissingCommand(path string) *util.CLIError {
@@ -189,8 +189,14 @@ func errPAMServiceToken() *util.CLIError {
 		Next:    []util.NextStep{{Purpose: "To log in as a user", Command: "infisical login"}}}
 }
 
-func errPAMPermissionDenied(cause error) *util.CLIError {
+const (
+	pamDeniedLaunch  = "You don't have permission to launch sessions on this account. Ask a folder admin for the Connector role on it."
+	pamDeniedRequest = "You don't have permission to request access to this account. Ask a folder admin for a role on it."
+	pamDeniedList    = "You don't have permission to list PAM accounts. Ask a PAM admin for a role on the folders or accounts you need."
+)
+
+func errPAMPermissionDenied(cause error, message string) *util.CLIError {
 	return &util.CLIError{Code: errCodePermissionDenied, Cause: cause,
-		Message: "You don't have permission to launch sessions on this account. Ask a folder admin for the Connector role on it.",
+		Message: message,
 		Next:    []util.NextStep{{Purpose: "To list the accounts you can access", Command: pamPrefix + " accounts get"}}}
 }

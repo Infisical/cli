@@ -32,10 +32,8 @@ func addPAMAuthFlags(cmd *cobra.Command) {
 	cmd.Flags().String("organization-slug", "", "Scope the session to this sub-organization the machine identity can reach. Defaults to the organization the identity was created in")
 }
 
-// resolvePAMAccessToken returns a getter for the token PAM calls use, and a stop function. A machine
-// identity (a token, or credentials to log in with) wins over the stored user login. Without a
-// terminal nothing interactive is started: a missing or expired login is reported instead.
-func resolvePAMAccessToken(cmd *cobra.Command) (accessToken func() string, stop func()) {
+// A machine identity wins over the stored user login; without a terminal nothing interactive starts.
+func resolvePAMAccessToken(cmd *cobra.Command) (accessToken func() string, stop func(), machineIdentity bool) {
 	token, err := util.GetInfisicalToken(cmd)
 	if err != nil {
 		util.HandleError(err, "Unable to parse token")
@@ -56,11 +54,11 @@ func resolvePAMAccessToken(cmd *cobra.Command) (accessToken func() string, stop 
 		if exp, ok := jwtExpiry(token.Token); ok && exp.Before(time.Now()) {
 			exitWithError(cmd, errPAMTokenExpired(token.Source))
 		}
-		return func() string { return token.Token }, func() {}
+		return func() string { return token.Token }, func() {}, true
 	}
 
 	if source, stopAuth := authenticateMachineIdentity(cmd); source != nil {
-		return source, stopAuth
+		return source, stopAuth, true
 	}
 
 	interactive := stdinIsTerminal()
@@ -90,7 +88,7 @@ func resolvePAMAccessToken(cmd *cobra.Command) (accessToken func() string, stop 
 	if exp, ok := jwtExpiry(jwt); ok && exp.Before(time.Now()) {
 		exitWithError(cmd, errPAMAuthRequired(nil))
 	}
-	return func() string { return jwt }, func() {}
+	return func() string { return jwt }, func() {}, false
 }
 
 // newPAMHTTPClient reads the token per request, so a renewed machine identity token is picked up.

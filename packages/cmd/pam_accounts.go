@@ -58,7 +58,7 @@ ACCESS is one of:
   needs approval  'infisical pam access' files an access request for a person to approve
   pending         a request is waiting for approval
   approved        approved access is active until the time shown
-  unavailable     the account can't be used right now; the reason is shown`,
+  unavailable     the account can't be used right now; 'accounts get <folder/account>' shows why`,
 		Example: `  infisical pam accounts get
   infisical pam accounts get prod
   infisical pam accounts get prod/orders-db
@@ -77,17 +77,17 @@ ACCESS is one of:
 func runPAMAccountsGet(cmd *cobra.Command, args []string) {
 	outputFormat := crudOutputFormat(cmd, "accounts")
 
-	accessToken, stopAuth := resolvePAMAccessToken(cmd)
+	accessToken, stopAuth, machineIdentity := resolvePAMAccessToken(cmd)
 	defer stopAuth()
 	httpClient := newPAMHTTPClient(accessToken)
 
 	if len(args) == 1 && !strings.HasSuffix(strings.TrimSpace(args[0]), "/") {
 		account, found, err := pam.LookupAccessibleAccount(httpClient, args[0])
 		if err != nil {
-			exitWithError(cmd, classifyPAMAPIError(err, ""), "Unable to look up the PAM account")
+			exitWithError(cmd, classifyPAMAPIError(err, "", pamDeniedList), "Unable to look up the PAM account")
 		}
 		if found {
-			view := newPAMAccountView(account)
+			view := newPAMAccountView(account, machineIdentity)
 			if outputFormat != "" {
 				printFormattedOutput(outputFormat, view)
 			} else {
@@ -103,7 +103,7 @@ func runPAMAccountsGet(cmd *cobra.Command, args []string) {
 
 	accounts, err := pam.ListAccessibleAccounts(httpClient, "")
 	if err != nil {
-		exitWithError(cmd, classifyPAMAPIError(err, ""), "Unable to list PAM accounts")
+		exitWithError(cmd, classifyPAMAPIError(err, "", pamDeniedList), "Unable to list PAM accounts")
 	}
 
 	if len(args) == 1 {
@@ -116,7 +116,7 @@ func runPAMAccountsGet(cmd *cobra.Command, args []string) {
 
 	views := make([]pamAccountView, 0, len(accounts))
 	for _, account := range accounts {
-		views = append(views, newPAMAccountView(account))
+		views = append(views, newPAMAccountView(account, machineIdentity))
 	}
 
 	if outputFormat != "" {
@@ -129,13 +129,19 @@ func runPAMAccountsGet(cmd *cobra.Command, args []string) {
 			rows = append(rows, []string{util.SanitizeDisplay(view.Path), view.TypeLabel, pamAccessText(view), strings.Join(pamAccountRequirements(view), ", ")})
 		}
 		visualize.GenericTable([]string{"PATH", "TYPE", "ACCESS", "REQUIRES"}, rows)
+		for _, view := range views {
+			if view.Access == pamAccessUnavailable {
+				printProjectsTip(cmd, "To see why an account is unavailable, run: infisical pam accounts get <folder/account>")
+				break
+			}
+		}
 		printProjectsTip(cmd, "To connect, run: infisical pam access <folder/account> -- <command>. For one account's details, run: infisical pam accounts get <folder/account>")
 	}
 
 	Telemetry.CaptureEvent("cli-command:pam accounts get", posthog.NewProperties().Set("accountCount", len(views)).Set("version", util.CLI_VERSION))
 }
 
-func newPAMAccountView(account api.PAMAccessibleAccount) pamAccountView {
+func newPAMAccountView(account api.PAMAccessibleAccount, machineIdentity bool) pamAccountView {
 	view := pamAccountView{
 		Path:             pam.AccountPath(account),
 		Folder:           account.FolderName,
@@ -153,6 +159,12 @@ func newPAMAccountView(account api.PAMAccessibleAccount) pamAccountView {
 	switch {
 	case !account.CanLaunch:
 		view.Access = pamAccessUnavailable
+	case account.DisabledReason != nil && strings.TrimSpace(*account.DisabledReason) != "":
+		view.Access = pamAccessUnavailable
+	case machineIdentity && account.RequireMfa:
+		view.Access = pamAccessUnavailable
+		reason := "This account requires MFA, which a machine identity can't complete."
+		view.DisabledReason = &reason
 	case !account.RequiresApproval:
 		view.Access = pamAccessReady
 	case account.AccessStatus == pam.AccessStatusGranted:
@@ -177,9 +189,6 @@ func pamAccessText(view pamAccountView) string {
 		}
 		return "approved"
 	case pamAccessUnavailable:
-		if view.DisabledReason != nil && *view.DisabledReason != "" {
-			return "unavailable: " + util.SanitizeDisplay(*view.DisabledReason)
-		}
 		return "unavailable"
 	}
 	return view.Access
@@ -246,6 +255,9 @@ func printPAMAccountDetails(view pamAccountView) {
 		fmt.Sprintf("Type:     %s", view.TypeLabel),
 		fmt.Sprintf("Access:   %s", pamAccessText(view)),
 	}
+	if view.Access == pamAccessUnavailable && view.DisabledReason != nil && *view.DisabledReason != "" {
+		lines = append(lines, fmt.Sprintf("Reason:   %s", util.SanitizeDisplay(*view.DisabledReason)))
+	}
 	if view.Description != "" {
 		lines = append(lines, fmt.Sprintf("About:    %s", util.SanitizeDisplay(view.Description)))
 	}
@@ -266,7 +278,7 @@ func printPAMAccountDetails(view pamAccountView) {
 	case pamAccessPending:
 		lines = append(lines, "", "A request is waiting for a person to approve it. Check again later.")
 	}
-	if view.RequireMfa {
+	if view.RequireMfa && view.Access != pamAccessUnavailable {
 		lines = append(lines, "", "MFA: without a terminal this exits with an error that has a link for a person to open.")
 	}
 
