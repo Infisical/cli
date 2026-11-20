@@ -168,3 +168,36 @@ func TestSessionLoggerMasksCommandThatNeedsItsPrompt(t *testing.T) {
 		t.Errorf("recording lost the masked command: %s", payload)
 	}
 }
+
+func TestSessionLoggerMasksCommandThatOnlyMatchesAlone(t *testing.T) {
+	setupTestDir(t)
+	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
+	expiresAt := time.Now().Add(time.Hour)
+	masker := masking.New([]*regexp.Regexp{regexp.MustCompile(`^mysql -p\S+`)}, false, nil, "sess-anchored")
+
+	logger, err := NewSessionLogger("sess-anchored", key, expiresAt, "ssh", masker)
+	if err != nil {
+		t.Fatalf("NewSessionLogger: %v", err)
+	}
+	if err := logger.LogSessionEvent(SessionEvent{
+		Timestamp:   time.Now(),
+		EventType:   SessionEventOutput,
+		ChannelType: SessionChannelShell,
+		Data:        []byte("$ mysql -pS3cret"),
+		Command:     "mysql -pS3cret",
+	}); err != nil {
+		t.Fatalf("LogSessionEvent: %v", err)
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	filename := fmt.Sprintf("pam_session_sess-anchored_ssh_expires_%d.enc", expiresAt.Unix())
+	payload, _, _, _, err := readFromOffset(filename, key, 0, 1<<20)
+	if err != nil {
+		t.Fatalf("readFromOffset: %v", err)
+	}
+	if !strings.Contains(string(payload), `"command":"[MASKED]"`) {
+		t.Errorf("command lost the masking its own pattern applies: %s", payload)
+	}
+}
