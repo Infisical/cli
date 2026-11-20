@@ -60,7 +60,8 @@ The CLI exits with the command's exit code:
     AWS_CA_BUNDLE and placeholder credentials), and the Gateway signs each request. Without
     a Gateway, the command gets the session's temporary credentials in AWS_ACCESS_KEY_ID,
     AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN.
-  - Windows accounts can't run a command.
+  - Windows accounts can't run a command. Without '--' they start an RDP proxy; run it in
+    the background and open the .rdp file it prints with an RDP client.
 
 Connecting through the proxy:
   - Any username works and no password is needed: the Gateway swaps in the real

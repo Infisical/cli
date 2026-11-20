@@ -245,6 +245,8 @@ func pamExampleCommand(view pamAccountView) string {
 		return base + " -- az account show"
 	case pam.AccountTypeAwsIam:
 		return base + " -- aws sts get-caller-identity"
+	case pam.AccountTypeWindows, pam.AccountTypeWindowsAd:
+		return base + " > infisical-rdp.log 2>&1 &"
 	}
 	return base
 }
@@ -270,8 +272,12 @@ func printPAMAccountDetails(view pamAccountView) {
 	if view.Type == pam.AccountTypeMongoDB {
 		lines = append(lines, "Database: none is preselected; name one explicitly")
 	}
+	isWindows := view.Type == pam.AccountTypeWindows || view.Type == pam.AccountTypeWindowsAd
 
 	lines = append(lines, "", "Connect:", "  "+view.Example)
+	if isWindows {
+		lines = append(lines, "", "This starts an RDP proxy in the background. Open the .rdp file named in infisical-rdp.log with an RDP client; the password is left blank. Stop the CLI with kill to end the session.")
+	}
 	switch view.Access {
 	case pamAccessNeedsApproval:
 		lines = append(lines, "", "This files an access request and exits with an error until a person approves it.")
