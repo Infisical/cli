@@ -347,7 +347,6 @@
     "mfa-session": "|string|",
     "no-approval-request": "|bool|false",
     "organization-slug": "|string|",
-    "output": "o|string|",
     "port": "|int|0",
     "proxy": "|bool|false",
     "reason": "|string|",

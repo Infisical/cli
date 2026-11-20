@@ -95,7 +95,7 @@ func startAWSAccess(httpClient *resty.Client, response *api.PAMAccessResponse, p
 		// A second Ctrl+C then exits at once, even if Infisical is slow to answer the end call
 		signal.Stop(sigChan)
 		cleanup()
-		endSession(httpClient, response.SessionId)
+		EndSession(httpClient, response.SessionId)
 	case <-time.After(remaining):
 		fmt.Printf("\n  AWS session expired. Cleaning up credentials...\n\n")
 		cleanup()

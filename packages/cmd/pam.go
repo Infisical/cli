@@ -30,8 +30,8 @@ The same commands work for people and AI agents:
        infisical pam access prod/orders-db -- psql -c "select 1"
        infisical pam access prod/bastion -- uptime
 
-  3. If the account needs approval, the command files an access request and exits with
-     approval_pending. A person approves it in Infisical; check the status with
+  3. If the account needs approval, the command files an access request and exits with an
+     error saying so. A person approves it in Infisical; check the status with
      'infisical pam accounts get <folder/account>' and run the command again.
 
 Run as a machine identity by setting INFISICAL_TOKEN, or INFISICAL_AUTH_METHOD with that
@@ -49,11 +49,18 @@ With a command after '--', the command runs once and the session ends when it ex
 The CLI exits with the command's exit code:
 
   - SSH accounts run the command on the target.
-  - Database, Redis and Kubernetes accounts run the command on this machine, pointed at a
-    local proxy. INFISICAL_PAM_HOST, INFISICAL_PAM_PORT and INFISICAL_PAM_URL hold the
-    address, and so do the variables each client reads (PGHOST/PGPORT/PGUSER/PGDATABASE,
-    MYSQL_HOST/MYSQL_TCP_PORT, SQLCMDSERVER/SQLCMDUSER, KUBECONFIG). To use a variable in
-    the command itself, wrap it in a shell: -- sh -c 'redis-cli -u "$INFISICAL_PAM_URL" ping'
+  - Database, Redis, Snowflake, Kubernetes, GCP and Azure accounts run the command on this
+    machine, pointed at a local proxy. INFISICAL_PAM_HOST, INFISICAL_PAM_PORT and
+    INFISICAL_PAM_URL hold the address, and so do the variables each client reads
+    (PGHOST/PGPORT/PGUSER/PGDATABASE, MYSQL_HOST/MYSQL_TCP_PORT, SQLCMDSERVER/SQLCMDUSER,
+    SNOWSQL_*, KUBECONFIG, CLOUDSDK_* for gcloud, AZURE_CONFIG_DIR/HTTPS_PROXY for az, which
+    is signed in first). To use a variable in the command itself, wrap it in a shell:
+    -- sh -c 'redis-cli -u "$INFISICAL_PAM_URL" ping'
+  - AWS IAM accounts with a Gateway run the command against a local proxy (HTTPS_PROXY,
+    AWS_CA_BUNDLE and placeholder credentials), and the Gateway signs each request. Without
+    a Gateway, the command gets the session's temporary credentials in AWS_ACCESS_KEY_ID,
+    AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN.
+  - Windows accounts can't run a command.
 
 Connecting through the proxy:
   - Any username works and no password is needed: the Gateway swaps in the real
@@ -65,12 +72,14 @@ Without '--', SSH accounts open a shell and every other type starts a local prox
 credential helper) for your own client until you stop it.
 
 Without a terminal, nothing prompts. An account that needs approval gets an access request
-filed with --reason and --duration, and the command exits with approval_pending. An account
-that requires MFA exits with mfa_required and a link a person opens; run the command again
-with --mfa-session afterwards. Pass -o json to get errors as JSON with a stable code.`,
+filed with --reason and --duration, and the command exits with an error saying it's
+waiting for approval. An account that requires MFA exits with an error that has a link a
+person opens; run the command again with --mfa-session afterwards.`,
 	Example: `  infisical pam access prod/orders-db -- psql -c "select count(*) from orders"
   infisical pam access prod/cluster -- kubectl get pods -A
   infisical pam access servers/prod-bastion -- systemctl status nginx
+  infisical pam access cloud/gcp-prod -- gcloud storage ls
+  infisical pam access cloud/aws-prod -- aws s3 ls
   infisical pam access prod/payments-db --reason "INC-4021" --duration 30m -- psql -c "select 1"
   infisical pam access production/postgres-main --duration 2h
   infisical pam access servers/prod-bastion --proxy`,
@@ -227,8 +236,12 @@ var pamAgenticCmd = &cobra.Command{
 	Use:                   "agentic",
 	Short:                 "Run AI agents against PAM accounts (removed)",
 	DisableFlagsInUseLine: true,
-	Args:                  cobra.NoArgs,
+	Args:                  cobra.ArbitraryArgs,
 	Hidden:                true,
+	FParseErrWhitelist:    cobra.FParseErrWhitelist{UnknownFlags: true},
+	Run: func(cmd *cobra.Command, args []string) {
+		exitWithError(cmd, errPAMAgenticRemoved())
+	},
 }
 
 var pamAgenticAccessCmd = &cobra.Command{
@@ -248,9 +261,8 @@ func init() {
 	pamAccessCmd.Flags().Int("port", 0, "Port for the local proxy server (0 for auto-assign)")
 	pamAccessCmd.Flags().String("target", "", "Target host to connect to (for accounts that allow multiple hosts, e.g. Windows AD)")
 	pamAccessCmd.Flags().Bool("proxy", false, "Start a local proxy to point your own client at, instead of connecting you to the target. Only SSH accounts connect directly today")
-	pamAccessCmd.Flags().String("mfa-session", "", "MFA session to use after a person completed verification in the browser, from an mfa_required error")
-	pamAccessCmd.Flags().Bool("no-approval-request", false, "Don't file an access request when the account needs approval; exit with approval_required instead")
-	pamAccessCmd.Flags().StringP("output", "o", "", "Print errors as json or yaml instead of text, with a stable code")
+	pamAccessCmd.Flags().String("mfa-session", "", "MFA session to use after a person completed verification in the browser, from the MFA error")
+	pamAccessCmd.Flags().Bool("no-approval-request", false, "Don't file an access request when the account needs approval; exit with an error instead")
 	addPAMAuthFlags(pamAccessCmd)
 
 	// Kept, hidden, so scripts that pass these flags get the removal message rather than a flag error.

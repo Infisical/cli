@@ -229,6 +229,14 @@ func pamExampleCommand(view pamAccountView) string {
 		return base + " -- kubectl get namespaces"
 	case pam.AccountTypeSSH:
 		return base + " -- uptime"
+	case pam.AccountTypeSnowflake:
+		return base + " -- sh -c 'snowsql -h 127.0.0.1 -p \"$INFISICAL_PAM_PORT\" -q \"select 1\"'"
+	case pam.AccountTypeGcpServiceAccount:
+		return base + " -- gcloud projects list --limit 1"
+	case pam.AccountTypeAzureCli:
+		return base + " -- az account show"
+	case pam.AccountTypeAwsIam:
+		return base + " -- aws sts get-caller-identity"
 	}
 	return base
 }
@@ -255,12 +263,12 @@ func printPAMAccountDetails(view pamAccountView) {
 	lines = append(lines, "", "Connect:", "  "+view.Example)
 	switch view.Access {
 	case pamAccessNeedsApproval:
-		lines = append(lines, "", "This files an access request and exits with approval_pending until a person approves it.")
+		lines = append(lines, "", "This files an access request and exits with an error until a person approves it.")
 	case pamAccessPending:
 		lines = append(lines, "", "A request is waiting for a person to approve it. Check again later.")
 	}
 	if view.RequireMfa {
-		lines = append(lines, "", "MFA: without a terminal this exits with mfa_required and a link for a person to open.")
+		lines = append(lines, "", "MFA: without a terminal this exits with an error that has a link for a person to open.")
 	}
 
 	util.PrintStdout(strings.Join(lines, "\n") + "\n")

@@ -1,11 +1,18 @@
 package pam
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -28,17 +35,20 @@ const (
 	EnvPAMURL  = "INFISICAL_PAM_URL"
 )
 
-// Account types whose client side is a plain TCP relay, so a local command can be pointed at a port.
 var localCommandAccountTypes = map[string]bool{
-	AccountTypePostgres:    true,
-	AccountTypeCockroachDB: true,
-	AccountTypeMySQL:       true,
-	AccountTypeMsSQL:       true,
-	AccountTypeMongoDB:     true,
-	AccountTypeOracleDB:    true,
-	AccountTypeClickhouse:  true,
-	AccountTypeRedis:       true,
-	AccountTypeKubernetes:  true,
+	AccountTypePostgres:          true,
+	AccountTypeCockroachDB:       true,
+	AccountTypeMySQL:             true,
+	AccountTypeMsSQL:             true,
+	AccountTypeMongoDB:           true,
+	AccountTypeOracleDB:          true,
+	AccountTypeClickhouse:        true,
+	AccountTypeRedis:             true,
+	AccountTypeKubernetes:        true,
+	AccountTypeSnowflake:         true,
+	AccountTypeGcpServiceAccount: true,
+	AccountTypeAzureCli:          true,
+	AccountTypeAwsIam:            true,
 }
 
 // SupportsLocalCommand reports whether `pam access <path> -- <command>` runs the command locally
@@ -68,10 +78,66 @@ type staticSessionProvider struct{ session LiveSession }
 func (s staticSessionProvider) Ensure(context.Context) (LiveSession, error) { return s.session, nil }
 func (s staticSessionProvider) Current() (LiveSession, bool)                { return s.session, true }
 
+// loopbackSetup is what an account type's gateway handler expects on each connection beyond the raw
+// client bytes. GCP and Azure terminate the client's TLS at the gateway with a CA this process mints.
+type loopbackSetup struct {
+	caCertPEM   []byte
+	caKeyPEM    []byte
+	proxySecret string
+}
+
+func (s loopbackSetup) proxyAuthHeader() string {
+	if s.proxySecret == "" {
+		return ""
+	}
+	return "Basic " + base64.StdEncoding.EncodeToString([]byte("infisical:"+s.proxySecret))
+}
+
+func newLoopbackSetup(accountType string, expiry time.Time) (loopbackSetup, error) {
+	var setup loopbackSetup
+	switch accountType {
+	case AccountTypeGcpServiceAccount:
+		ca := &GCPProxyServer{BaseProxyServer: BaseProxyServer{sessionExpiry: expiry}}
+		if err := ca.generateCA(); err != nil {
+			return setup, err
+		}
+		setup.caCertPEM, setup.caKeyPEM = ca.caCertPEM, ca.caKeyPEM
+	case AccountTypeAzureCli:
+		ca := &AzureProxyServer{BaseProxyServer: BaseProxyServer{sessionExpiry: expiry}}
+		if err := ca.generateCA(); err != nil {
+			return setup, err
+		}
+		setup.caCertPEM, setup.caKeyPEM = ca.caCertPEM, ca.caKeyPEM
+		secret := make([]byte, 32)
+		if _, err := rand.Read(secret); err != nil {
+			return setup, fmt.Errorf("failed to generate a proxy credential: %w", err)
+		}
+		setup.proxySecret = hex.EncodeToString(secret)
+	}
+	return setup, nil
+}
+
 // RunLocalCommand serves a loopback proxy for an open session, runs command with the connection in
 // its environment, and ends the session when the command exits. It returns the command's exit code.
 func RunLocalCommand(httpClient *resty.Client, response *api.PAMAccessResponse, duration time.Duration, port int, command []string) (int, error) {
-	session := NewLiveSession(response, time.Now().Add(duration))
+	expiry := time.Now().Add(duration)
+
+	if response.AccountType == AccountTypeAwsIam && response.GatewayId != "" {
+		return runAWSGatewayCommand(httpClient, response, expiry, port, command)
+	}
+	if response.AccountType == AccountTypeAwsIam {
+		defer EndSession(httpClient, response.SessionId)
+		env, credentialsExpiry, err := awsCommandEnv(response)
+		if err != nil {
+			return 1, err
+		}
+		if credentialsExpiry.Before(expiry) {
+			expiry = credentialsExpiry
+		}
+		return runLocalChild(command, env, expiry)
+	}
+
+	session := NewLiveSession(response, expiry)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -83,6 +149,11 @@ func RunLocalCommand(httpClient *resty.Client, response *api.PAMAccessResponse, 
 		return 1, err
 	}
 
+	setup, err := newLoopbackSetup(response.AccountType, expiry)
+	if err != nil {
+		return 1, err
+	}
+
 	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
 		return 1, fmt.Errorf("failed to listen on 127.0.0.1:%d: %w", port, err)
@@ -90,7 +161,7 @@ func RunLocalCommand(httpClient *resty.Client, response *api.PAMAccessResponse, 
 	boundPort := listener.Addr().(*net.TCPAddr).Port
 
 	var connections sync.WaitGroup
-	go serveLoopback(ctx, listener, transport, session, &connections)
+	go serveLoopback(ctx, listener, transport, session, setup, &connections)
 	defer func() {
 		cancel()
 		listener.Close()
@@ -103,11 +174,21 @@ func RunLocalCommand(httpClient *resty.Client, response *api.PAMAccessResponse, 
 	}
 	defer os.RemoveAll(tempDir)
 
-	env, err := localCommandEnv(response, boundPort, tempDir)
+	env, err := localCommandEnv(response, boundPort, tempDir, setup)
 	if err != nil {
 		return 1, err
 	}
 
+	if response.AccountType == AccountTypeAzureCli {
+		if err := azureCommandLogin(env, response.Metadata); err != nil {
+			return 1, err
+		}
+	}
+
+	return runLocalChild(command, env, session.Expiry)
+}
+
+func runLocalChild(command []string, env []string, expiry time.Time) (int, error) {
 	child := exec.Command(command[0], command[1:]...)
 	child.Env = env
 	child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
@@ -122,7 +203,7 @@ func RunLocalCommand(httpClient *resty.Client, response *api.PAMAccessResponse, 
 	defer signal.Stop(signals)
 
 	expired := make(chan struct{})
-	timer := time.AfterFunc(time.Until(session.Expiry), func() {
+	timer := time.AfterFunc(time.Until(expiry), func() {
 		close(expired)
 		_ = child.Process.Kill()
 	})
@@ -164,9 +245,133 @@ func RunLocalCommand(httpClient *resty.Client, response *api.PAMAccessResponse, 
 	return 0, nil
 }
 
+// runAWSGatewayCommand points the command's AWS tooling at a local proxy. The gateway signs each
+// request, so the command only ever holds placeholder credentials.
+func runAWSGatewayCommand(httpClient *resty.Client, response *api.PAMAccessResponse, expiry time.Time, port int, command []string) (int, error) {
+	if sessionExpiry, err := time.Parse(time.RFC3339, response.Metadata["expiresAt"]); err == nil {
+		expiry = sessionExpiry
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	proxy := &AWSProxyServer{
+		BaseProxyServer: BaseProxyServer{
+			httpClient:             httpClient,
+			directAddress:          response.DirectAddress,
+			relayHost:              response.RelayHost,
+			relayClientCert:        response.RelayClientCertificate,
+			relayClientKey:         response.RelayClientPrivateKey,
+			relayServerCertChain:   response.RelayServerCertificateChain,
+			gatewayClientCert:      response.GatewayClientCertificate,
+			gatewayClientKey:       response.GatewayClientPrivateKey,
+			gatewayServerCertChain: response.GatewayServerCertificateChain,
+			gatewayId:              response.GatewayId,
+			sessionExpiry:          expiry,
+			sessionId:              response.SessionId,
+			resourceType:           response.AccountType,
+			ctx:                    ctx,
+			cancel:                 cancel,
+			shutdownCh:             make(chan struct{}),
+			keepProcessAlive:       true,
+		},
+	}
+	defer proxy.Shutdown()
+
+	if err := proxy.ValidateResourceTypeSupported(); err != nil {
+		return 1, err
+	}
+	if err := proxy.generateCA(); err != nil {
+		return 1, err
+	}
+	if err := proxy.Start(port); err != nil {
+		return 1, err
+	}
+
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return 1, fmt.Errorf("failed to generate a proxy credential: %w", err)
+	}
+	proxySecret := hex.EncodeToString(secret)
+	proxy.proxyAuthHeader = "Basic " + base64.StdEncoding.EncodeToString([]byte("infisical:"+proxySecret))
+	go proxy.Run()
+
+	caPath, err := writeTempFile("infisical-pam-aws-ca-*.pem", proxy.caCertPEM)
+	if err != nil {
+		return 1, fmt.Errorf("failed to write the CA file: %w", err)
+	}
+	defer os.Remove(caPath)
+
+	proxyURL := fmt.Sprintf("http://infisical:%s@127.0.0.1:%d", proxySecret, proxy.port)
+	env := awsProxyEnv(os.Environ(), proxyURL, caPath)
+	env = append(env, EnvPAMHost+"=127.0.0.1", EnvPAMPort+"="+strconv.Itoa(proxy.port), EnvPAMURL+"="+proxyURL)
+	return runLocalChild(command, env, expiry)
+}
+
+// awsCommandEnv hands the command the session's STS credentials, for AWS accounts without a gateway.
+// The credentials stop working at their own expiry, which it returns.
+func awsCommandEnv(response *api.PAMAccessResponse) ([]string, time.Time, error) {
+	accessKeyId := response.Metadata["accessKeyId"]
+	secretAccessKey := response.Metadata["secretAccessKey"]
+	sessionToken := response.Metadata["sessionToken"]
+	expiresAtStr := response.Metadata["expiresAt"]
+	if accessKeyId == "" || secretAccessKey == "" || sessionToken == "" || expiresAtStr == "" {
+		return nil, time.Time{}, errors.New("the server did not return AWS credentials for this session")
+	}
+	expiresAt, err := time.Parse(time.RFC3339, expiresAtStr)
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("failed to parse the AWS credentials' expiry: %w", err)
+	}
+	if !expiresAt.After(time.Now()) {
+		return nil, time.Time{}, errors.New("the AWS credentials the server returned have already expired")
+	}
+
+	set := map[string]string{
+		"AWS_ACCESS_KEY_ID":         accessKeyId,
+		"AWS_SECRET_ACCESS_KEY":     secretAccessKey,
+		"AWS_SESSION_TOKEN":         sessionToken,
+		"AWS_CREDENTIAL_EXPIRATION": expiresAtStr,
+	}
+	// Some SDKs prefer a named profile over the variables above.
+	unset := map[string]bool{"AWS_PROFILE": true, "AWS_DEFAULT_PROFILE": true}
+	return mergeEnv(set, unset), expiresAt, nil
+}
+
+// azureCommandLogin signs the Azure CLI in to the command's private config directory. The gateway
+// swaps the placeholder secret for the real one.
+func azureCommandLogin(env []string, metadata map[string]string) error {
+	tenantId, clientId, subscriptionId := metadata["tenantId"], metadata["clientId"], metadata["subscriptionId"]
+	if tenantId == "" || clientId == "" {
+		return errors.New("the server did not return the Azure tenant and client for this account")
+	}
+	if _, err := exec.LookPath("az"); err != nil {
+		return errors.New("the Azure CLI ('az') was not found on your PATH. Install it from https://learn.microsoft.com/cli/azure/install-azure-cli")
+	}
+
+	login := exec.Command("az", "login", "--service-principal",
+		"-u", clientId,
+		"-p", azureProxyDummySecret,
+		"--tenant", tenantId,
+		"--allow-no-subscriptions",
+		"--output", "none",
+	)
+	login.Env = env
+	login.Stderr = os.Stderr
+	if err := login.Run(); err != nil {
+		return fmt.Errorf("failed to sign the Azure CLI in through the gateway: %w", err)
+	}
+
+	if subscriptionId != "" {
+		set := exec.Command("az", "account", "set", "--subscription", subscriptionId)
+		set.Env = env
+		if err := set.Run(); err != nil {
+			log.Warn().Err(err).Str("subscription", subscriptionId).Msg("Failed to set the default Azure subscription")
+		}
+	}
+	return nil
+}
+
 // localCommandEnv adds the proxy's address under INFISICAL_PAM_* and under the variables each
 // account type's usual client already reads, so `-- psql -c ...` needs no connection flags.
-func localCommandEnv(response *api.PAMAccessResponse, port int, tempDir string) ([]string, error) {
+func localCommandEnv(response *api.PAMAccessResponse, port int, tempDir string, setup loopbackSetup) ([]string, error) {
 	username := response.Metadata["username"]
 	database := response.Metadata["database"]
 	portStr := strconv.Itoa(port)
@@ -206,8 +411,59 @@ func localCommandEnv(response *api.PAMAccessResponse, port int, tempDir string) 
 		}
 		set["KUBECONFIG"] = path
 		set[EnvPAMURL] = fmt.Sprintf("http://127.0.0.1:%d", port)
+	case AccountTypeSnowflake:
+		account := response.Metadata["account"]
+		set["SNOWSQL_ACCOUNT"], set["SNOWSQL_USER"], set["SNOWSQL_PWD"] = account, "pam", "x"
+		set["SNOWSQL_HOST"], set["SNOWSQL_PORT"] = "127.0.0.1", portStr
+		for key, field := range map[string]string{"SNOWSQL_DATABASE": "database", "SNOWSQL_SCHEMA": "schema", "SNOWSQL_WAREHOUSE": "warehouse"} {
+			if value := response.Metadata[field]; value != "" {
+				set[key] = value
+			}
+		}
+		set[EnvPAMURL] = fmt.Sprintf("jdbc:snowflake://127.0.0.1:%d/?ssl=off&account=%s%s", port, account,
+			jdbcExtras(response.Metadata["database"], response.Metadata["schema"], response.Metadata["warehouse"]))
+	case AccountTypeGcpServiceAccount:
+		tokenPath, caPath, err := writeProxyFiles(tempDir, setup.caCertPEM)
+		if err != nil {
+			return nil, err
+		}
+		set["CLOUDSDK_PROXY_TYPE"], set["CLOUDSDK_PROXY_ADDRESS"], set["CLOUDSDK_PROXY_PORT"] = "http", "127.0.0.1", portStr
+		set["CLOUDSDK_AUTH_ACCESS_TOKEN_FILE"] = tokenPath
+		set["CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE"] = caPath
+		set[EnvPAMURL] = fmt.Sprintf("http://127.0.0.1:%d", port)
+	case AccountTypeAzureCli:
+		_, caPath, err := writeProxyFiles(tempDir, setup.caCertPEM)
+		if err != nil {
+			return nil, err
+		}
+		configDir := filepath.Join(tempDir, "azure")
+		if err := os.Mkdir(configDir, 0o700); err != nil {
+			return nil, fmt.Errorf("failed to create the Azure config directory: %w", err)
+		}
+		proxyURL := fmt.Sprintf("http://infisical:%s@127.0.0.1:%d", setup.proxySecret, port)
+		set["AZURE_CONFIG_DIR"] = configDir
+		set["HTTPS_PROXY"], set["https_proxy"] = proxyURL, proxyURL
+		set["REQUESTS_CA_BUNDLE"], set["SSL_CERT_FILE"], set["CURL_CA_BUNDLE"] = caPath, caPath, caPath
+		set[EnvPAMURL] = proxyURL
 	}
 
+	return mergeEnv(set, unset), nil
+}
+
+// writeProxyFiles writes the CA the gateway signs with and a placeholder token the gateway replaces.
+func writeProxyFiles(tempDir string, caCertPEM []byte) (string, string, error) {
+	tokenPath := filepath.Join(tempDir, "token")
+	if err := os.WriteFile(tokenPath, []byte("PROXY_MANAGED"), 0o600); err != nil {
+		return "", "", fmt.Errorf("failed to write the token file: %w", err)
+	}
+	caPath := filepath.Join(tempDir, "ca.pem")
+	if err := os.WriteFile(caPath, caCertPEM, 0o600); err != nil {
+		return "", "", fmt.Errorf("failed to write the CA file: %w", err)
+	}
+	return tokenPath, caPath, nil
+}
+
+func mergeEnv(set map[string]string, unset map[string]bool) []string {
 	env := make([]string, 0, len(os.Environ())+len(set))
 	for _, entry := range os.Environ() {
 		key := entry
@@ -225,7 +481,7 @@ func localCommandEnv(response *api.PAMAccessResponse, port int, tempDir string) 
 	for key, value := range set {
 		env = append(env, key+"="+value)
 	}
-	return env, nil
+	return env
 }
 
 // writeLocalKubeconfig writes a kubeconfig for this command only, leaving ~/.kube/config untouched.
@@ -244,7 +500,7 @@ func writeLocalKubeconfig(tempDir string, port int) (string, error) {
 	return path, nil
 }
 
-func serveLoopback(ctx context.Context, listener net.Listener, transport *BaseProxyServer, session LiveSession, connections *sync.WaitGroup) {
+func serveLoopback(ctx context.Context, listener net.Listener, transport *BaseProxyServer, session LiveSession, setup loopbackSetup, connections *sync.WaitGroup) {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -266,13 +522,21 @@ func serveLoopback(ctx context.Context, listener net.Listener, transport *BasePr
 		connections.Add(1)
 		go func() {
 			defer connections.Done()
-			relayLoopbackConnection(ctx, conn, transport, session)
+			relayLoopbackConnection(ctx, conn, transport, session, setup)
 		}()
 	}
 }
 
-func relayLoopbackConnection(ctx context.Context, clientConn net.Conn, transport *BaseProxyServer, session LiveSession) {
+func relayLoopbackConnection(ctx context.Context, clientConn net.Conn, transport *BaseProxyServer, session LiveSession, setup loopbackSetup) {
 	defer clientConn.Close()
+
+	var initial []byte
+	if header := setup.proxyAuthHeader(); header != "" {
+		var ok bool
+		if initial, ok = readAuthorizedProxyRequest(clientConn, header); !ok {
+			return
+		}
+	}
 
 	relayConn, err := transport.DialRelay(session)
 	if err != nil {
@@ -288,7 +552,42 @@ func relayLoopbackConnection(ctx context.Context, clientConn net.Conn, transport
 	}
 	defer gatewayConn.Close()
 
+	if setup.caCertPEM != nil {
+		if err := writeLengthPrefixed(gatewayConn, setup.caCertPEM); err != nil {
+			log.Error().Err(err).Msg("Failed to send CA cert to gateway")
+			return
+		}
+		if err := writeLengthPrefixed(gatewayConn, setup.caKeyPEM); err != nil {
+			log.Error().Err(err).Msg("Failed to send CA key to gateway")
+			return
+		}
+	}
+	if len(initial) > 0 {
+		if _, err := gatewayConn.Write(initial); err != nil {
+			log.Error().Err(err).Msg("Failed to forward initial request to gateway")
+			return
+		}
+	}
+
 	relayBothWays(ctx, clientConn, gatewayConn)
+}
+
+// readAuthorizedProxyRequest reads the client's first request and returns every byte read so far,
+// or false after answering 407 when it lacks the session's Proxy-Authorization.
+func readAuthorizedProxyRequest(clientConn net.Conn, header string) ([]byte, bool) {
+	var captured bytes.Buffer
+	req, err := http.ReadRequest(bufio.NewReader(io.TeeReader(clientConn, &captured)))
+	if err != nil {
+		if !errors.Is(err, io.EOF) {
+			log.Debug().Err(err).Msg("Failed to read initial proxy request")
+		}
+		return nil, false
+	}
+	if subtle.ConstantTimeCompare([]byte(req.Header.Get("Proxy-Authorization")), []byte(header)) != 1 {
+		_, _ = clientConn.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"infisical-pam\"\r\nContent-Length: 0\r\n\r\n"))
+		return nil, false
+	}
+	return captured.Bytes(), true
 }
 
 // relayBothWays copies until one side finishes. A client that half-closes after a request (HTTP,
