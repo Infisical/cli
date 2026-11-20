@@ -77,6 +77,12 @@ func errPAMAuthRequired(cause error) *util.CLIError {
 		Next:    []util.NextStep{{Purpose: "To log in", Command: "infisical login"}}}
 }
 
+func errPAMTokenExpired(source string) *util.CLIError {
+	return &util.CLIError{Code: errCodeAuthRequired,
+		Message: fmt.Sprintf("The machine identity access token from the %s has expired. Replace it with a new token, or authenticate with the identity's own credentials instead.", source),
+		Next:    []util.NextStep{{Purpose: "To authenticate with universal auth credentials", Command: pamPrefix + " accounts get --auth-method universal-auth"}}}
+}
+
 func errPAMAccountNotFound(path string, cause error) *util.CLIError {
 	return &util.CLIError{Code: errCodeAccountNotFound, Cause: cause,
 		Message: fmt.Sprintf("PAM account %s doesn't exist, or you don't have access to it.", pamAccountArg(path)),
@@ -140,10 +146,21 @@ func errPAMMFARequired(invocation pamAccessInvocation, url, mfaSessionID string)
 		Next:    []util.NextStep{{Purpose: "To connect after verification", Command: invocation.accessCommand("--mfa-session " + util.SuggestedValue(mfaSessionID, "mfa-session-id"))}}}
 }
 
-func errPAMSessionExpired(invocation pamAccessInvocation, duration time.Duration) *util.CLIError {
+func errPAMSessionExpired(invocation pamAccessInvocation, ranFor time.Duration, awsCredentials bool) *util.CLIError {
+	if awsCredentials {
+		return &util.CLIError{Code: errCodeSessionExpired,
+			Message: fmt.Sprintf("The AWS credentials for %s expired after %s, before the command finished, so the command was stopped. A longer --duration doesn't extend them.", pamAccountArg(invocation.Path), ranFor),
+			Next:    []util.NextStep{{Purpose: "To run it again with new credentials", Command: invocation.accessCommand("")}}}
+	}
 	return &util.CLIError{Code: errCodeSessionExpired,
-		Message: fmt.Sprintf("The PAM session for %s ended after %s, before the command finished, so the command was stopped.", pamAccountArg(invocation.Path), duration),
+		Message: fmt.Sprintf("The PAM session for %s ended after %s, before the command finished, so the command was stopped.", pamAccountArg(invocation.Path), ranFor),
 		Next:    []util.NextStep{{Purpose: "To run it again with a longer session", Command: invocation.accessCommand("--duration 2h")}}}
+}
+
+func errPAMMissingCommand(path string) *util.CLIError {
+	return &util.CLIError{Code: errCodeInvalidArgument,
+		Message: "Nothing follows '--'. Put the command to run after it, or drop the '--' to start an interactive session.",
+		Next:    []util.NextStep{{Purpose: "To run one command", Command: pamPrefix + " access " + pamAccountArg(path) + " -- <command>"}}}
 }
 
 func errPAMCommandNotSupported(invocation pamAccessInvocation, typeLabel string) *util.CLIError {

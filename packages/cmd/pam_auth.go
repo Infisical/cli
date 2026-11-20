@@ -50,11 +50,11 @@ func resolvePAMAccessToken(cmd *cobra.Command) (accessToken func() string, stop 
 		if token.Type == util.SERVICE_TOKEN_IDENTIFIER {
 			exitWithError(cmd, errPAMServiceToken())
 		}
-		if !cmd.Flags().Changed("token") {
+		if !cmd.Flags().Changed("token") && errorOutputFormat(cmd) == "" {
 			printProjectsTip(cmd, fmt.Sprintf("Using the machine identity token from the %s.", token.Source))
 		}
 		if exp, ok := jwtExpiry(token.Token); ok && exp.Before(time.Now()) {
-			exitWithError(cmd, errPAMAuthRequired(nil))
+			exitWithError(cmd, errPAMTokenExpired(token.Source))
 		}
 		return func() string { return token.Token }, func() {}
 	}

@@ -96,6 +96,9 @@ func runPAMAccess(cmd *cobra.Command, args []string) {
 			util.PrintErrorMessageAndExit("Only one account path may be given. Put the command after '--', for example:\n  infisical pam access servers/prod-bastion -- uptime")
 		}
 		command = args[1:]
+		if len(command) == 0 {
+			exitWithError(cmd, errPAMMissingCommand(path))
+		}
 	} else if len(args) > 1 {
 		util.PrintErrorMessageAndExit(fmt.Sprintf("Unexpected argument %q. To run a command, put it after '--', for example:\n  infisical pam access %s -- uptime", args[1], path))
 	}
@@ -149,14 +152,18 @@ func runPAMAccess(cmd *cobra.Command, args []string) {
 			exitWithError(cmd, errPAMCommandNotSupported(invocation, pamTypeLabel(response.AccountType)))
 		}
 
+		started := time.Now()
 		exitCode, err := pam.RunLocalCommand(httpClient, response, duration, port, command)
 		stopAuth()
 		if errors.Is(err, pam.ErrSessionExpired) {
-			exitWithError(cmd, errPAMSessionExpired(invocation, duration))
+			exitWithError(cmd, errPAMSessionExpired(invocation, time.Since(started).Round(time.Second), response.AccountType == pam.AccountTypeAwsIam))
+		}
+		if errors.Is(err, pam.ErrInterrupted) {
+			os.Exit(exitCode)
 		}
 		var startErr *pam.CommandStartError
 		if errors.As(err, &startErr) {
-			util.PrintfStderr("%s: couldn't start it. Check that it's installed and on PATH.\n", util.SanitizeDisplay(startErr.Command))
+			util.PrintfStderr("%s: couldn't start it. Check that it's installed and on PATH.\n", util.RedactCredentials(util.SanitizeDisplay(startErr.Command)))
 			os.Exit(exitCode)
 		}
 		if err != nil {
@@ -183,6 +190,9 @@ func handlePAMAccessError(cmd *cobra.Command, httpClient *resty.Client, err erro
 		}
 
 		if stdinIsTerminal() && pam.PromptAccessRequest(httpClient, err, opts) {
+			if invocation.HasCommand {
+				os.Exit(1)
+			}
 			return
 		}
 

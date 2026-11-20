@@ -24,6 +24,7 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/go-resty/resty/v2"
+	"github.com/mattn/go-isatty"
 	"github.com/rs/zerolog/log"
 	"k8s.io/client-go/tools/clientcmd"
 	k8sapi "k8s.io/client-go/tools/clientcmd/api"
@@ -59,6 +60,56 @@ func SupportsLocalCommand(accountType string) bool {
 
 // ErrSessionExpired is returned when the session ended before the command did.
 var ErrSessionExpired = errors.New("the PAM session ended before the command finished")
+
+// ErrInterrupted is returned when a signal arrived before the command started.
+var ErrInterrupted = errors.New("interrupted before the command started")
+
+// interruptWatch catches signals from the moment the session is open, so an interrupt during setup
+// still ends the session and removes temp files instead of killing the process.
+type interruptWatch struct {
+	signals  chan os.Signal
+	ctx      context.Context
+	cancel   context.CancelFunc
+	done     chan struct{}
+	stopped  chan struct{}
+	doneOnce sync.Once
+	caught   os.Signal
+}
+
+func watchInterrupts() *interruptWatch {
+	w := &interruptWatch{signals: make(chan os.Signal, 1), done: make(chan struct{}), stopped: make(chan struct{})}
+	w.ctx, w.cancel = context.WithCancel(context.Background())
+	signal.Notify(w.signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	go func() {
+		defer close(w.stopped)
+		select {
+		case sig := <-w.signals:
+			w.caught = sig
+			w.cancel()
+		case <-w.done:
+		}
+	}()
+	return w
+}
+
+// setupFinished hands signals over to the command and reports one that arrived during setup.
+func (w *interruptWatch) setupFinished() (int, bool) {
+	w.doneOnce.Do(func() { close(w.done) })
+	<-w.stopped
+	if w.caught == nil {
+		return 0, false
+	}
+	if sig, ok := w.caught.(syscall.Signal); ok {
+		return 128 + int(sig), true
+	}
+	return 1, true
+}
+
+func (w *interruptWatch) stop() {
+	w.doneOnce.Do(func() { close(w.done) })
+	signal.Stop(w.signals)
+	w.cancel()
+}
 
 // CommandStartError is returned when the command couldn't be started, usually because it isn't
 // installed. Shells exit 127 for the same case.
@@ -108,12 +159,14 @@ func newLoopbackSetup(accountType string, expiry time.Time) (loopbackSetup, erro
 			return setup, err
 		}
 		setup.caCertPEM, setup.caKeyPEM = ca.caCertPEM, ca.caKeyPEM
-		secret := make([]byte, 32)
-		if _, err := rand.Read(secret); err != nil {
-			return setup, fmt.Errorf("failed to generate a proxy credential: %w", err)
-		}
-		setup.proxySecret = hex.EncodeToString(secret)
+	default:
+		return setup, nil
 	}
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return setup, fmt.Errorf("failed to generate a proxy credential: %w", err)
+	}
+	setup.proxySecret = hex.EncodeToString(secret)
 	return setup, nil
 }
 
@@ -122,8 +175,11 @@ func newLoopbackSetup(accountType string, expiry time.Time) (loopbackSetup, erro
 func RunLocalCommand(httpClient *resty.Client, response *api.PAMAccessResponse, duration time.Duration, port int, command []string) (int, error) {
 	expiry := time.Now().Add(duration)
 
+	interrupts := watchInterrupts()
+	defer interrupts.stop()
+
 	if response.AccountType == AccountTypeAwsIam && response.GatewayId != "" {
-		return runAWSGatewayCommand(httpClient, response, expiry, port, command)
+		return runAWSGatewayCommand(httpClient, response, expiry, port, command, interrupts)
 	}
 	if response.AccountType == AccountTypeAwsIam {
 		defer EndSession(httpClient, response.SessionId)
@@ -134,7 +190,10 @@ func RunLocalCommand(httpClient *resty.Client, response *api.PAMAccessResponse, 
 		if credentialsExpiry.Before(expiry) {
 			expiry = credentialsExpiry
 		}
-		return runLocalChild(command, env, expiry)
+		if code, interrupted := interrupts.setupFinished(); interrupted {
+			return code, ErrInterrupted
+		}
+		return runLocalChild(command, env, expiry, interrupts.signals)
 	}
 
 	session := NewLiveSession(response, expiry)
@@ -180,15 +239,18 @@ func RunLocalCommand(httpClient *resty.Client, response *api.PAMAccessResponse, 
 	}
 
 	if response.AccountType == AccountTypeAzureCli {
-		if err := azureCommandLogin(env, response.Metadata); err != nil {
+		if err := azureCommandLogin(interrupts.ctx, env, response.Metadata); err != nil && interrupts.ctx.Err() == nil {
 			return 1, err
 		}
 	}
 
-	return runLocalChild(command, env, session.Expiry)
+	if code, interrupted := interrupts.setupFinished(); interrupted {
+		return code, ErrInterrupted
+	}
+	return runLocalChild(command, env, session.Expiry, interrupts.signals)
 }
 
-func runLocalChild(command []string, env []string, expiry time.Time) (int, error) {
+func runLocalChild(command []string, env []string, expiry time.Time, signals chan os.Signal) (int, error) {
 	child := exec.Command(command[0], command[1:]...)
 	child.Env = env
 	child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
@@ -196,11 +258,9 @@ func runLocalChild(command []string, env []string, expiry time.Time) (int, error
 		return 127, &CommandStartError{Command: command[0], Err: err}
 	}
 
-	// Ctrl+C already reaches the child through the terminal's process group; catching it keeps this
-	// process alive long enough to end the session. SIGTERM is addressed to us alone, so forward it.
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(signals)
+	// A terminal's Ctrl+C already reaches the child through its process group, so SIGINT is only
+	// forwarded without one. Catching signals keeps this process alive long enough to end the session.
+	forwardInterrupt := !isatty.IsTerminal(os.Stdin.Fd())
 
 	expired := make(chan struct{})
 	timer := time.AfterFunc(time.Until(expiry), func() {
@@ -214,7 +274,7 @@ func runLocalChild(command []string, env []string, expiry time.Time) (int, error
 		for {
 			select {
 			case sig := <-signals:
-				if sig == syscall.SIGTERM {
+				if sig != syscall.SIGINT || forwardInterrupt {
 					_ = child.Process.Signal(sig)
 				}
 			case <-done:
@@ -247,7 +307,7 @@ func runLocalChild(command []string, env []string, expiry time.Time) (int, error
 
 // runAWSGatewayCommand points the command's AWS tooling at a local proxy. The gateway signs each
 // request, so the command only ever holds placeholder credentials.
-func runAWSGatewayCommand(httpClient *resty.Client, response *api.PAMAccessResponse, expiry time.Time, port int, command []string) (int, error) {
+func runAWSGatewayCommand(httpClient *resty.Client, response *api.PAMAccessResponse, expiry time.Time, port int, command []string, interrupts *interruptWatch) (int, error) {
 	if sessionExpiry, err := time.Parse(time.RFC3339, response.Metadata["expiresAt"]); err == nil {
 		expiry = sessionExpiry
 	}
@@ -303,7 +363,10 @@ func runAWSGatewayCommand(httpClient *resty.Client, response *api.PAMAccessRespo
 	proxyURL := fmt.Sprintf("http://infisical:%s@127.0.0.1:%d", proxySecret, proxy.port)
 	env := awsProxyEnv(os.Environ(), proxyURL, caPath)
 	env = append(env, EnvPAMHost+"=127.0.0.1", EnvPAMPort+"="+strconv.Itoa(proxy.port), EnvPAMURL+"="+proxyURL)
-	return runLocalChild(command, env, expiry)
+	if code, interrupted := interrupts.setupFinished(); interrupted {
+		return code, ErrInterrupted
+	}
+	return runLocalChild(command, env, expiry, interrupts.signals)
 }
 
 // awsCommandEnv hands the command the session's STS credentials, for AWS accounts without a gateway.
@@ -337,7 +400,7 @@ func awsCommandEnv(response *api.PAMAccessResponse) ([]string, time.Time, error)
 
 // azureCommandLogin signs the Azure CLI in to the command's private config directory. The gateway
 // swaps the placeholder secret for the real one.
-func azureCommandLogin(env []string, metadata map[string]string) error {
+func azureCommandLogin(ctx context.Context, env []string, metadata map[string]string) error {
 	tenantId, clientId, subscriptionId := metadata["tenantId"], metadata["clientId"], metadata["subscriptionId"]
 	if tenantId == "" || clientId == "" {
 		return errors.New("the server did not return the Azure tenant and client for this account")
@@ -346,7 +409,7 @@ func azureCommandLogin(env []string, metadata map[string]string) error {
 		return errors.New("the Azure CLI ('az') was not found on your PATH. Install it from https://learn.microsoft.com/cli/azure/install-azure-cli")
 	}
 
-	login := exec.Command("az", "login", "--service-principal",
+	login := exec.CommandContext(ctx, "az", "login", "--service-principal",
 		"-u", clientId,
 		"-p", azureProxyDummySecret,
 		"--tenant", tenantId,
@@ -360,7 +423,7 @@ func azureCommandLogin(env []string, metadata map[string]string) error {
 	}
 
 	if subscriptionId != "" {
-		set := exec.Command("az", "account", "set", "--subscription", subscriptionId)
+		set := exec.CommandContext(ctx, "az", "account", "set", "--subscription", subscriptionId)
 		set.Env = env
 		if err := set.Run(); err != nil {
 			log.Warn().Err(err).Str("subscription", subscriptionId).Msg("Failed to set the default Azure subscription")
@@ -391,6 +454,7 @@ func localCommandEnv(response *api.PAMAccessResponse, port int, tempDir string, 
 
 	switch response.AccountType {
 	case AccountTypePostgres, AccountTypeCockroachDB:
+		unset["PGHOSTADDR"] = true
 		set["PGHOST"], set["PGPORT"], set["PGUSER"] = "127.0.0.1", portStr, username
 		set["PGSSLMODE"] = "disable"
 		if database != "" {
@@ -428,9 +492,10 @@ func localCommandEnv(response *api.PAMAccessResponse, port int, tempDir string, 
 			return nil, err
 		}
 		set["CLOUDSDK_PROXY_TYPE"], set["CLOUDSDK_PROXY_ADDRESS"], set["CLOUDSDK_PROXY_PORT"] = "http", "127.0.0.1", portStr
+		set["CLOUDSDK_PROXY_USERNAME"], set["CLOUDSDK_PROXY_PASSWORD"] = "infisical", setup.proxySecret
 		set["CLOUDSDK_AUTH_ACCESS_TOKEN_FILE"] = tokenPath
 		set["CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE"] = caPath
-		set[EnvPAMURL] = fmt.Sprintf("http://127.0.0.1:%d", port)
+		set[EnvPAMURL] = fmt.Sprintf("http://infisical:%s@127.0.0.1:%d", setup.proxySecret, port)
 	case AccountTypeAzureCli:
 		_, caPath, err := writeProxyFiles(tempDir, setup.caCertPEM)
 		if err != nil {
@@ -576,7 +641,10 @@ func relayLoopbackConnection(ctx context.Context, clientConn net.Conn, transport
 // or false after answering 407 when it lacks the session's Proxy-Authorization.
 func readAuthorizedProxyRequest(clientConn net.Conn, header string) ([]byte, bool) {
 	var captured bytes.Buffer
-	req, err := http.ReadRequest(bufio.NewReader(io.TeeReader(clientConn, &captured)))
+	// Any local process can connect, so the unauthenticated read is capped in size and time.
+	_ = clientConn.SetReadDeadline(time.Now().Add(awsProxyRequestTimeout))
+	defer func() { _ = clientConn.SetReadDeadline(time.Time{}) }()
+	req, err := http.ReadRequest(bufio.NewReader(io.TeeReader(io.LimitReader(clientConn, http.DefaultMaxHeaderBytes), &captured)))
 	if err != nil {
 		if !errors.Is(err, io.EOF) {
 			log.Debug().Err(err).Msg("Failed to read initial proxy request")

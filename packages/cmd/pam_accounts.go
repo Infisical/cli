@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -143,7 +142,7 @@ func newPAMAccountView(account api.PAMAccessibleAccount) pamAccountView {
 		Name:             account.Name,
 		Description:      account.Description,
 		Type:             account.AccountType,
-		TypeLabel:        pamTypeLabel(account.AccountType),
+		TypeLabel:        util.SanitizeDisplay(pamTypeLabel(account.AccountType)),
 		RequiresApproval: account.RequiresApproval,
 		RequireReason:    account.RequireReason,
 		RequireMfa:       account.RequireMfa,
@@ -198,8 +197,8 @@ func pamAccountRequirements(view pamAccountView) []string {
 }
 
 func shellQuotePath(path string) string {
-	if strings.ContainsAny(path, " \t'\"$`\\!*?[]{}()<>|&;#~") {
-		return strconv.Quote(path)
+	if strings.ContainsAny(path, " \t'\"$`\\!*?[]{}()<>|&;#~\n") {
+		return util.ShellQuote(path)
 	}
 	return path
 }
