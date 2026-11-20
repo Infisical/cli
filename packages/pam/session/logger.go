@@ -309,26 +309,24 @@ func (sl *EncryptedSessionLogger) LogSessionEvent(event SessionEvent) error {
 		if event.ChannelType != SessionChannelRDP {
 			line := string(event.Data)
 			event.Data = sl.applyMasking(event.Data)
-			event.Command = sl.maskCommand(event.Command, line)
+			event.Command = sl.maskCommand(event.Command, line, string(event.Data))
 		}
 		return json.Marshal(event)
 	})
 }
 
-// maskCommand masks a command cut from the end of its echoed line. Some patterns match only the bare
-// command and others need its prompt, so the masked command is masked again behind its prompt, and if
-// that pass reaches into the command, the masked line stands in for it.
-func (sl *EncryptedSessionLogger) maskCommand(command string, line string) string {
+// maskCommand masks a command cut from the end of its echoed line. The masked command is kept only if
+// masking the prompt and command apart gives the same text as masking the whole line, since a pattern
+// that spans both, or needs one, would otherwise leave part of a secret in it.
+func (sl *EncryptedSessionLogger) maskCommand(command, line, maskedLine string) string {
 	if command == "" {
 		return command
 	}
 	masked := sl.applyMaskingString(command)
-	prompt, _ := strings.CutSuffix(line, command)
-	maskedLine := sl.applyMaskingString(prompt + masked)
-	if !strings.HasSuffix(maskedLine, masked) {
-		return strings.TrimSpace(maskedLine)
+	if prompt, found := strings.CutSuffix(line, command); found && sl.applyMaskingString(prompt)+masked == maskedLine {
+		return masked
 	}
-	return masked
+	return masking.Placeholder
 }
 
 func (sl *EncryptedSessionLogger) LogHttpEvent(event HttpEvent) error {
