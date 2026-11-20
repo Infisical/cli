@@ -57,12 +57,14 @@ type channelState struct {
 	outputParser      *terminalTranscript        // Renders the output stream into displayed lines
 	outputChannelType session.SessionChannelType // Channel type for buffered output
 	outputPending     atomic.Int64               // Rendered length of the line still on screen
+	commandStart      int                        // Where the command just entered starts on the line still on screen, or -1
 }
 
 func newChannelState() *channelState {
 	return &channelState{
 		inputScanner: newInputSequenceFilter(),
 		outputParser: newTerminalTranscript(),
+		commandStart: -1,
 	}
 }
 
@@ -696,12 +698,24 @@ func (p *SSHProxy) flushInputBufferUnsafe(sessionID string, chState *channelStat
 	switch {
 	case onScreen > chState.echoBaseline:
 		// Echoed while typing, so that line is the record.
+		chState.markCommandLine()
 	case pasted:
 		// Delivered ahead of any echo; the next committed line decides.
 		chState.pendingEcho.hold(command, channel, onScreen)
 	default:
 		p.flushOutputBuffer(sessionID, chState)
 		p.logInputCommand(sessionID, chState.textEvent(session.SessionEventInput, channel, command))
+	}
+}
+
+// markCommandLine flags the line on screen as holding the command just entered (caller must
+// hold inputMutex). outputMutex keeps the line from committing between the check and the mark.
+func (c *channelState) markCommandLine() {
+	c.outputMutex.Lock()
+	defer c.outputMutex.Unlock()
+
+	if c.outputParser.PendingLen() > c.echoBaseline {
+		c.commandStart = c.echoBaseline
 	}
 }
 
@@ -745,7 +759,15 @@ func (p *SSHProxy) flushOutputBuffer(sessionID string, chState *channelState) {
 // logOutputLines writes one output event per rendered line (caller must hold outputMutex)
 func (p *SSHProxy) logOutputLines(sessionID string, chState *channelState, lines []string) {
 	for _, line := range lines {
+		unechoed, isUnechoed, echoedAt := chState.pendingEcho.settle(line)
+
 		event := chState.textEvent(session.SessionEventOutput, chState.outputChannelType, line)
+		if chState.commandStart >= 0 {
+			event.Command = commandOnLine(line, chState.commandStart)
+			chState.commandStart = -1
+		} else if echoedAt >= 0 {
+			event.Command = commandOnLine(line, echoedAt)
+		}
 		if err := p.config.SessionLogger.LogSessionEvent(event); err != nil {
 			log.Error().Err(err).
 				Str("sessionID", sessionID).
@@ -753,7 +775,7 @@ func (p *SSHProxy) logOutputLines(sessionID string, chState *channelState, lines
 				Msg("Failed to log terminal event")
 		}
 
-		if unechoed, ok := chState.pendingEcho.settle(line); ok {
+		if isUnechoed {
 			p.logInputCommand(sessionID, unechoed)
 		}
 	}

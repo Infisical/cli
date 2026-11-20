@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -52,6 +53,7 @@ type SessionEvent struct {
 	ChannelType SessionChannelType `json:"channelType,omitempty"` // Channel kind (SSH shell/exec/sftp or RDP)
 	Data        []byte             `json:"data"`                  // SSH: gateway-rendered text; RDP: JSON envelope (base64-marshaled)
 	Rendered    bool               `json:"rendered,omitempty"`    // Data is display-ready; absent on recordings that stored raw bytes
+	Command     string             `json:"command,omitempty"`     // On the output line where a typed command was echoed: the command without its prompt
 	ElapsedTime float64            `json:"elapsedTime"`           // Seconds since session start (for replay)
 }
 
@@ -305,14 +307,31 @@ func (sl *EncryptedSessionLogger) LogSessionEvent(event SessionEvent) error {
 		// envelope would corrupt valid recordings whenever a pattern
 		// happened to match a substring of the JSON or base64.
 		if event.ChannelType != SessionChannelRDP {
+			line := string(event.Data)
 			event.Data = sl.applyMasking(event.Data)
+			event.Command = sl.maskCommand(event.Command, line, string(event.Data))
 		}
 		return json.Marshal(event)
 	})
 }
 
+// maskCommand masks a command cut from the end of its echoed line. The masked command is kept only if
+// masking the prompt and command apart gives the same text as masking the whole line, since a pattern
+// that spans both, or needs one, would otherwise leave part of a secret in it.
+func (sl *EncryptedSessionLogger) maskCommand(command, line, maskedLine string) string {
+	if command == "" {
+		return command
+	}
+	masked := sl.applyMaskingString(command)
+	if prompt, found := strings.CutSuffix(line, command); found && sl.applyMaskingString(prompt)+masked == maskedLine {
+		return masked
+	}
+	return masking.Placeholder
+}
+
 func (sl *EncryptedSessionLogger) LogHttpEvent(event HttpEvent) error {
 	return sl.writeEvent(func() ([]byte, error) {
+		event.URL = sl.applyMaskingString(event.URL)
 		event.Body = sl.applyMasking(event.Body)
 		return json.Marshal(event)
 	})

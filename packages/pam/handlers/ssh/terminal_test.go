@@ -130,7 +130,7 @@ func TestSessionRecording(t *testing.T) {
 				typeLine(p, ch, shell, "ls")
 				emit(p, ch, "\r\nLICENSE go\r\n"+prompt("~"))
 			},
-			want: []string{"output: user@host:~$ ls", "output: LICENSE go", "output: user@host:~$"},
+			want: []string{"output: user@host:~$ ls [command: ls]", "output: LICENSE go", "output: user@host:~$"},
 		},
 		{
 			name: "tab completion counts as echoed",
@@ -139,7 +139,7 @@ func TestSessionRecording(t *testing.T) {
 				typeLine(p, ch, shell, "cd ..")
 				emit(p, ch, "/\r\n")
 			},
-			want: []string{"output: user@host:~/cli$ cd ../"},
+			want: []string{"output: user@host:~/cli$ cd ../ [command: cd ../]"},
 		},
 		{
 			name: "paste arriving with its newline counts as echoed",
@@ -148,7 +148,7 @@ func TestSessionRecording(t *testing.T) {
 				p.bufferInput([]byte("cd ../cli\r"), "sid", shell, ch)
 				emit(p, ch, "cd ../cli\r\n")
 			},
-			want: []string{"output: user@host:~$ cd ../cli"},
+			want: []string{"output: user@host:~$ cd ../cli [command: cd ../cli]"},
 		},
 		{
 			name: "unechoed input is recorded when it is typed",
@@ -167,7 +167,7 @@ func TestSessionRecording(t *testing.T) {
 				emit(p, ch, "cd cli\r\n"+prompt("~/cli")+"ls\r\nLICENSE go\r\n")
 			},
 			want: []string{
-				"output: user@host:~$ cd cli",
+				"output: user@host:~$ cd cli [command: cd cli]",
 				"output: user@host:~/cli$ ls",
 				"output: LICENSE go",
 			},
@@ -209,6 +209,9 @@ func TestSessionRecording(t *testing.T) {
 					t.Errorf("event %d (%q) lacks the rendered flag or a timestamp", i, e.Data)
 				}
 				got[i] = string(e.EventType) + ": " + string(e.Data)
+				if e.Command != "" {
+					got[i] += " [command: " + e.Command + "]"
+				}
 			}
 			if !slices.Equal(got, tt.want) {
 				t.Errorf("got %q, want %q", got, tt.want)
