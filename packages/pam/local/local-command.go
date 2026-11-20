@@ -61,6 +61,10 @@ func SupportsLocalCommand(accountType string) bool {
 // ErrSessionExpired is returned when the session ended before the command did.
 var ErrSessionExpired = errors.New("the PAM session ended before the command finished")
 
+// ErrCredentialsExpired is returned when AWS credentials without a Gateway expired before the
+// session or the command did.
+var ErrCredentialsExpired = errors.New("the AWS credentials expired before the command finished")
+
 // ErrInterrupted is returned when a signal arrived before the command started.
 var ErrInterrupted = errors.New("interrupted before the command started")
 
@@ -86,6 +90,16 @@ func watchInterrupts() *interruptWatch {
 		case sig := <-w.signals:
 			w.caught = sig
 			w.cancel()
+		case <-w.done:
+			return
+		}
+		// A blocking setup step can't see the first interrupt; a second one exits at once.
+		select {
+		case sig := <-w.signals:
+			if s, ok := sig.(syscall.Signal); ok {
+				os.Exit(128 + int(s))
+			}
+			os.Exit(1)
 		case <-w.done:
 		}
 	}()
@@ -187,13 +201,18 @@ func RunLocalCommand(httpClient *resty.Client, response *api.PAMAccessResponse, 
 		if err != nil {
 			return 1, err
 		}
-		if credentialsExpiry.Before(expiry) {
+		credentialsFirst := credentialsExpiry.Before(expiry)
+		if credentialsFirst {
 			expiry = credentialsExpiry
 		}
 		if code, interrupted := interrupts.setupFinished(); interrupted {
 			return code, ErrInterrupted
 		}
-		return runLocalChild(command, env, expiry, interrupts.signals)
+		code, err := runLocalChild(command, env, expiry, interrupts.signals)
+		if credentialsFirst && errors.Is(err, ErrSessionExpired) {
+			return code, ErrCredentialsExpired
+		}
+		return code, err
 	}
 
 	session := NewLiveSession(response, expiry)
@@ -239,7 +258,13 @@ func RunLocalCommand(httpClient *resty.Client, response *api.PAMAccessResponse, 
 	}
 
 	if response.AccountType == AccountTypeAzureCli {
-		if err := azureCommandLogin(interrupts.ctx, env, response.Metadata); err != nil && interrupts.ctx.Err() == nil {
+		loginCtx, cancelLogin := context.WithDeadline(interrupts.ctx, session.Expiry)
+		err := azureCommandLogin(loginCtx, env, response.Metadata)
+		cancelLogin()
+		if err != nil && interrupts.ctx.Err() == nil {
+			if loginCtx.Err() != nil {
+				return 1, ErrSessionExpired
+			}
 			return 1, err
 		}
 	}
@@ -253,7 +278,7 @@ func RunLocalCommand(httpClient *resty.Client, response *api.PAMAccessResponse, 
 func runLocalChild(command []string, env []string, expiry time.Time, signals chan os.Signal) (int, error) {
 	// A terminal's Ctrl+C already reaches the child through its process group, so SIGINT is only
 	// forwarded without one. Catching signals keeps this process alive long enough to end the session.
-	noTerminal := !isatty.IsTerminal(os.Stdin.Fd())
+	noTerminal := !isatty.IsTerminal(os.Stdin.Fd()) && !isatty.IsTerminal(os.Stdout.Fd()) && !isatty.IsTerminal(os.Stderr.Fd())
 
 	child := exec.Command(command[0], command[1:]...)
 	child.Env = env
@@ -496,6 +521,7 @@ func localCommandEnv(response *api.PAMAccessResponse, port int, tempDir string, 
 		}
 		set["CLOUDSDK_PROXY_TYPE"], set["CLOUDSDK_PROXY_ADDRESS"], set["CLOUDSDK_PROXY_PORT"] = "http", "127.0.0.1", portStr
 		set["CLOUDSDK_PROXY_USERNAME"], set["CLOUDSDK_PROXY_PASSWORD"] = "infisical", setup.proxySecret
+		unset["NO_PROXY"], unset["no_proxy"] = true, true
 		set["CLOUDSDK_AUTH_ACCESS_TOKEN_FILE"] = tokenPath
 		set["CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE"] = caPath
 		set[EnvPAMURL] = fmt.Sprintf("http://infisical:%s@127.0.0.1:%d", setup.proxySecret, port)
@@ -510,6 +536,8 @@ func localCommandEnv(response *api.PAMAccessResponse, port int, tempDir string, 
 		}
 		proxyURL := fmt.Sprintf("http://infisical:%s@127.0.0.1:%d", setup.proxySecret, port)
 		set["AZURE_CONFIG_DIR"] = configDir
+		// A request that skips the proxy would reach Azure with the placeholder secret.
+		unset["NO_PROXY"], unset["no_proxy"] = true, true
 		set["HTTPS_PROXY"], set["https_proxy"] = proxyURL, proxyURL
 		set["REQUESTS_CA_BUNDLE"], set["SSL_CERT_FILE"], set["CURL_CA_BUNDLE"] = caPath, caPath, caPath
 		set[EnvPAMURL] = proxyURL

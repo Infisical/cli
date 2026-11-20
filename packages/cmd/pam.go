@@ -155,8 +155,8 @@ func runPAMAccess(cmd *cobra.Command, args []string) {
 		started := time.Now()
 		exitCode, err := pam.RunLocalCommand(httpClient, response, duration, port, command)
 		stopAuth()
-		if errors.Is(err, pam.ErrSessionExpired) {
-			exitWithError(cmd, errPAMSessionExpired(invocation, time.Since(started).Round(time.Second), response.AccountType == pam.AccountTypeAwsIam))
+		if errors.Is(err, pam.ErrSessionExpired) || errors.Is(err, pam.ErrCredentialsExpired) {
+			exitWithError(cmd, errPAMSessionExpired(invocation, time.Since(started).Round(time.Second), errors.Is(err, pam.ErrCredentialsExpired)))
 		}
 		if errors.Is(err, pam.ErrInterrupted) {
 			os.Exit(exitCode)
