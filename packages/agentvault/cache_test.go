@@ -433,33 +433,43 @@ func TestTheSessionAHookIsToldAboutIsKeptAndRefreshed(t *testing.T) {
 	label := "Nightly refunds"
 	first := &api.AgentVaultResolvedSession{Label: &label, Actor: api.AgentVaultSessionActor{Type: "machineIdentity", ID: "a-1", Name: "agent"}}
 	svc := serviceWithSecret("v")
-	firstHook := &sessionHook{id: "h-1", secret: []byte("s")}
-	resolver := &stubResolver{result: &resolveResult{SessionID: "s1", Services: []*resolvedService{svc}, Session: first, Hook: firstHook}}
+	svc.hook = &serviceHook{secret: []byte("s")}
+	resolver := &stubResolver{result: &resolveResult{SessionID: "s1", Services: []*resolvedService{svc}, Session: first}}
 	cache := newTestCache(resolver)
 
 	found, err := cache.lookup("agv_token", nil)
-	if err != nil || found.session != first || found.sessionID != "s1" || found.hook != firstHook {
+	if err != nil || found.session != first || found.sessionID != "s1" || found.services[0].hook != svc.hook {
 		t.Fatalf("lookup = %+v, %v", found, err)
-	}
-	if found, _ := cache.lookup("agv_token", nil); found.hook != firstHook {
-		t.Fatalf("a cached lookup lost the hook: %+v", found.hook)
 	}
 
 	second := &api.AgentVaultResolvedSession{Actor: api.AgentVaultSessionActor{Type: "user", ID: "u-1", Name: "Ana"}}
-	secondHook := &sessionHook{id: "h-1", secret: []byte("edited")}
+	edited := serviceWithSecret("v")
+	edited.hook = &serviceHook{secret: []byte("edited"), methods: map[string]bool{"POST": true}}
 	resolver.mu.Lock()
-	resolver.result = &resolveResult{SessionID: "s1", Services: []*resolvedService{svc}, Session: second, Hook: secondHook}
+	resolver.result = &resolveResult{SessionID: "s1", Services: []*resolvedService{edited}, Session: second}
 	resolver.mu.Unlock()
 	cache.refresh()
-	if found, _ := cache.lookup("agv_token", nil); found.session != second || found.hook != secondHook {
-		t.Fatalf("the refresh kept the old session info: %+v, hook %+v", found.session, found.hook)
+	if found, _ := cache.lookup("agv_token", nil); found.session != second || found.services[0].hook != edited.hook {
+		t.Fatalf("the refresh kept the old session info: %+v, hook %+v", found.session, found.services[0].hook)
 	}
 
 	resolver.mu.Lock()
-	resolver.result = &resolveResult{SessionID: "s1", Services: []*resolvedService{svc}, Session: second}
+	resolver.result = &resolveResult{SessionID: "s1", Services: []*resolvedService{serviceWithSecret("v")}, Session: second}
 	resolver.mu.Unlock()
 	cache.refresh()
-	if found, _ := cache.lookup("agv_token", nil); found.hook != nil {
-		t.Fatalf("a deleted hook stayed on the session: %+v", found.hook)
+	if found, _ := cache.lookup("agv_token", nil); found.services[0].hook != nil {
+		t.Fatalf("a removed hook stayed on the service: %+v", found.services[0].hook)
+	}
+}
+
+func TestACredentialSwapKeepsThePolledHook(t *testing.T) {
+	polledHook := &serviceHook{secret: []byte("new")}
+	polled := &resolvedService{id: "svc-1", hostPattern: "h", credential: oauthToken("stale"), hook: polledHook}
+	entry := &sessionEntry{swaps: map[string]*credentialSwap{"svc-1": {
+		installed: oauthToken("fresh"), hostPattern: "h", replaced: map[string]bool{credentialHash(&polled.credential): true}, gen: 2,
+	}}}
+	got := keepNewerSwaps(entry, []*resolvedService{polled}, 1)
+	if string(got[0].credential.value) != "fresh" || got[0].hook != polledHook {
+		t.Fatalf("merged service = %+v", got[0])
 	}
 }

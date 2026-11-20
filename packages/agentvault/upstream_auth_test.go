@@ -33,7 +33,6 @@ type refreshCall struct {
 
 type oauthResolver struct {
 	services []*resolvedService
-	hook     *sessionHook
 
 	mu     sync.Mutex
 	calls  []refreshCall
@@ -47,7 +46,7 @@ type oauthResolver struct {
 func (r *oauthResolver) resolve(string, *sessionLogGrant) (*resolveResult, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return &resolveResult{SessionID: "s1", Services: r.services, Hook: r.hook}, nil
+	return &resolveResult{SessionID: "s1", Services: r.services}, nil
 }
 
 func (r *oauthResolver) setServices(services ...*resolvedService) {
@@ -1419,9 +1418,11 @@ func TestAnMCPEventStreamIsForwardedBeforeItCompletes(t *testing.T) {
 
 func TestAnOAuthResendAsksTheHookOnce(t *testing.T) {
 	fake := newFakeHook(t, answerHook(`{"decision":"allow"}`))
-	resolver := &oauthResolver{issue: oauthToken("new-token"), status: oauthStatusConnected, hook: fake.hook()}
+	resolver := &oauthResolver{issue: oauthToken("new-token"), status: oauthStatusConnected}
 	client, host, up := newOAuthFixture(t, resolver, func(h string) *resolvedService {
-		return oauthMCPService(h, "old-token")
+		svc := oauthMCPService(h, "old-token")
+		svc.hook = fake.hook()
+		return svc
 	}, acceptOnly("new-token"))
 
 	resp, body := doWith(t, client, http.MethodPost, fmt.Sprintf("https://%s/mcp", host), "application/json", strings.NewReader(mcpCallBody))

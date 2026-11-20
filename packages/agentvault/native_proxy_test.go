@@ -33,18 +33,13 @@ import (
 // A proxy behind the real door listener, so tests go through the TLS door the way `connect` does.
 func newNativeProxy(t *testing.T, services []*resolvedService) (*proxyServer, *ConnectClient, string) {
 	t.Helper()
-	return newHookedNativeProxy(t, services, nil)
-}
-
-func newHookedNativeProxy(t *testing.T, services []*resolvedService, hook *sessionHook) (*proxyServer, *ConnectClient, string) {
-	t.Helper()
 	key, cert, err := generateRootCa()
 	if err != nil {
 		t.Fatal(err)
 	}
 	ps := &proxyServer{transport: newUpstreamTransport(), ca: newCaManager(key, cert)}
 	ps.setConfig(ProxyConfig{TrafficPolicy: TrafficPolicyBundleHosts})
-	ps.cache = newSessionCache(grantingResolver{services: services, hook: hook}, ps.pollInterval)
+	ps.cache = newSessionCache(grantingResolver{services: services}, ps.pollInterval)
 	ps.sessionLogs = newSessionLogRecorder("proxy-1", &fakeShipper{})
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -730,10 +725,16 @@ type quietMySQLHandler struct{ mysqlserver.EmptyHandler }
 
 func (quietMySQLHandler) UseDB(string) error { return nil }
 
+func hookedNativeService(addr string, hook *serviceHook) *resolvedService {
+	svc := nativeServiceAt(serviceKindPostgres, "db", addr)
+	svc.hook = hook
+	return svc
+}
+
 func TestAProbeDoesNotAskTheHookButAConnectionDoes(t *testing.T) {
 	fake := newFakeHook(t, answerHook(`{"decision":"allow"}`))
 	upstream := startFakePostgres(t, "agent", "secret")
-	_, client, _ := newHookedNativeProxy(t, []*resolvedService{nativeServiceAt(serviceKindPostgres, "db", upstream)}, fake.hook())
+	_, client, _ := newNativeProxy(t, []*resolvedService{hookedNativeService(upstream, fake.hook())})
 
 	if err := client.Probe(context.Background(), "db"); err != nil {
 		t.Fatal(err)
@@ -777,7 +778,7 @@ func TestAHookRefusalOfAConnectionReachesConnectAndTheSessionLog(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := newFakeHook(t, tc.answer)
-			ps, client, _ := newHookedNativeProxy(t, []*resolvedService{nativeServiceAt(serviceKindPostgres, "db", "127.0.0.1:1")}, fake.hook())
+			ps, client, _ := newNativeProxy(t, []*resolvedService{hookedNativeService("127.0.0.1:1", fake.hook())})
 
 			_, err := client.OpenTunnel(context.Background(), "db")
 			var refused *ProxyRefusedError
@@ -855,28 +856,26 @@ func TestADatabaseConnectionThatFailsToLogInIsNotBilled(t *testing.T) {
 	}
 }
 
-func TestANativeConnectionAsksTheHookOnlyWhenARuleNamesItsService(t *testing.T) {
+func TestANativeConnectionAsksTheHookWhateverItsNarrowing(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		rule  api.AgentVaultHookRule
-		asked bool
+		name      string
+		narrowing []api.AgentVaultServiceHook
 	}{
-		{"another service", api.AgentVaultHookRule{Service: "warehouse"}, false},
-		{"its service", api.AgentVaultHookRule{Service: "db"}, true},
-		{"its service with fields that don't fit", api.AgentVaultHookRule{Service: "db", Methods: []string{"GET"}, Tools: []string{"x"}}, true},
+		{"no narrowing", nil},
+		{"narrowing that doesn't fit", []api.AgentVaultServiceHook{{Methods: []string{"GET"}, Paths: []string{"/x"}, Tools: []string{"x"}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := newFakeHook(t, answerHook(`{"decision":"allow"}`))
 			upstream := startFakePostgres(t, "agent", "secret")
-			_, client, _ := newHookedNativeProxy(t, []*resolvedService{nativeServiceAt(serviceKindPostgres, "db", upstream)}, fake.hook(tc.rule))
+			_, client, _ := newNativeProxy(t, []*resolvedService{hookedNativeService(upstream, fake.hook(tc.narrowing...))})
 
 			tunnel, err := client.OpenTunnel(context.Background(), "db")
 			if err != nil {
 				t.Fatalf("open: %v", err)
 			}
 			_ = tunnel.Close()
-			if asked := len(fake.calls()) == 1; asked != tc.asked {
-				t.Fatalf("hook calls = %d, want asked %v", len(fake.calls()), tc.asked)
+			if got := len(fake.calls()); got != 1 {
+				t.Fatalf("hook calls = %d, want 1", got)
 			}
 		})
 	}

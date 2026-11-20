@@ -203,7 +203,7 @@ func (ps *proxyServer) handleNativeConnect(w http.ResponseWriter, r *http.Reques
 	// After every local refusal, so the hook is only asked about a connection the proxy would open, and under the
 	// connection's context, so a revoke during the call cancels it.
 	var hook *hookOutcome
-	if found.hook.matches(svc, nil, nil) {
+	if svc.hook != nil {
 		hook = ps.askNativeHook(conn.ctx, svc, found)
 		if hook.Decision != hookAllow {
 			ps.refuseNativeService(w, sessionToken, grant, svc, nativeHookRefusal(hook))

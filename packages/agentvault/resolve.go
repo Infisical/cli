@@ -24,7 +24,6 @@ type resolveResult struct {
 	Services   []*resolvedService
 	SessionLog *sessionLogGrant
 	Session    *api.AgentVaultResolvedSession
-	Hook       *sessionHook
 }
 
 const sessionLogKeyBytes = 32
@@ -90,6 +89,7 @@ func (r *infisicalResolver) resolve(sessionToken string, held *sessionLogGrant) 
 			memberProvided:         wire.MemberProvided,
 			credentialRemoved:      wire.CredentialRemoved,
 			credentialNotConnected: wire.CredentialNotConnected,
+			hook:                   toServiceHook(wire.Hook),
 		})
 	}
 
@@ -99,7 +99,6 @@ func (r *infisicalResolver) resolve(sessionToken string, held *sessionLogGrant) 
 		Services:   services,
 		SessionLog: toSessionLogGrant(res.SessionID, res.SessionLogs, held),
 		Session:    res.Session,
-		Hook:       toSessionHook(res.Hook),
 	}, nil
 }
 

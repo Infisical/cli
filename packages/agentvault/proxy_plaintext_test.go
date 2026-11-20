@@ -18,11 +18,6 @@ import (
 // anywhere. A service reaches this fixture only by naming its port, which is what opts it into plaintext.
 func newPlaintextFixture(t *testing.T, build func(host string) *resolvedService) (*http.Client, string) {
 	t.Helper()
-	return newHookedPlaintextFixture(t, build, nil)
-}
-
-func newHookedPlaintextFixture(t *testing.T, build func(host string) *resolvedService, hook *sessionHook) (*http.Client, string) {
-	t.Helper()
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -45,7 +40,7 @@ func newHookedPlaintextFixture(t *testing.T, build func(host string) *resolvedSe
 
 	ps := &proxyServer{transport: newUpstreamTransport()}
 	ps.setConfig(ProxyConfig{TrafficPolicy: TrafficPolicyAnyHost})
-	ps.cache = newSessionCache(fixedResolver{services: []*resolvedService{build(host)}, hook: hook}, ps.pollInterval)
+	ps.cache = newSessionCache(fixedResolver{services: []*resolvedService{build(host)}}, ps.pollInterval)
 
 	front := httptest.NewServer(http.HandlerFunc(ps.dispatch))
 	t.Cleanup(front.Close)
@@ -169,9 +164,11 @@ func TestPlainHTTPToAnMCPServiceOnACustomPortIsRefused(t *testing.T) {
 
 func TestThePlainDoorAsksTheHookWithoutTheSessionToken(t *testing.T) {
 	fake := newFakeHook(t, answerHook(`{"decision":"deny","message":"no"}`))
-	client, host := newHookedPlaintextFixture(t, func(h string) *resolvedService {
-		return policyService(h, nil, nil, nil, nil)
-	}, fake.hook())
+	client, host := newPlaintextFixture(t, func(h string) *resolvedService {
+		svc := policyService(h, nil, nil, nil, nil)
+		svc.hook = fake.hook()
+		return svc
+	})
 
 	status, payload := do(t, client, http.MethodGet, "http://"+host+"/x", "")
 	if status != http.StatusForbidden || decodeProxyError(t, payload).Error != errorCodeHookDenied {

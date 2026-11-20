@@ -131,22 +131,18 @@ type AgentVaultService struct {
 	CredentialNotConnected bool `json:"credentialNotConnected"`
 	// Nil for a service sent inline with the session.
 	AccessBundleID *string `json:"accessBundleId"`
+	// Asked before each request its narrowing picks, or each database or SSH connection. Nil when the service has none.
+	Hook *AgentVaultServiceHook `json:"hook"`
 }
 
-// The session's hook, asked before each request or database or SSH connection its rules pick.
-type AgentVaultHook struct {
+// Older servers send only the URL and secret, which asks the hook about every request of the service.
+type AgentVaultServiceHook struct {
 	ID string `json:"id"`
-	// Nil for a hook sent inline with the session.
+	// Nil from servers that don't send it.
 	Name   *string `json:"name"`
 	URL    string  `json:"url"`
 	Secret string  `json:"secret"`
-	// Empty means every request of the session goes to the hook.
-	Rules []AgentVaultHookRule `json:"rules"`
-}
-
-// Picks a service by name, optionally narrowed by HTTP methods and path prefixes, or by MCP tools.
-type AgentVaultHookRule struct {
-	Service string   `json:"service"`
+	// HTTP methods and path prefixes, or MCP tools. None means every request of the service.
 	Methods []string `json:"methods"`
 	Paths   []string `json:"paths"`
 	Tools   []string `json:"tools"`
@@ -203,8 +199,6 @@ type ResolveAgentVaultSessionResponse struct {
 	Services    []AgentVaultService        `json:"services"`
 	SessionLogs AgentVaultSessionLogGrant  `json:"sessionLogs"`
 	Session     *AgentVaultResolvedSession `json:"session"`
-	// Nil when the session has no hook.
-	Hook *AgentVaultHook `json:"hook"`
 }
 
 func CallResolveAgentVaultSession(httpClient *resty.Client, sessionToken string, request ResolveAgentVaultSessionRequest) (ResolveAgentVaultSessionResponse, error) {
