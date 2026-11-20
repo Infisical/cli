@@ -1,10 +1,8 @@
 package webapp
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
-	"image/jpeg"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
@@ -15,7 +13,8 @@ const (
 	maxScreenshotBytes  = 300 << 10
 	screenshotQuality   = 60
 	screenshotFallback  = 40
-	screenshotMaxWidth  = 1280
+	screenshotMaxWidth  = 1920
+	screenshotFormat    = "webp"
 	screenshotSignals   = 64
 	screenshotCallLimit = 5 * time.Second
 
@@ -283,7 +282,7 @@ func (s *screenshotScheduler) take(ctx context.Context, trigger string) {
 		}
 		return
 	}
-	cfg, err := jpeg.DecodeConfig(bytes.NewReader(image))
+	width, height, err := webpSize(image)
 	if err != nil {
 		s.logSession("screenshot.skipped", "the screenshot was not a readable image")
 		return
@@ -298,10 +297,11 @@ func (s *screenshotScheduler) take(ctx context.Context, trigger string) {
 		EventType: session.WebEventScreenshot,
 		WebScreenshot: &session.WebScreenshot{
 			Trigger: trigger,
-			Width:   cfg.Width,
-			Height:  cfg.Height,
+			Format:  screenshotFormat,
+			Width:   width,
+			Height:  height,
 			Bytes:   len(image),
-			JPEG:    image,
+			Image:   image,
 		},
 	})
 }

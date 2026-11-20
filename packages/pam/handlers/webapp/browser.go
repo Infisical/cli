@@ -119,6 +119,7 @@ type browserConfig struct {
 	noSandbox         bool
 	hostResolverRules string
 	width, height     int64
+	screenScale       float64
 	// listener receives every event of the tab, in order, on the tab's message loop.
 	listener func(ev any)
 	// browserListener receives the events of the browser, such as downloads.
@@ -149,6 +150,10 @@ func browserAllocatorOptions(cfg browserConfig) []chromedp.ExecAllocatorOption {
 		chromedp.Flag("no-default-browser-check", true),
 		chromedp.Flag("mute-audio", true),
 		chromedp.WindowSize(int(cfg.width), int(cfg.height)),
+		// The screencast captures at the screen's scale factor, not the emulated one, so the
+		// screen takes the viewer's factor. It is not set higher just in case, because a screen
+		// at 2 doubles the render cost and the input latency of a viewer at 1.
+		chromedp.Flag("force-device-scale-factor", strconv.FormatFloat(cfg.screenScale, 'f', -1, 64)),
 		chromedp.NoInheritEnv,
 		chromedp.Env(passthroughEnv()...),
 	}

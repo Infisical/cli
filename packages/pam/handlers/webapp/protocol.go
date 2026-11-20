@@ -31,6 +31,9 @@ const (
 	maxViewportSide = 3840
 	maxWheelDelta   = 10000
 
+	minDeviceScaleFactor = 1.0
+	maxDeviceScaleFactor = 2.0
+
 	modifierMask = 1 | 2 | 4 | 8
 	buttonsMask  = 1 | 2 | 4 | 8 | 16
 	modifierCtrl = 2
@@ -100,6 +103,8 @@ type readyMessage struct {
 	Type   string `json:"type"`
 	Width  int64  `json:"width"`
 	Height int64  `json:"height"`
+	// DeviceScaleFactor is the browser's launch scale, the most a later resize can get.
+	DeviceScaleFactor float64 `json:"deviceScaleFactor"`
 }
 
 type stateMessage struct {
@@ -126,8 +131,8 @@ type errorMessage struct {
 	Message string `json:"message"`
 }
 
-func newReady(width, height int64) readyMessage {
-	return readyMessage{Type: "ready", Width: width, Height: height}
+func newReady(width, height int64, deviceScaleFactor float64) readyMessage {
+	return readyMessage{Type: "ready", Width: width, Height: height, DeviceScaleFactor: deviceScaleFactor}
 }
 
 func newNotice(message string) noticeMessage {
@@ -159,7 +164,9 @@ type clientMessage struct {
 	Text       string  `json:"text"`
 	Width      int64   `json:"width"`
 	Height     int64   `json:"height"`
-	URL        string  `json:"url"`
+	// DeviceScaleFactor is the viewer's pixel ratio. Absent means 1.
+	DeviceScaleFactor float64 `json:"deviceScaleFactor"`
+	URL               string  `json:"url"`
 }
 
 func parseClientMessage(payload []byte) (clientMessage, error) {
@@ -273,8 +280,18 @@ func (m clientMessage) pasteText() (string, error) {
 	return m.Text, nil
 }
 
-func (m clientMessage) viewport() (int64, int64) {
-	return clamp(m.Width, minViewportSide, maxViewportSide), clamp(m.Height, minViewportSide, maxViewportSide)
+// viewport is the CSS size and device scale factor a resize asks for. The scale factor is
+// lowered so that frames, which come out at the CSS size times the factor, stay within 3840.
+func (m clientMessage) viewport() (int64, int64, float64) {
+	width := clamp(m.Width, minViewportSide, maxViewportSide)
+	height := clamp(m.Height, minViewportSide, maxViewportSide)
+	scale := m.DeviceScaleFactor
+	if scale == 0 {
+		scale = 1
+	}
+	scale = clamp(scale, minDeviceScaleFactor, maxDeviceScaleFactor)
+	scale = min(scale, float64(maxViewportSide)/float64(width), float64(maxViewportSide)/float64(height))
+	return width, height, scale
 }
 
 // navigateURL is the URL a navigate message asks for, with https:// added when it has no scheme.

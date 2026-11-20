@@ -1,7 +1,9 @@
 package webapp
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -119,17 +121,17 @@ func TestOnTabEventNeverBlocksOrDropsWhatThePageWaitsOn(t *testing.T) {
 	defer client.Close()
 	go io.Copy(io.Discard, client)
 	s := &browserSession{
-		sessionID: "s",
-		allowlist: list,
-		conn:      server,
-		out:       newFrameWriter(server),
-		rec:       newRecorder(&memLogger{}, "s", 8),
-		ctx:       ctx,
-		end:       cancel,
-		ready:     make(chan struct{}),
-		events:    make(chan any, 2),
-		frames:    make(chan *page.EventScreencastFrame, 1),
-		tab:       tab,
+		sessionID:  "s",
+		allowlist:  list,
+		conn:       server,
+		out:        newFrameWriter(server),
+		rec:        newRecorder(&memLogger{}, "s", 8),
+		ctx:        ctx,
+		end:        cancel,
+		ready:      make(chan struct{}),
+		events:     make(chan any, 2),
+		frameReady: make(chan struct{}, 1),
+		tab:        tab,
 	}
 
 	done := make(chan struct{})
@@ -147,7 +149,7 @@ func TestOnTabEventNeverBlocksOrDropsWhatThePageWaitsOn(t *testing.T) {
 		}
 		s.onTabEvent(&fetch.EventRequestPaused{RequestID: "x", Request: &network.Request{URL: "https://evil.example/"}})
 		for i := range 5 {
-			s.onTabEvent(&page.EventScreencastFrame{SessionID: int64(i)})
+			s.onTabEvent(&page.EventScreencastFrame{SessionID: int64(i), Data: []byte{byte(i)}})
 		}
 		s.onTabEvent(&page.EventJavascriptDialogOpening{Type: page.DialogTypeAlert})
 	}()
@@ -162,17 +164,85 @@ func TestOnTabEventNeverBlocksOrDropsWhatThePageWaitsOn(t *testing.T) {
 	if s.rec.dropped.Load() == 0 {
 		t.Error("recorder queue did not drop past its bound")
 	}
+	if !bytes.Equal(s.latestFrame, []byte{4}) {
+		t.Errorf("latest frame = %v, want the newest", s.latestFrame)
+	}
 
 	close(s.ready)
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if tab.count(fetch.CommandContinueRequest) == 20 && tab.count(fetch.CommandFailRequest) == 1 &&
-			tab.count(page.CommandScreencastFrameAck) == 4 && tab.count(page.CommandHandleJavaScriptDialog) == 1 {
+			tab.count(page.CommandScreencastFrameAck) == 5 && tab.count(page.CommandHandleJavaScriptDialog) == 1 {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Errorf("calls = %v, want 20 continued, 1 failed, 4 frames acked, 1 dialog closed", tab.calls)
+	t.Errorf("calls = %v, want 20 continued, 1 failed, 5 frames acked, 1 dialog closed", tab.calls)
+}
+
+func TestStreamFramesSendsOnlyTheNewestFrame(t *testing.T) {
+	tab := &fakeTab{}
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	s := &browserSession{
+		sessionID:  "s",
+		conn:       server,
+		out:        newFrameWriter(server),
+		rec:        newRecorder(&memLogger{}, "s", 8),
+		ctx:        ctx,
+		end:        cancel,
+		ready:      make(chan struct{}),
+		frameReady: make(chan struct{}, 1),
+		tab:        tab,
+	}
+	close(s.ready)
+	go s.streamFrames(ctx)
+
+	// net.Pipe blocks the first write until it is read, so frames 2 to 5 arrive while the
+	// viewer is busy.
+	s.onTabEvent(&page.EventScreencastFrame{SessionID: 1, Data: []byte("frame 1")})
+	time.Sleep(50 * time.Millisecond)
+	for i := 2; i <= 5; i++ {
+		s.onTabEvent(&page.EventScreencastFrame{SessionID: int64(i), Data: []byte("frame " + strconv.Itoa(i))})
+	}
+
+	read := func() string {
+		_ = client.SetReadDeadline(time.Now().Add(time.Second))
+		payload, err := readServerFrame(client)
+		if err != nil {
+			return ""
+		}
+		return string(payload)
+	}
+	if got := read(); got != "frame 1" {
+		t.Fatalf("first frame = %q", got)
+	}
+	if got := read(); got != "frame 5" {
+		t.Fatalf("second frame = %q, want the newest", got)
+	}
+	if got := read(); got != "" {
+		t.Fatalf("an older frame was sent after the newest: %q", got)
+	}
+	deadline := time.Now().Add(time.Second)
+	for tab.count(page.CommandScreencastFrameAck) != 5 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := tab.count(page.CommandScreencastFrameAck); n != 5 {
+		t.Errorf("acknowledged %d frames, want all 5", n)
+	}
+}
+
+func readServerFrame(conn net.Conn) ([]byte, error) {
+	header := make([]byte, frameHeaderBytes)
+	if _, err := io.ReadFull(conn, header); err != nil {
+		return nil, err
+	}
+	payload := make([]byte, binary.BigEndian.Uint32(header[:4])-1)
+	_, err := io.ReadFull(conn, payload)
+	return payload, err
 }
 
 func TestEndReason(t *testing.T) {

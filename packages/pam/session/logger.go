@@ -119,11 +119,12 @@ type WebScroll struct {
 
 type WebScreenshot struct {
 	Trigger string `json:"trigger"`
+	Format  string `json:"format"`
 	Width   int    `json:"width"`
 	Height  int    `json:"height"`
 	Bytes   int    `json:"bytes"`
-	// JPEG is never masked: a pattern that matched its base64 would corrupt the image.
-	JPEG []byte `json:"jpeg"`
+	// Image is never masked: a pattern that matched its base64 would corrupt it.
+	Image []byte `json:"image"`
 }
 
 type WebRequest struct {

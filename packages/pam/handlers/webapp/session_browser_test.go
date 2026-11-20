@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"image/jpeg"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -66,6 +68,9 @@ type viewer struct {
 	conn   net.Conn
 	json   chan map[string]any
 	frames chan []byte
+
+	sizesMu    sync.Mutex
+	frameSizes map[string]int
 }
 
 func newViewer(t *testing.T, conn net.Conn) *viewer {
@@ -83,6 +88,14 @@ func newViewer(t *testing.T, conn net.Conn) *viewer {
 			}
 			switch header[4] {
 			case frameTypeJPEG:
+				if cfg, err := jpeg.DecodeConfig(bytes.NewReader(payload)); err == nil {
+					v.sizesMu.Lock()
+					if v.frameSizes == nil {
+						v.frameSizes = map[string]int{}
+					}
+					v.frameSizes[fmt.Sprintf("%dx%d", cfg.Width, cfg.Height)]++
+					v.sizesMu.Unlock()
+				}
 				select {
 				case v.frames <- payload:
 				default:
@@ -252,6 +265,19 @@ func startBrowserSession(t *testing.T, startPath string) (*viewer, string) {
 	return v, profiles
 }
 
+// resetFrameSizes forgets the frame sizes seen so far, and seenFrameSizes reports them.
+func (v *viewer) resetFrameSizes() {
+	v.sizesMu.Lock()
+	defer v.sizesMu.Unlock()
+	v.frameSizes = map[string]int{}
+}
+
+func (v *viewer) seenFrameSizes() map[string]int {
+	v.sizesMu.Lock()
+	defer v.sizesMu.Unlock()
+	return maps.Clone(v.frameSizes)
+}
+
 // recorded reads back the activity log, which is complete once close has returned.
 func (v *viewer) recorded() []session.WebEvent {
 	v.t.Helper()
@@ -297,7 +323,7 @@ func (v *viewer) waitRecorded(what string, match func(session.WebEvent) bool) {
 	}
 	for _, ev := range v.recordedSoFar() {
 		if ev.WebScreenshot != nil {
-			ev.JPEG = nil
+			ev.Image = nil
 		}
 		raw, _ := json.Marshal(ev)
 		v.t.Logf("recorded %s", raw)
@@ -313,14 +339,49 @@ func isScreenshot(trigger string) func(session.WebEvent) bool {
 
 func checkScreenshot(t *testing.T, ev session.WebEvent) {
 	t.Helper()
-	cfg, err := jpeg.DecodeConfig(bytes.NewReader(ev.JPEG))
-	if err != nil {
-		t.Fatalf("%s screenshot is not a JPEG: %v", ev.Trigger, err)
+	width, height, err := webpSize(ev.Image)
+	if err != nil || ev.Format != "webp" {
+		t.Fatalf("%s screenshot is not WebP (format %q): %v", ev.Trigger, ev.Format, err)
 	}
-	if cfg.Width != ev.Width || cfg.Height != ev.Height || ev.Bytes != len(ev.JPEG) || ev.Bytes > maxScreenshotBytes {
+	if width != ev.Width || height != ev.Height || ev.Bytes != len(ev.Image) || ev.Bytes > maxScreenshotBytes || width > screenshotMaxWidth {
 		t.Errorf("%s screenshot reports %dx%d and %d bytes, image is %dx%d and %d bytes",
-			ev.Trigger, ev.Width, ev.Height, ev.Bytes, cfg.Width, cfg.Height, len(ev.JPEG))
+			ev.Trigger, ev.Width, ev.Height, ev.Bytes, width, height, len(ev.Image))
 	}
+}
+
+func TestBrowserSessionHiDPI(t *testing.T) {
+	v, _ := startBrowserSession(t, "/long")
+	// The viewer sends its size as soon as it connects, which is what lets the gateway launch the
+	// browser at its scale factor.
+	v.send(`{"type":"resize","width":1280,"height":800,"deviceScaleFactor":2}`)
+	ready := v.waitFor("ready", func(m map[string]any) bool { return m["type"] == "ready" })
+	if ready["width"] != float64(1280) || ready["height"] != float64(800) || ready["deviceScaleFactor"] != float64(2) {
+		t.Errorf("ready = %v", ready)
+	}
+	v.waitFor("state of the long page", isState(v.site+"/long", "Long"))
+	v.waitRecorded("navigation screenshot", isScreenshot("navigation"))
+	v.waitFrame("a frame at twice the CSS size", func(w, h int) bool { return w == 2560 && h == 1600 })
+	v.resetFrameSizes()
+
+	v.click(50, 50)
+	v.waitRecorded("click screenshot", isScreenshot("click"))
+	time.Sleep(300 * time.Millisecond)
+	if sizes := v.seenFrameSizes(); len(sizes) != 1 || sizes["2560x1600"] == 0 {
+		t.Errorf("frame sizes after the resize = %v, want only 2560x1600", sizes)
+	}
+	v.close()
+
+	events := v.recorded()
+	click := findEvent(t, events, "click", isAction(session.WebEventInput, "click"))
+	if click.Target == nil || click.Target.Tag != "button" {
+		t.Errorf("a click at CSS pixels missed the button: %+v", click.Target)
+	}
+	shot := events[indexOf(events, 0, isScreenshot("click"))]
+	checkScreenshot(t, shot)
+	if shot.Width != screenshotMaxWidth {
+		t.Errorf("screenshot at device scale factor 2 is %dx%d, want %d wide", shot.Width, shot.Height, screenshotMaxWidth)
+	}
+	t.Logf("screenshot at 1280x800, device scale factor 2: %dx%d, %d bytes", shot.Width, shot.Height, shot.Bytes)
 }
 
 // indexOf returns the position of the first event that matches, or -1.
@@ -343,6 +404,10 @@ func TestBrowserSessionScreenshots(t *testing.T) {
 
 	v.send(`{"type":"mouse","action":"wheel","x":400,"y":400,"button":"none","buttons":0,"clickCount":0,"deltaX":0,"deltaY":800,"modifiers":0}`)
 	v.waitRecorded("scroll screenshot", isScreenshot("scroll"))
+	time.Sleep(300 * time.Millisecond)
+	if sizes := v.seenFrameSizes(); len(sizes) != 1 || sizes["1280x800"] == 0 {
+		t.Errorf("frame sizes = %v, want only 1280x800", sizes)
+	}
 	v.close()
 
 	events := v.recorded()
@@ -376,12 +441,13 @@ func TestBrowserSessionScreenshots(t *testing.T) {
 		t.Errorf("largest event is %d bytes, over the 512 KiB chunk cap", largest)
 	}
 	shot := events[clickShot]
-	shot.JPEG = shot.JPEG[:12]
+	shot.Image = shot.Image[:12]
 	raw, _ := json.Marshal(shot)
-	t.Logf("click screenshot (jpeg cut to 12 bytes): %s", raw)
+	t.Logf("click screenshot (image cut to 12 bytes): %s", raw)
 	raw, _ = json.Marshal(events[scroll])
 	t.Logf("scroll input: %s", raw)
-	t.Logf("largest recorded event: %d bytes; screenshots: %d, %d, %d bytes", largest,
+	t.Logf("largest recorded event: %d bytes; screenshots at 1280x800, device scale factor 1: %dx%d, %d, %d and %d bytes",
+		largest, events[clickShot].Width, events[clickShot].Height,
 		events[navShot].Bytes, events[clickShot].Bytes, events[scrollShot].Bytes)
 }
 
@@ -494,7 +560,8 @@ func TestBrowserSessionEndToEnd(t *testing.T) {
 	site := struct{ URL string }{v.site}
 
 	ready := v.waitFor("ready", func(m map[string]any) bool { return m["type"] == "ready" })
-	if ready["width"] != float64(defaultViewportWidth) || ready["height"] != float64(defaultViewportHeight) {
+	if ready["width"] != float64(defaultViewportWidth) || ready["height"] != float64(defaultViewportHeight) ||
+		ready["deviceScaleFactor"] != float64(1) {
 		t.Errorf("ready = %v", ready)
 	}
 	v.waitFrame("a screencast frame", func(w, h int) bool { return w == defaultViewportWidth && h == defaultViewportHeight })
@@ -531,7 +598,8 @@ func TestBrowserSessionEndToEnd(t *testing.T) {
 	v.click(50, 350)
 	v.waitFor("pop-up opened in the same tab", isState(site.URL+"/popup", "Popup"))
 
-	v.send(`{"type":"resize","width":800,"height":600}`)
+	// Launched at scale 1, so a sharper resize keeps CSS-sized frames, matching what ready told the viewer.
+	v.send(`{"type":"resize","width":800,"height":600,"deviceScaleFactor":2}`)
 	v.waitFrame("a frame at the new size", func(w, h int) bool { return w == 800 && h == 600 })
 
 	if pids := processesUsing(t, profiles); len(pids) == 0 {

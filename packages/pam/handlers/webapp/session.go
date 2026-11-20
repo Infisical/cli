@@ -2,9 +2,11 @@ package webapp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"image/jpeg"
 	"io"
 	"math"
 	"net"
@@ -33,14 +35,15 @@ const (
 	defaultViewportWidth  = 1280
 	defaultViewportHeight = 800
 
-	screencastQuality = 70
-	frameQueueSize    = 4
+	screencastQuality = 60
 	inputQueueSize    = 64
 	inputRate         = 200
 	finalWriteTimeout = 2 * time.Second
 	maxDialogMessage  = 200
 	statePollInterval = time.Second
 	eventQueueSize    = 256
+	firstResizeWait   = 500 * time.Millisecond
+	captureFrameGrace = 500 * time.Millisecond
 )
 
 var (
@@ -122,16 +125,23 @@ func (p *WebAppProxy) HandleConnection(ctx context.Context, conn net.Conn) error
 		end:        end,
 		ready:      make(chan struct{}),
 		events:     make(chan any, eventQueueSize),
-		frames:     make(chan *page.EventScreencastFrame, frameQueueSize),
+		frameReady: make(chan struct{}, 1),
 		width:      defaultViewportWidth,
 		height:     defaultViewportHeight,
+		scale:      1,
 	}
+	s.captureScale.Store(math.Float64bits(1))
+	s.inputs = make(chan clientMessage, inputQueueSize)
+	s.wg.Go(func() { end(s.readInput(sessionCtx, s.inputs)) })
+	screenScale := s.awaitScreenScale(sessionCtx)
+	s.screenScale = screenScale
 	s.screens = newScreenshotScheduler(defaultScreenshotTiming, s.captureViewport, s.scrollPosition, s.rec.log)
 	s.rec.screens = s.screens
 	sessionLog.Info().
 		Str("browserPath", execPath).
 		Bool("sandbox", !noSandbox).
 		Str("viewport", fmt.Sprintf("%dx%d", s.width, s.height)).
+		Float64("screenScale", screenScale).
 		Int("activeBrowsers", browserSessions.count()).
 		Int("maxBrowsers", maxSessions).
 		Msg("Starting PAM web app browser")
@@ -142,6 +152,7 @@ func (p *WebAppProxy) HandleConnection(ctx context.Context, conn net.Conn) error
 		hostResolverRules: list.hostResolverRules(),
 		width:             s.width,
 		height:            s.height,
+		screenScale:       screenScale,
 		listener:          s.onTabEvent,
 		browserListener:   s.onTabEvent,
 	})
@@ -187,16 +198,38 @@ type browserSession struct {
 
 	events        chan any
 	droppedEvents atomic.Int64
-	frames        chan *page.EventScreencastFrame
+
+	// latestFrame holds the newest frame the viewer has not been sent yet. A newer frame replaces
+	// it, so a slow viewer always gets the current picture instead of a backlog.
+	frameMu     sync.Mutex
+	latestFrame []byte
+	frameReady  chan struct{}
+
+	// captureScale mirrors scale as float64 bits for the screenshot goroutine.
+	captureScale atomic.Uint64
+	// checkFramesUntil is set while a screenshot is taken and shortly after. A capture scaled
+	// below the device scale factor briefly resizes the view, and the screencast can send a frame
+	// of that size to the viewer, even after the capture has returned. sentSize is the size of the
+	// last frame sent, so such a frame can be told apart.
+	checkFramesUntil atomic.Int64
+	sentSize         atomic.Uint64
 
 	tab       cdp.Session
 	browser   cdp.Session
 	targetID  target.ID
 	describer *targetDescriber
 
-	// width, height and pressed belong to the input goroutine once the session runs.
+	inputs chan clientMessage
+	// firstInput is the message read while choosing the screen's scale factor, applied first.
+	firstInput *clientMessage
+
+	// width, height, scale and pressed belong to the input goroutine once the session runs.
 	width, height int64
+	scale         float64
 	pressed       *pressedButton
+
+	// screenScale is the browser's launch scale factor. It is set before the session runs.
+	screenScale float64
 
 	// lastState belongs to the event goroutine.
 	lastState stateMessage
@@ -218,10 +251,18 @@ func (s *browserSession) onTabEvent(ev any) {
 	s.rec.observe(ev)
 	switch ev := ev.(type) {
 	case *page.EventScreencastFrame:
+		// Acknowledging at once lets Chromium paint the next frame while this one is still on its
+		// way to the viewer.
+		s.spawn(func() { s.ackFrame(s.ctx, ev.SessionID) })
+		if time.Now().UnixNano() < s.checkFramesUntil.Load() && !s.matchesSentSize(ev.Data) {
+			return
+		}
+		s.frameMu.Lock()
+		s.latestFrame = ev.Data
+		s.frameMu.Unlock()
 		select {
-		case s.frames <- ev:
+		case s.frameReady <- struct{}{}:
 		default:
-			s.spawn(func() { s.ackFrame(s.ctx, ev.SessionID) })
 		}
 	case *fetch.EventRequestPaused:
 		s.spawn(func() { s.filterRequest(s.ctx, ev) })
@@ -279,13 +320,11 @@ func (s *browserSession) run(parent context.Context, b *browserInstance) (err er
 		return fmt.Errorf("%w: %w", errSetupFailed, err)
 	}
 
-	inputs := make(chan clientMessage, inputQueueSize)
 	s.wg.Go(func() { s.processEvents(ctx) })
 	s.wg.Go(func() { s.streamFrames(ctx) })
-	s.wg.Go(func() { end(s.readInput(ctx, inputs)) })
-	s.wg.Go(func() { s.applyInput(ctx, inputs) })
+	s.wg.Go(func() { s.applyInput(ctx, s.inputs) })
 
-	s.send(newReady(s.width, s.height))
+	s.send(newReady(s.width, s.height, s.screenScale))
 	s.wg.Go(func() {
 		if _, err := cdp.Call(ctx, s.tab, page.Navigate, page.NavigateParams{URL: s.startURL}); err != nil && ctx.Err() == nil {
 			log.Debug().Err(err).Str("sessionId", s.sessionID).Msg("Web app start navigation failed")
@@ -363,7 +402,7 @@ func (s *browserSession) setViewport(ctx context.Context) error {
 	if _, err := cdp.Call(ctx, s.tab, emulation.SetDeviceMetricsOverride, emulation.SetDeviceMetricsOverrideParams{
 		Width:             s.width,
 		Height:            s.height,
-		DeviceScaleFactor: 1,
+		DeviceScaleFactor: s.scale,
 	}); err != nil {
 		return fmt.Errorf("set viewport: %w", err)
 	}
@@ -375,8 +414,8 @@ func (s *browserSession) startScreencast(ctx context.Context) error {
 	if _, err := cdp.Call(ctx, s.tab, page.StartScreencast, page.StartScreencastParams{
 		Format:        page.StartScreencastFormatJpeg,
 		Quality:       &quality,
-		MaxWidth:      maxViewportSide,
-		MaxHeight:     maxViewportSide,
+		MaxWidth:      int64(math.Round(float64(s.width) * s.scale)),
+		MaxHeight:     int64(math.Round(float64(s.height) * s.scale)),
 		EveryNthFrame: 1,
 	}); err != nil {
 		return fmt.Errorf("start screencast: %w", err)
@@ -424,14 +463,56 @@ func (s *browserSession) streamFrames(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case frame := <-s.frames:
-			if err := s.out.writeJPEG(frame.Data); err != nil {
+		case <-s.frameReady:
+			s.frameMu.Lock()
+			frame := s.latestFrame
+			s.latestFrame = nil
+			s.frameMu.Unlock()
+			if frame == nil {
+				continue
+			}
+			if err := s.out.writeJPEG(frame); err != nil {
 				s.end(fmt.Errorf("%w: %w", errViewerWrite, err))
 				return
 			}
-			s.ackFrame(ctx, frame.SessionID)
+			if size, ok := jpegSize(frame); ok {
+				s.sentSize.Store(size)
+			}
 		}
 	}
+}
+
+// awaitScreenScale waits briefly for the viewer's first message, which is normally its resize,
+// because the browser's screen scale factor can only be set at launch. A resize then sets the
+// starting viewport, so ready reports the size the session uses.
+func (s *browserSession) awaitScreenScale(ctx context.Context) float64 {
+	select {
+	case msg := <-s.inputs:
+		if msg.Type != "resize" {
+			s.firstInput = &msg
+			return 1
+		}
+		s.width, s.height, s.scale = msg.viewport()
+		s.captureScale.Store(math.Float64bits(s.scale))
+		return s.scale
+	case <-time.After(firstResizeWait):
+	case <-ctx.Done():
+	}
+	return 1
+}
+
+func (s *browserSession) matchesSentSize(frame []byte) bool {
+	size, ok := jpegSize(frame)
+	sent := s.sentSize.Load()
+	return !ok || sent == 0 || size == sent
+}
+
+func jpegSize(frame []byte) (uint64, bool) {
+	cfg, err := jpeg.DecodeConfig(bytes.NewReader(frame))
+	if err != nil {
+		return 0, false
+	}
+	return uint64(cfg.Width)<<32 | uint64(cfg.Height), true
 }
 
 func (s *browserSession) ackFrame(ctx context.Context, frameID int64) {
@@ -471,6 +552,11 @@ func (s *browserSession) readInput(ctx context.Context, inputs chan<- clientMess
 }
 
 func (s *browserSession) applyInput(ctx context.Context, inputs <-chan clientMessage) {
+	if s.firstInput != nil {
+		if err := s.apply(ctx, *s.firstInput); err != nil && ctx.Err() == nil {
+			log.Debug().Err(err).Str("sessionId", s.sessionID).Msg("Dropping web app viewer message")
+		}
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -544,7 +630,8 @@ func (s *browserSession) apply(ctx context.Context, msg clientMessage) error {
 	return nil
 }
 
-// captureViewport takes a JPEG of what the viewer sees, scaled down to at most 1280 pixels wide.
+// captureViewport takes a WebP of what the viewer sees, at most 1920 image pixels wide. The
+// clip's scale multiplies the device scale factor, so both go into it.
 func (s *browserSession) captureViewport(ctx context.Context, quality int64) ([]byte, error) {
 	metrics, err := cdp.Call(ctx, s.tab, page.GetLayoutMetrics, cdp.Empty{})
 	if err != nil {
@@ -554,21 +641,29 @@ func (s *browserSession) captureViewport(ctx context.Context, quality int64) ([]
 	if vp == nil || vp.ClientWidth <= 0 || vp.ClientHeight <= 0 {
 		return nil, errors.New("no visual viewport")
 	}
+	dsf := math.Float64frombits(s.captureScale.Load())
+	s.checkFramesUntil.Store(math.MaxInt64)
+	defer func() { s.checkFramesUntil.Store(time.Now().Add(captureFrameGrace).UnixNano()) }()
 	res, err := cdp.Call(ctx, s.tab, page.CaptureScreenshot, page.CaptureScreenshotParams{
-		Format:  page.CaptureScreenshotFormatJpeg,
+		Format:  page.CaptureScreenshotFormatWebp,
 		Quality: &quality,
 		Clip: &page.Viewport{
 			X:      vp.PageX,
 			Y:      vp.PageY,
 			Width:  vp.ClientWidth,
 			Height: vp.ClientHeight,
-			Scale:  min(1, screenshotMaxWidth/vp.ClientWidth),
+			Scale:  screenshotScale(vp.ClientWidth, dsf),
 		},
 	})
 	if err != nil {
 		return nil, err
 	}
 	return res.Data, nil
+}
+
+// screenshotScale keeps a capture at most screenshotMaxWidth image pixels wide.
+func screenshotScale(cssWidth, deviceScaleFactor float64) float64 {
+	return min(1, screenshotMaxWidth/(cssWidth*deviceScaleFactor))
 }
 
 func (s *browserSession) scrollPosition(ctx context.Context) (scrollPosition, error) {
@@ -661,11 +756,15 @@ func (s *browserSession) recordSubmit(ctx context.Context) {
 }
 
 func (s *browserSession) resize(ctx context.Context, msg clientMessage) error {
-	width, height := msg.viewport()
-	if width == s.width && height == s.height {
+	width, height, scale := msg.viewport()
+	// The screencast renders at the launch scale at most, and the viewer maps input by the scale it
+	// was told in ready, so a resize never asks for more.
+	scale = min(scale, s.screenScale)
+	if width == s.width && height == s.height && scale == s.scale {
 		return nil
 	}
-	s.width, s.height = width, height
+	s.width, s.height, s.scale = width, height, scale
+	s.captureScale.Store(math.Float64bits(scale))
 	if err := s.setViewport(ctx); err != nil {
 		return err
 	}

@@ -97,11 +97,11 @@ func TestFrameWriter(t *testing.T) {
 	if err := w.writeJPEG([]byte{0xff, 0xd8, 0xff}); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.writeJSON(newReady(1280, 800)); err != nil {
+	if err := w.writeJSON(newReady(1280, 800, 1)); err != nil {
 		t.Fatal(err)
 	}
 	want := []byte{0, 0, 0, 4, frameTypeJPEG, 0xff, 0xd8, 0xff}
-	want = append(want, clientFrame(frameTypeJSON, `{"type":"ready","width":1280,"height":800}`)...)
+	want = append(want, clientFrame(frameTypeJSON, `{"type":"ready","width":1280,"height":800,"deviceScaleFactor":1}`)...)
 	if !bytes.Equal(buf.Bytes(), want) {
 		t.Fatalf("written = %v\nwant      %v", buf.Bytes(), want)
 	}
@@ -267,17 +267,36 @@ func TestPasteText(t *testing.T) {
 }
 
 func TestViewportClamp(t *testing.T) {
-	cases := []struct{ w, h, wantW, wantH int64 }{
-		{1024, 768, 1024, 768},
-		{10, 100000, 200, 3840},
-		{-5, 0, 200, 200},
-		{200, 3840, 200, 3840},
+	cases := []struct {
+		w, h         int64
+		dsf          float64
+		wantW, wantH int64
+		wantDSF      float64
+	}{
+		{1024, 768, 0, 1024, 768, 1},
+		{10, 100000, 1, 200, 3840, 1},
+		{-5, 0, 0, 200, 200, 1},
+		{200, 3840, 2, 200, 3840, 1},
+		{1280, 800, 2, 1280, 800, 2},
+		{1280, 800, 1.5, 1280, 800, 1.5},
+		{1280, 800, 3, 1280, 800, 2},
+		{1280, 800, 0.5, 1280, 800, 1},
+		{1280, 800, -2, 1280, 800, 1},
+		{2560, 1440, 2, 2560, 1440, 1.5},
+		{3000, 1000, 2, 3000, 1000, 1.28},
 	}
 	for _, tc := range cases {
-		w, h := clientMessage{Width: tc.w, Height: tc.h}.viewport()
-		if w != tc.wantW || h != tc.wantH {
-			t.Errorf("viewport(%d, %d) = %d, %d", tc.w, tc.h, w, h)
+		w, h, dsf := clientMessage{Width: tc.w, Height: tc.h, DeviceScaleFactor: tc.dsf}.viewport()
+		if w != tc.wantW || h != tc.wantH || dsf != tc.wantDSF {
+			t.Errorf("viewport(%d, %d, %v) = %d, %d, %v", tc.w, tc.h, tc.dsf, w, h, dsf)
 		}
+		if float64(w)*dsf > maxViewportSide || float64(h)*dsf > maxViewportSide {
+			t.Errorf("viewport(%d, %d, %v) makes frames of %vx%v", tc.w, tc.h, tc.dsf, float64(w)*dsf, float64(h)*dsf)
+		}
+	}
+	msg, err := parseClientMessage([]byte(`{"type":"resize","width":1280,"height":800}`))
+	if err != nil || msg.DeviceScaleFactor != 0 {
+		t.Errorf("resize without deviceScaleFactor = %+v, %v", msg, err)
 	}
 }
 

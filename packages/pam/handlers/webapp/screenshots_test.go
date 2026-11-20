@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"image"
-	"image/jpeg"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -26,17 +24,11 @@ var testTiming = screenshotTiming{
 	scrollThrottle: 400 * time.Millisecond,
 }
 
-func testJPEG(t *testing.T, shade uint8, padding int) []byte {
+// testWebP builds a lossless WebP header for a 32x20 image. shade changes the bytes, so images
+// with a different shade hash differently, and padding makes the image larger.
+func testWebP(t *testing.T, shade uint8, padding int) []byte {
 	t.Helper()
-	img := image.NewGray(image.Rect(0, 0, 32, 20))
-	for i := range img.Pix {
-		img.Pix[i] = shade
-	}
-	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, img, nil); err != nil {
-		t.Fatal(err)
-	}
-	return append(buf.Bytes(), make([]byte, padding)...)
+	return fakeWebP(32, 20, append([]byte{shade, shade, shade}, make([]byte, padding)...))
 }
 
 type schedulerHarness struct {
@@ -54,7 +46,7 @@ func newHarness(t *testing.T, capture func(ctx context.Context, quality int64) (
 	h := &schedulerHarness{t: t}
 	if capture == nil {
 		capture = func(context.Context, int64) ([]byte, error) {
-			return testJPEG(t, uint8(h.shade.Add(40)), 0), nil
+			return testWebP(t, uint8(h.shade.Add(40)), 0), nil
 		}
 	}
 	counted := func(ctx context.Context, q int64) ([]byte, error) {
@@ -105,7 +97,7 @@ func TestScreenshotBurstOfClicksGivesOneCapture(t *testing.T) {
 	if len(shots) != 1 || shots[0].Trigger != "click" {
 		t.Fatalf("screenshots = %+v", shots)
 	}
-	if shots[0].Width != 32 || shots[0].Height != 20 || shots[0].Bytes != len(shots[0].JPEG) {
+	if shots[0].Width != 32 || shots[0].Height != 20 || shots[0].Bytes != len(shots[0].Image) {
 		t.Errorf("screenshot = %d x %d, %d bytes", shots[0].Width, shots[0].Height, shots[0].Bytes)
 	}
 }
@@ -215,7 +207,7 @@ func TestScreenshotScrollThatMovesNothingIsNotLogged(t *testing.T) {
 }
 
 func TestScreenshotIdenticalImageIsSkipped(t *testing.T) {
-	same := testJPEG(t, 100, 0)
+	same := testWebP(t, 100, 0)
 	h := newHarness(t, func(context.Context, int64) ([]byte, error) { return same, nil })
 	h.s.trigger("click")
 	h.settle()
@@ -252,7 +244,7 @@ func TestScreenshotBudget(t *testing.T) {
 }
 
 func TestScreenshotSizeLimitRetriesAtLowerQuality(t *testing.T) {
-	small := testJPEG(t, 50, 200<<10)
+	small := testWebP(t, 50, 200<<10)
 	var qualities []int64
 	var mu sync.Mutex
 	h := newHarness(t, func(_ context.Context, q int64) ([]byte, error) {
@@ -260,7 +252,7 @@ func TestScreenshotSizeLimitRetriesAtLowerQuality(t *testing.T) {
 		qualities = append(qualities, q)
 		mu.Unlock()
 		if q == screenshotQuality {
-			return testJPEG(t, 50, 400<<10), nil
+			return testWebP(t, 50, 400<<10), nil
 		}
 		return small, nil
 	})
@@ -278,7 +270,7 @@ func TestScreenshotSizeLimitRetriesAtLowerQuality(t *testing.T) {
 }
 
 func TestScreenshotSkippedWhenTooLargeOrFailing(t *testing.T) {
-	big := newHarness(t, func(context.Context, int64) ([]byte, error) { return testJPEG(t, 1, maxScreenshotBytes+1), nil })
+	big := newHarness(t, func(context.Context, int64) ([]byte, error) { return testWebP(t, 1, maxScreenshotBytes+1), nil })
 	big.s.trigger("click")
 	big.settle()
 	got := big.logged()
@@ -327,7 +319,7 @@ func TestLargestScreenshotEventFitsAChunk(t *testing.T) {
 		ElapsedTime: 12345.678,
 		WebScreenshot: &session.WebScreenshot{
 			Trigger: "navigation", Width: 1280, Height: 3840, Bytes: maxScreenshotBytes,
-			JPEG: bytes.Repeat([]byte{0xff}, maxScreenshotBytes),
+			Format: "webp", Image: bytes.Repeat([]byte{0xff}, maxScreenshotBytes),
 		},
 	}
 	raw, err := json.Marshal(event)

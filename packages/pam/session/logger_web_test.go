@@ -49,7 +49,7 @@ func TestLogWebEventMasking(t *testing.T) {
 	masker := masking.New([]*regexp.Regexp{regexp.MustCompile(`alice@example\.com`)}, false, nil, "web-sess")
 	logger, info := newWebLogger(t, key, masker)
 
-	jpeg := []byte("alice@example.com inside image bytes")
+	image := []byte("alice@example.com inside image bytes")
 	events := []WebEvent{
 		{
 			EventType:  WebEventHTTP,
@@ -61,7 +61,7 @@ func TestLogWebEventMasking(t *testing.T) {
 			EventType: WebEventInput, Action: "click", X: 3, Y: 4,
 			Target: &WebTarget{Tag: "a", Role: "link", Name: "Profile of alice@example.com", Text: "alice@example.com"},
 		},
-		{EventType: WebEventScreenshot, WebScreenshot: &WebScreenshot{Trigger: "click", Width: 1, Height: 1, Bytes: len(jpeg), JPEG: jpeg}},
+		{EventType: WebEventScreenshot, WebScreenshot: &WebScreenshot{Trigger: "click", Format: "webp", Width: 1, Height: 1, Bytes: len(image), Image: image}},
 		{EventType: WebEventNavigation, URL: "https://grafana.internal/" + strings.Repeat("a", 3000)},
 	}
 	for _, ev := range events {
@@ -98,7 +98,7 @@ func TestLogWebEventMasking(t *testing.T) {
 	if got[2].Target.Name != "Profile of [MASKED]" || got[2].Target.Text != "[MASKED]" || got[2].Target.Tag != "a" {
 		t.Errorf("target = %+v", got[2].Target)
 	}
-	if got[3].WebScreenshot == nil || !bytes.Equal(got[3].JPEG, jpeg) || got[3].Trigger != "click" {
+	if got[3].WebScreenshot == nil || !bytes.Equal(got[3].Image, image) || got[3].Trigger != "click" || got[3].Format != "webp" {
 		t.Errorf("screenshot was changed: %+v", got[3].WebScreenshot)
 	}
 	if n := len([]rune(got[4].URL)); n != maxWebEventURLChars {
@@ -193,7 +193,7 @@ func TestChunkPackingWithLargeWebEvents(t *testing.T) {
 	for range 3 {
 		event := WebEvent{
 			EventType:     WebEventScreenshot,
-			WebScreenshot: &WebScreenshot{Trigger: "navigation", Width: 1280, Height: 800, Bytes: len(image), JPEG: image},
+			WebScreenshot: &WebScreenshot{Trigger: "navigation", Format: "webp", Width: 1920, Height: 1200, Bytes: len(image), Image: image},
 		}
 		if err := logger.LogWebEvent(event); err != nil {
 			t.Fatal(err)
