@@ -112,6 +112,17 @@ async function extractZip(buffer, targetPath) {
   });
 }
 
+const WINDOWS_LAUNCHER = `#!/usr/bin/env node
+const { spawnSync } = require("child_process");
+const path = require("path");
+const result = spawnSync(path.join(__dirname, "infisical.exe"), process.argv.slice(2), { stdio: "inherit" });
+if (result.error) {
+  console.error(result.error.message);
+  process.exit(1);
+}
+process.exit(result.status === null ? 1 : result.status);
+`;
+
 async function main() {
   const PLATFORM = getPlatform();
   const ARCH = getArchitecture();
@@ -162,10 +173,11 @@ async function main() {
 
     // Platform-specific tasks
     if (PLATFORM === "windows") {
-      // We create an empty file called 'infisical'. This file has no functionality, except allowing NPM to correctly create the symlink.
-      // Reason why this doesn't work without the empty file, is because the files downloaded are a .ps1, .exe, and .cmd file. None of these match the binary name from the package.json['bin'] field.
-      // This is a bit hacky, but it assures that the symlink is correctly created.
-      fs.closeSync(fs.openSync(path.join(outputDir, "infisical"), "w"));
+      // package.json['bin'] points at 'infisical', but the archive only ships infisical.exe.
+      // npm and pnpm build their cmd, PowerShell and sh shims from this file, so it must be runnable:
+      // an empty placeholder only worked from cmd (which falls back to infisical.exe) and did nothing
+      // from PowerShell or Git Bash. A small Node launcher works from all of them.
+      fs.writeFileSync(path.join(outputDir, "infisical"), WINDOWS_LAUNCHER);
     } else {
       // Unix systems only need chmod
       fs.chmodSync(path.join(outputDir, "infisical"), "755");
