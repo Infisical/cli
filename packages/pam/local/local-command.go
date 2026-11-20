@@ -260,9 +260,10 @@ func RunLocalCommand(httpClient *resty.Client, response *api.PAMAccessResponse, 
 	if response.AccountType == AccountTypeAzureCli {
 		loginCtx, cancelLogin := context.WithDeadline(interrupts.ctx, session.Expiry)
 		err := azureCommandLogin(loginCtx, env, response.Metadata)
+		expired := errors.Is(loginCtx.Err(), context.DeadlineExceeded)
 		cancelLogin()
 		if err != nil && interrupts.ctx.Err() == nil {
-			if loginCtx.Err() != nil {
+			if expired {
 				return 1, ErrSessionExpired
 			}
 			return 1, err
