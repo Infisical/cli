@@ -708,9 +708,8 @@ func (p *SSHProxy) flushInputBufferUnsafe(sessionID string, chState *channelStat
 	}
 }
 
-// markCommandLine notes that the line still on screen holds the command just entered, so
-// the output event that commits it can carry the command (caller must hold inputMutex).
-// It takes outputMutex so the line can't commit between the check and the mark.
+// markCommandLine flags the line on screen as holding the command just entered (caller must
+// hold inputMutex). outputMutex keeps the line from committing between the check and the mark.
 func (c *channelState) markCommandLine() {
 	c.outputMutex.Lock()
 	defer c.outputMutex.Unlock()
