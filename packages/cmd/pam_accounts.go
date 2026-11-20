@@ -229,7 +229,7 @@ func pamExampleCommand(view pamAccountView) string {
 	case pam.AccountTypeSSH:
 		return base + " -- uptime"
 	case pam.AccountTypeSnowflake:
-		return base + " -- sh -c 'snowsql -h 127.0.0.1 -p \"$INFISICAL_PAM_PORT\" -q \"select 1\"'"
+		return base + " -- snowsql -q \"select 1\""
 	case pam.AccountTypeGcpServiceAccount:
 		return base + " -- gcloud projects list --limit 1"
 	case pam.AccountTypeAzureCli:
