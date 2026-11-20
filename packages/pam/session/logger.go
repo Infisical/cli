@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -307,10 +308,23 @@ func (sl *EncryptedSessionLogger) LogSessionEvent(event SessionEvent) error {
 		// happened to match a substring of the JSON or base64.
 		if event.ChannelType != SessionChannelRDP {
 			event.Data = sl.applyMasking(event.Data)
-			event.Command = sl.applyMaskingString(event.Command)
+			event.Command = sl.maskCommand(event.Command, event.Data)
 		}
 		return json.Marshal(event)
 	})
+}
+
+// maskCommand masks a command cut from its echoed line. A pattern can need the prompt to match, so
+// when the masked line doesn't end with the masked command, the masked line stands in for it.
+func (sl *EncryptedSessionLogger) maskCommand(command string, maskedLine []byte) string {
+	if command == "" {
+		return command
+	}
+	masked := sl.applyMaskingString(command)
+	if !strings.HasSuffix(string(maskedLine), masked) {
+		return strings.TrimSpace(string(maskedLine))
+	}
+	return masked
 }
 
 func (sl *EncryptedSessionLogger) LogHttpEvent(event HttpEvent) error {

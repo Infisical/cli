@@ -132,3 +132,39 @@ func TestSessionLoggerMasksCommandAndURL(t *testing.T) {
 		t.Errorf("recording lost the masked command: %s", payload)
 	}
 }
+
+func TestSessionLoggerMasksCommandThatNeedsItsPrompt(t *testing.T) {
+	setupTestDir(t)
+	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
+	expiresAt := time.Now().Add(time.Hour)
+	masker := masking.New([]*regexp.Regexp{regexp.MustCompile(`Token:\s*\S+`)}, false, nil, "sess-prompt")
+
+	logger, err := NewSessionLogger("sess-prompt", key, expiresAt, "ssh", masker)
+	if err != nil {
+		t.Fatalf("NewSessionLogger: %v", err)
+	}
+	if err := logger.LogSessionEvent(SessionEvent{
+		Timestamp:   time.Now(),
+		EventType:   SessionEventOutput,
+		ChannelType: SessionChannelShell,
+		Data:        []byte("Token: abc123"),
+		Command:     "abc123",
+	}); err != nil {
+		t.Fatalf("LogSessionEvent: %v", err)
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	filename := fmt.Sprintf("pam_session_sess-prompt_ssh_expires_%d.enc", expiresAt.Unix())
+	payload, _, _, _, err := readFromOffset(filename, key, 0, 1<<20)
+	if err != nil {
+		t.Fatalf("readFromOffset: %v", err)
+	}
+	if strings.Contains(string(payload), "abc123") {
+		t.Errorf("recording kept a secret its prompt masks: %s", payload)
+	}
+	if !strings.Contains(string(payload), `"command":"[MASKED]"`) {
+		t.Errorf("recording lost the masked command: %s", payload)
+	}
+}
