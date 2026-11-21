@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
 )
 
@@ -1294,5 +1295,39 @@ func TestAHookRefusalReachesALegacySSEStream(t *testing.T) {
 	case got := <-posts:
 		t.Fatalf("the upstream got a refused call: %s", got)
 	default:
+	}
+}
+
+func TestAToolNarrowedHookIsAskedOnlyAboutThoseTools(t *testing.T) {
+	fake := newFakeHook(t, answerHook(`{"decision":"deny","message":"Ask Ana first."}`))
+	up := newMCPUpstream(t)
+	hook := fake.hook(api.AgentVaultServiceHook{Tools: []string{"delete_issue"}})
+	client, _ := newMCPRecordingProxy(t, up, []*resolvedService{hookedMCPService(up.host(), hook)})
+
+	for _, tc := range []struct {
+		name, body string
+		asked      bool
+	}{
+		{"another method", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`, false},
+		{"another tool", `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"create_issue"}}`, false},
+		{"the tool", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"delete_issue"}}`, true},
+		{"the tool in a batch", `[{"jsonrpc":"2.0","id":4,"method":"tools/list"},{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"delete_issue"}}]`, true},
+		{"a body that doesn't parse", `{"jsonrpc":"2.0","id":6,"method":`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := len(fake.calls())
+			proxiedPost(t, client, up.server.URL+"/mcp", "application/json", tc.body, http.Header{"Accept": {streamableAccept}})
+			if asked := len(fake.calls()) > before; asked != tc.asked {
+				t.Fatalf("asked = %v, want %v", asked, tc.asked)
+			}
+			if tc.asked {
+				assertUpstreamSawNothing(t, up)
+				return
+			}
+			if got := <-up.bodies; string(got) != tc.body {
+				t.Fatalf("upstream got %s", got)
+			}
+			<-up.auth
+		})
 	}
 }

@@ -131,13 +131,21 @@ type AgentVaultService struct {
 	CredentialNotConnected bool `json:"credentialNotConnected"`
 	// Nil for a service sent inline with the session.
 	AccessBundleID *string `json:"accessBundleId"`
-	// Asked before each request, or each database or SSH connection. Nil when the service has none.
-	Hook *AgentVaultHook `json:"hook"`
+	// Asked before each request its narrowing picks, or each database or SSH connection. Nil when the service has none.
+	Hook *AgentVaultServiceHook `json:"hook"`
 }
 
-type AgentVaultHook struct {
-	URL    string `json:"url"`
-	Secret string `json:"secret"`
+// Older servers send only the URL and secret, which asks the hook about every request of the service.
+type AgentVaultServiceHook struct {
+	ID string `json:"id"`
+	// Nil from servers that don't send it.
+	Name   *string `json:"name"`
+	URL    string  `json:"url"`
+	Secret string  `json:"secret"`
+	// HTTP methods and path prefixes, or MCP tools. None means every request of the service.
+	Methods []string `json:"methods"`
+	Paths   []string `json:"paths"`
+	Tools   []string `json:"tools"`
 }
 
 // Who the session is for, as Infisical recorded it when the session was created. Older servers never send it.
@@ -145,6 +153,7 @@ type AgentVaultResolvedSession struct {
 	Label      *string                      `json:"label"`
 	Actor      AgentVaultSessionActor       `json:"actor"`
 	OnBehalfOf *AgentVaultSessionOnBehalfOf `json:"onBehalfOf"`
+	Metadata   map[string]string            `json:"metadata"`
 }
 
 type AgentVaultSessionActor struct {

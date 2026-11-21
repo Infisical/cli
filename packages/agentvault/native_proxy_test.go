@@ -26,6 +26,7 @@ import (
 	"github.com/jackc/pgx/v5/pgproto3"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
 )
 
@@ -852,5 +853,30 @@ func TestADatabaseConnectionThatFailsToLogInIsNotBilled(t *testing.T) {
 	waitNativeDone(t, ps)
 	if n := ps.usage.brokered.Load(); n != 0 {
 		t.Fatalf("billed %d for a connection that never logged in", n)
+	}
+}
+
+func TestANativeConnectionAsksTheHookWhateverItsNarrowing(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		narrowing []api.AgentVaultServiceHook
+	}{
+		{"no narrowing", nil},
+		{"narrowing that doesn't fit", []api.AgentVaultServiceHook{{Methods: []string{"GET"}, Paths: []string{"/x"}, Tools: []string{"x"}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newFakeHook(t, answerHook(`{"decision":"allow"}`))
+			upstream := startFakePostgres(t, "agent", "secret")
+			_, client, _ := newNativeProxy(t, []*resolvedService{hookedNativeService(upstream, fake.hook(tc.narrowing...))})
+
+			tunnel, err := client.OpenTunnel(context.Background(), "db")
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			_ = tunnel.Close()
+			if got := len(fake.calls()); got != 1 {
+				t.Fatalf("hook calls = %d, want 1", got)
+			}
+		})
 	}
 }

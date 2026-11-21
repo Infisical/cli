@@ -89,26 +89,11 @@ func applySubstitutions(req *http.Request, serviceName string, subs []substituti
 		// decoded Path makes Go re-derive the wire path without re-escaping '/', and `group%2Fproject` would
 		// arrive as two segments pointing at a different resource.
 		if sub.surfaces[surfacePath] {
-			escaped := req.URL.EscapedPath()
-			// normalizeRequestTarget has already escaped whatever Go would have objected to, so a `{{TOKEN}}`
-			// on the wire reads here as `%7B%7BTOKEN%7D%7D` and matching only the typed form would miss it.
-			needle := sub.placeholder
-			if !strings.Contains(escaped, needle) {
-				// Percent-escapes carry no required case and clients differ, so the fallback matches against
-				// upper-cased escapes. Rewriting them is free here: substituting changes the URL anyway, so a
-				// request the agent signed itself could never have used this surface.
-				needle = escapedPathForm(sub.placeholder)
-				escaped = upperPercentEscapes(escaped)
-			}
-			if strings.Contains(escaped, needle) {
-				if v, ok := replaceWithinLimit(escaped, needle, url.PathEscape(real), maxBodyRewriteSize); ok {
-					if decoded, err := url.PathUnescape(v); err == nil {
-						// Go uses RawPath only when it agrees with Path, so both are written.
-						req.URL.Path = decoded
-						req.URL.RawPath = v
-						changed[surfacePath] = true
-					}
-				}
+			if v, decoded, ok := substitutePath(req.URL.EscapedPath(), sub); ok {
+				// Go uses RawPath only when it agrees with Path, so both are written.
+				req.URL.Path = decoded
+				req.URL.RawPath = v
+				changed[surfacePath] = true
 			}
 		}
 
@@ -168,6 +153,46 @@ func applySubstitutions(req *http.Request, serviceName string, subs []substituti
 		}
 	}
 	return surfaces, bodyErr
+}
+
+// The escaped and decoded path once sub is swapped into escaped, and whether it was.
+func substitutePath(escaped string, sub substitution) (string, string, bool) {
+	// normalizeRequestTarget has already escaped whatever Go would have objected to, so a `{{TOKEN}}` on the
+	// wire reads here as `%7B%7BTOKEN%7D%7D` and matching only the typed form would miss it.
+	needle := sub.placeholder
+	if !strings.Contains(escaped, needle) {
+		// Percent-escapes carry no required case and clients differ, so the fallback matches against
+		// upper-cased escapes. Rewriting them is free here: substituting changes the URL anyway, so a request
+		// the agent signed itself could never have used this surface.
+		needle = escapedPathForm(sub.placeholder)
+		escaped = upperPercentEscapes(escaped)
+	}
+	if !strings.Contains(escaped, needle) {
+		return "", "", false
+	}
+	v, ok := replaceWithinLimit(escaped, needle, url.PathEscape(string(sub.value)), maxBodyRewriteSize)
+	if !ok {
+		return "", "", false
+	}
+	decoded, err := url.PathUnescape(v)
+	if err != nil {
+		return "", "", false
+	}
+	return v, decoded, true
+}
+
+// The escaped path applySubstitutions will send, worked out without touching the request.
+func pathAfterSubstitutions(escaped string, subs []substitution) string {
+	for _, sub := range subs {
+		if !sub.surfaces[surfacePath] || len(sub.placeholder) == 0 {
+			continue
+		}
+		if v, decoded, ok := substitutePath(escaped, sub); ok {
+			// Read back the way applySubstitutions reads the request's URL before its next substitution.
+			escaped = (&url.URL{Path: decoded, RawPath: v}).EscapedPath()
+		}
+	}
+	return escaped
 }
 
 // The placeholder as EscapedPath would render it. The leading '/' keeps url.URL's `Path == "*"` case out of

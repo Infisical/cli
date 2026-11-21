@@ -64,9 +64,15 @@ func newFakeHook(t *testing.T, answer http.HandlerFunc) *fakeHook {
 	return f
 }
 
-func (f *fakeHook) hook() *serviceHook {
-	u, _ := url.Parse(f.server.URL + "/agent-vault/hook")
-	return &serviceHook{url: u, secret: []byte(testHookSecret)}
+// Asked about every request of its service unless narrowing is given.
+func (f *fakeHook) hook(narrowing ...api.AgentVaultServiceHook) *serviceHook {
+	var wire api.AgentVaultServiceHook
+	if len(narrowing) > 0 {
+		wire = narrowing[0]
+	}
+	name := "refund-gate"
+	wire.ID, wire.Name, wire.URL, wire.Secret = "hook-1", &name, f.server.URL+"/agent-vault/hook", testHookSecret
+	return toServiceHook(&wire)
 }
 
 func (f *fakeHook) calls() []hookHit {
@@ -317,7 +323,7 @@ func TestAHookInfisicalSentUnusableAlwaysFails(t *testing.T) {
 		{"://bad", testHookSecret},
 		{"https://hooks.example.com/x", ""},
 	} {
-		hook := toServiceHook(&api.AgentVaultHook{URL: wire.url, Secret: wire.secret})
+		hook := toServiceHook(&api.AgentVaultServiceHook{URL: wire.url, Secret: wire.secret})
 		if hook == nil {
 			t.Fatalf("%+v mapped to no hook, which would skip it", wire)
 		}
@@ -432,5 +438,136 @@ func TestTheSessionLogCopyOfAHookOutcomeLeavesOutTheMessage(t *testing.T) {
 	}
 	if (&hookOutcome{Decision: hookAllow}).sessionLogHook() != nil {
 		t.Fatal("an allowed call was recorded")
+	}
+}
+
+func TestTheHookMatcher(t *testing.T) {
+	httpSvc := &resolvedService{name: "github", kind: serviceKindHTTP}
+	mcpSvc := &resolvedService{name: "linear", kind: serviceKindMCP}
+	substitutingSvc := &resolvedService{name: "github", kind: serviceKindHTTP, substitutions: []substitution{
+		subOn("__ORG__", "acme", surfacePath), subOn("{{TEAM}}", "core", surfacePath), subOn("__REPO__", "secret", surfaceQuery, surfaceHeader, surfaceBody)}}
+	get := func(path string) *http.Request { return httptest.NewRequest(http.MethodGet, "https://h"+path, nil) }
+	post := func(path string) *http.Request {
+		return httptest.NewRequest(http.MethodPost, "https://h"+path, strings.NewReader("{}"))
+	}
+	calls := func(tools ...string) *hookPayloadMCP {
+		out := &hookPayloadMCP{Calls: []hookMCPCall{{Method: "initialize"}}, Parsed: true}
+		for _, tool := range tools {
+			out.Calls = append(out.Calls, hookMCPCall{Method: mcpMethodToolsCall, Tool: tool})
+		}
+		return out
+	}
+	withHeader := func(req *http.Request, name, value string) *http.Request {
+		req.Header.Set(name, value)
+		return req
+	}
+	narrow := func(methods, paths, tools []string) *api.AgentVaultServiceHook {
+		return &api.AgentVaultServiceHook{Methods: methods, Paths: paths, Tools: tools}
+	}
+	list := func(values ...string) []string { return values }
+
+	for _, tc := range []struct {
+		name      string
+		narrowing *api.AgentVaultServiceHook
+		svc       *resolvedService
+		req       *http.Request
+		mcp       *hookPayloadMCP
+		want      bool
+	}{
+		{"no narrowing picks every HTTP request", nil, httpSvc, get("/x"), nil, true},
+		{"no narrowing picks every MCP request", nil, mcpSvc, post("/mcp"), calls("a"), true},
+		{"empty lists are no narrowing", narrow(list(), list(), list()), httpSvc, get("/x"), nil, true},
+		{"method in the set", narrow(list("get", "PUT"), nil, nil), httpSvc, get("/x"), nil, true},
+		{"method not in the set", narrow(list("PUT"), nil, nil), httpSvc, get("/x"), nil, false},
+		{"method override counts", narrow(list("DELETE"), nil, nil), httpSvc,
+			withHeader(post("/x"), "X-HTTP-Method-Override", "delete"), nil, true},
+		{"each comma-separated override counts", narrow(list("DELETE"), nil, nil), httpSvc,
+			withHeader(post("/x"), "X-HTTP-Method-Override", "DELETE, POST"), nil, true},
+		{"a form POST counts as any method", narrow(list("DELETE"), nil, nil), httpSvc,
+			withHeader(post("/x"), "Content-Type", "application/x-www-form-urlencoded"), nil, true},
+		{"a multipart POST counts as any method", narrow(list("DELETE"), nil, nil), httpSvc,
+			withHeader(post("/x"), "Content-Type", "Multipart/Form-Data; boundary=x"), nil, true},
+		{"a JSON POST is only a POST", narrow(list("DELETE"), nil, nil), httpSvc,
+			withHeader(post("/x"), "Content-Type", "application/json"), nil, false},
+		{"a form PUT is only a PUT", narrow(list("DELETE"), nil, nil), httpSvc,
+			withHeader(httptest.NewRequest(http.MethodPut, "https://h/x", nil), "Content-Type", "application/x-www-form-urlencoded"), nil, false},
+		{"a query _method counts on a JSON POST", narrow(list("DELETE"), nil, nil), httpSvc,
+			withHeader(post("/x?_method=delete"), "Content-Type", "application/json"), nil, true},
+		{"a query _method naming another method", narrow(list("DELETE"), nil, nil), httpSvc,
+			withHeader(post("/x?_method=PATCH"), "Content-Type", "application/json"), nil, false},
+		{"an unparseable query counts as any method", narrow(list("DELETE"), nil, nil), httpSvc,
+			post("/x?_method=%zz"), nil, true},
+		{"a form POST still needs the path", narrow(list("DELETE"), list("/repos"), nil), httpSvc,
+			withHeader(post("/user"), "Content-Type", "application/x-www-form-urlencoded"), nil, false},
+		{"path under a prefix", narrow(nil, list("/repos/"), nil), httpSvc, get("/repos/a/b"), nil, true},
+		{"path equal to a prefix", narrow(nil, list("/repos"), nil), httpSvc, get("/repos"), nil, true},
+		{"path sharing a prefix's letters", narrow(nil, list("/repos"), nil), httpSvc, get("/repository"), nil, false},
+		{"path outside every prefix", narrow(nil, list("/repos"), nil), httpSvc, get("/user"), nil, false},
+		{"path case is ignored", narrow(nil, list("/anything/refunds"), nil), httpSvc,
+			get("/ANYTHING/Refunds/x"), nil, true},
+		{"prefix case is ignored", narrow(nil, list("/V1/Refunds"), nil), httpSvc, get("/v1/refunds"), nil, true},
+		{"an encoded uppercase path matches", narrow(nil, list("/v1/refunds"), nil), httpSvc,
+			get("/v1/%52efunds/1"), nil, true},
+		{"a substituted path in another case matches", narrow(nil, list("/repos/acme"), nil), substitutingSvc,
+			get("/REPOS/__ORG__/issues"), nil, true},
+		{"an ambiguous path matches", narrow(nil, list("/admin"), nil), httpSvc, get("/repos/..;/admin"), nil, true},
+		{"an encoded path matches its decoded prefix", narrow(nil, list("/v1/refunds"), nil), httpSvc,
+			get("/v1/%72efunds/1"), nil, true},
+		{"an encoded path outside every prefix", narrow(nil, list("/v1/refunds"), nil), httpSvc,
+			get("/v1/%63harges/1"), nil, false},
+		{"a substituted path matches", narrow(nil, list("/repos/acme"), nil), substitutingSvc,
+			get("/repos/__ORG__/issues"), nil, true},
+		{"a substituted placeholder in escaped form matches", narrow(nil, list("/teams/core"), nil), substitutingSvc,
+			get("/teams/%7b%7bTEAM%7d%7d/members"), nil, true},
+		{"the unsubstituted path still matches", narrow(nil, list("/repos/__ORG__"), nil), substitutingSvc,
+			get("/repos/__ORG__/issues"), nil, true},
+		{"only path substitutions count", narrow(nil, list("/repos/secret"), nil), substitutingSvc,
+			get("/repos/__REPO__/issues"), nil, false},
+		{"a substitution elsewhere in the path", narrow(nil, list("/repos/acme"), nil), substitutingSvc,
+			get("/repos/other/__ORG__"), nil, false},
+		{"method and path both have to fit", narrow(list("POST"), list("/repos"), nil), httpSvc, get("/repos/a"), nil, false},
+		{"tools on an HTTP service pick the whole service", narrow(nil, nil, list("a")), httpSvc, get("/x"), nil, true},
+		{"a listed tool", narrow(nil, nil, list("delete_issue")), mcpSvc, post("/mcp"), calls("delete_issue"), true},
+		{"an unlisted tool", narrow(nil, nil, list("delete_issue")), mcpSvc, post("/mcp"), calls("create_issue"), false},
+		{"tools compare exactly", narrow(nil, nil, list("delete_issue")), mcpSvc, post("/mcp"), calls("Delete_Issue"), false},
+		{"a listed tool in a batch", narrow(nil, nil, list("delete_issue")), mcpSvc, post("/mcp"),
+			calls("create_issue", "delete_issue"), true},
+		{"a tools/call naming no tool", narrow(nil, nil, list("delete_issue")), mcpSvc, post("/mcp"), calls(""), true},
+		{"a tool named only in Mcp-Name", narrow(nil, nil, list("delete_issue")), mcpSvc,
+			withHeader(post("/mcp"), mcpNameHeader, "delete_issue"), calls("create_issue"), true},
+		{"an unparseable MCP body", narrow(nil, nil, list("delete_issue")), mcpSvc, post("/mcp"),
+			&hookPayloadMCP{Calls: []hookMCPCall{}}, true},
+		{"an MCP request with no body", narrow(nil, nil, list("delete_issue")), mcpSvc, get("/sse"), nil, false},
+		{"methods on an MCP service pick the whole service", narrow(list("DELETE"), list("/x"), nil), mcpSvc,
+			post("/mcp"), calls("a"), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wire := api.AgentVaultServiceHook{}
+			if tc.narrowing != nil {
+				wire = *tc.narrowing
+			}
+			wire.ID, wire.URL, wire.Secret = "h", "https://hook.example", "s"
+			if got := toServiceHook(&wire).matches(tc.svc, tc.req, tc.mcp); got != tc.want {
+				t.Fatalf("matches = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTheHookPayloadNamesTheHookAndTheSessionMetadata(t *testing.T) {
+	ps := &proxyServer{}
+	svc := &resolvedService{id: "svc-1", name: "github", kind: serviceKindHTTP}
+	session := &api.AgentVaultResolvedSession{Actor: api.AgentVaultSessionActor{Type: "user", ID: "u-1", Name: "Ana"},
+		Metadata: map[string]string{"ticket": "T-1"}}
+
+	svc.hook = &serviceHook{id: "h-2"}
+	body, _ := encodeJSON(ps.newHookPayload(svc, cacheLookup{sessionID: "s1", session: session}))
+	if !bytes.Contains(body, []byte(`"hook":{"id":"h-2","name":null}`)) || !bytes.Contains(body, []byte(`"metadata":{"ticket":"T-1"}`)) {
+		t.Fatalf("payload = %s", body)
+	}
+
+	body, _ = encodeJSON(ps.newHookPayload(svc, cacheLookup{sessionID: "s1"}))
+	if !bytes.Contains(body, []byte(`"metadata":{}`)) {
+		t.Fatalf("a session with no metadata should send an empty object: %s", body)
 	}
 }
