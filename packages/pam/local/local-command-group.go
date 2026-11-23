@@ -26,6 +26,10 @@ func hasControllingTerminal() bool {
 	return true
 }
 
+func personAtTerminal() bool {
+	return hasControllingTerminal()
+}
+
 func signalCommand(child *exec.Cmd, sig os.Signal, ownGroup bool) {
 	if s, ok := sig.(syscall.Signal); ok && ownGroup {
 		_ = syscall.Kill(-child.Process.Pid, s)

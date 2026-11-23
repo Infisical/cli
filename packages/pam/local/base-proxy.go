@@ -544,9 +544,9 @@ func CallPAMAccessWithMFA(
 ) (api.PAMAccessResponse, error) {
 	pamResponse, err := api.CallPAMAccess(httpClient, pamRequest)
 	if err != nil {
-		canPrompt := interactive && isatty.IsTerminal(os.Stdin.Fd())
-		if apiErr, ok := err.(*api.APIError); ok && canPrompt {
-			if apiErr.Name == reasonRequiredErrorName {
+		if apiErr, ok := err.(*api.APIError); ok && interactive {
+			// The reason prompt reads stdin; browser MFA only needs a person, so piped input still gets it.
+			if apiErr.Name == reasonRequiredErrorName && isatty.IsTerminal(os.Stdin.Fd()) {
 				log.Info().Msg("A reason is required to access this account.")
 				reason, promptErr := PromptForReason(true)
 				if promptErr != nil {
@@ -556,7 +556,7 @@ func CallPAMAccessWithMFA(
 				return CallPAMAccessWithMFA(httpClient, pamRequest, interactive)
 			}
 
-			if apiErr.Name == "SESSION_MFA_REQUIRED" {
+			if apiErr.Name == "SESSION_MFA_REQUIRED" && personAtTerminal() {
 				if details, ok := apiErr.Details.(map[string]interface{}); ok {
 					mfaSessionId, _ := details["mfaSessionId"].(string)
 					mfaMethod, _ := details["mfaMethod"].(string)
