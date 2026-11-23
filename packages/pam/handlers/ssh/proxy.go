@@ -50,19 +50,22 @@ type channelState struct {
 	inputBuffer      []byte                     // Buffer for input data to batch keystrokes
 	inputChannelType session.SessionChannelType // Channel type for buffered input
 	inputScanner     *inputSequenceFilter       // Drops escape sequences from the input stream
-	pendingEcho      echoedCommand              // Command awaiting confirmation that the shell echoed it
-	echoBaseline     int                        // Length of the line on screen when the command started
+	pendingEcho      echoedCommand              // Commands awaiting confirmation that the shell echoed them
+	echoBaseline     int                        // Length of the line on screen at the command's first key, or -1 before it
+	echoLine         uint32                     // Which line that was
+	recalled         bool                       // History keys were used for the command being entered
 
 	outputMutex       sync.Mutex
 	outputParser      *terminalTranscript        // Renders the output stream into displayed lines
 	outputChannelType session.SessionChannelType // Channel type for buffered output
-	outputPending     atomic.Int64               // Rendered length of the line still on screen
+	outputPending     atomic.Uint64              // The line still on screen: its commit count and rendered length
 	commandStart      int                        // Where the command just entered starts on the line still on screen, or -1
 }
 
 func newChannelState() *channelState {
 	return &channelState{
 		inputScanner: newInputSequenceFilter(),
+		echoBaseline: -1,
 		outputParser: newTerminalTranscript(),
 		commandStart: -1,
 	}
@@ -618,8 +621,8 @@ func (p *SSHProxy) proxyData(src io.Reader, dst io.Writer, direction string, ses
 
 // bufferInput accumulates input data and logs the effective command after processing edits.
 // It interprets control characters (backspace, Ctrl+C/U/W) so that the logged command
-// reflects what the user actually sent, not the raw keystrokes.
-func (p *SSHProxy) bufferInput(data []byte, sessionID string, channelType session.SessionChannelType, chState *channelState) {
+// reflects what the user actually sent, not the raw keystrokes. It reports whether keys were typed.
+func (p *SSHProxy) bufferInput(data []byte, sessionID string, channelType session.SessionChannelType, chState *channelState) bool {
 	chState.inputMutex.Lock()
 	defer chState.inputMutex.Unlock()
 
@@ -628,6 +631,10 @@ func (p *SSHProxy) bufferInput(data []byte, sessionID string, channelType sessio
 
 	for _, b := range data {
 		if chState.inputScanner.consumed(b) {
+			if chState.inputScanner.historyKey {
+				chState.startCommand(true)
+				typedThisRead = true
+			}
 			continue
 		}
 
@@ -638,6 +645,7 @@ func (p *SSHProxy) bufferInput(data []byte, sessionID string, channelType sessio
 			}
 		case 0x03: // Ctrl+C - cancel current input
 			chState.inputBuffer = chState.inputBuffer[:0]
+			chState.echoBaseline, chState.recalled = -1, false
 		case 0x15: // Ctrl+U - clear line
 			chState.inputBuffer = chState.inputBuffer[:0]
 		case 0x17: // Ctrl+W - delete previous word
@@ -651,12 +659,13 @@ func (p *SSHProxy) bufferInput(data []byte, sessionID string, channelType sessio
 			}
 		case 0x0D, 0x0A: // CR or LF - flush the buffer
 			p.flushInputBufferUnsafe(sessionID, chState, typedThisRead)
+		case 0x0E, 0x10, 0x12, 0x13: // Ctrl+N, Ctrl+P, Ctrl+R, Ctrl+S - history recall and search
+			chState.startCommand(true)
+			typedThisRead = true
 		default:
 			// Only buffer printable characters and tab
 			if b >= 0x20 || b == 0x09 {
-				if len(chState.inputBuffer) == 0 {
-					chState.echoBaseline = int(chState.outputPending.Load())
-				}
+				chState.startCommand(false)
 				chState.inputBuffer = append(chState.inputBuffer, b)
 				typedThisRead = true
 			}
@@ -666,6 +675,7 @@ func (p *SSHProxy) bufferInput(data []byte, sessionID string, channelType sessio
 			}
 		}
 	}
+	return typedThisRead
 }
 
 // flushInputBuffer flushes the input buffer with locking
@@ -675,53 +685,87 @@ func (p *SSHProxy) flushInputBuffer(sessionID string, chState *channelState) {
 	p.flushInputBufferUnsafe(sessionID, chState, false)
 }
 
+// enterLine applies an Enter split from its read; typed says whether keys came earlier in it.
+func (p *SSHProxy) enterLine(sessionID string, chState *channelState, typed bool) {
+	chState.inputMutex.Lock()
+	defer chState.inputMutex.Unlock()
+	p.flushInputBufferUnsafe(sessionID, chState, typed)
+}
+
+// startCommand notes where typing began at the command's first key (caller must hold inputMutex).
+func (c *channelState) startCommand(recalled bool) {
+	if c.echoBaseline < 0 {
+		c.echoLine, c.echoBaseline = c.lineOnScreen()
+	}
+	c.recalled = c.recalled || recalled
+}
+
 // flushInputBufferUnsafe records the buffered command (caller must hold the lock).
 // pasted means the command and its Enter arrived in one read, so nothing echoed yet.
 func (p *SSHProxy) flushInputBufferUnsafe(sessionID string, chState *channelState, pasted bool) {
-	if len(chState.inputBuffer) == 0 {
+	if len(chState.inputBuffer) == 0 && chState.echoBaseline < 0 {
 		return
 	}
 
 	command := string(chState.inputBuffer)
 	chState.inputBuffer = chState.inputBuffer[:0]
 	channel := chState.inputChannelType
+	entered := enteredCommand{
+		text:      command,
+		recalled:  chState.recalled,
+		line:      chState.echoLine,
+		baseline:  chState.echoBaseline,
+		timestamp: time.Now(),
+		channel:   channel,
+	}
+	chState.echoBaseline, chState.recalled = -1, false
 
 	if channel != session.SessionChannelShell {
-		p.logInputCommand(sessionID, chState.textEvent(session.SessionEventInput, channel, command))
+		if command != "" {
+			p.logInputCommand(sessionID, chState.textEvent(session.SessionEventInput, channel, command))
+		}
 		return
 	}
 
-	onScreen := int(chState.outputPending.Load())
+	if chState.placeCommand(entered, pasted) || command == "" {
+		return
+	}
 
 	// Nothing echoed means nothing will end the prompt's line either, so commit it
 	// here rather than let the next command's prompt land on the same line.
-	switch {
-	case onScreen > chState.echoBaseline:
-		// Echoed while typing, so that line is the record.
-		chState.markCommandLine()
-	case pasted:
-		// Delivered ahead of any echo; the next committed line decides.
-		chState.pendingEcho.hold(command, channel, onScreen)
-	default:
-		p.flushOutputBuffer(sessionID, chState)
-		p.logInputCommand(sessionID, chState.textEvent(session.SessionEventInput, channel, command))
-	}
+	p.flushOutputBuffer(sessionID, chState)
+	p.logInputCommand(sessionID, chState.textEvent(session.SessionEventInput, channel, command))
 }
 
-// markCommandLine flags the line on screen as holding the command just entered (caller must
-// hold inputMutex). outputMutex keeps the line from committing between the check and the mark.
-func (c *channelState) markCommandLine() {
+// placeCommand flags the line on screen when it shows the command just entered, or holds the
+// command for a later line (caller must hold inputMutex). outputMutex keeps the line from
+// committing in between.
+func (c *channelState) placeCommand(entered enteredCommand, pasted bool) bool {
 	c.outputMutex.Lock()
 	defer c.outputMutex.Unlock()
 
-	if c.outputParser.PendingLen() > c.echoBaseline {
-		c.commandStart = c.echoBaseline
+	sameLine := uint32(c.outputParser.Committed()) == entered.line
+	if start, ok := entered.startOn(c.outputParser.Pending(), sameLine); ok {
+		c.pendingEcho.clear()
+		c.commandStart = start
+		return true
 	}
+
+	// A paste reaches the shell ahead of its echo, and recalled history may not be drawn yet.
+	// Keys that left their line, as in a full-screen program, entered no command.
+	if entered.text != "" && !pasted || entered.text == "" && !sameLine {
+		return false
+	}
+	if !sameLine {
+		entered.baseline = c.outputParser.PendingLen()
+	}
+	c.pendingEcho.hold(entered, c.commandStart < 0)
+	return true
 }
 
-// flushPendingEcho records a held command that the shell never echoed back
+// flushPendingEcho records held commands that the shell never echoed back
 func (p *SSHProxy) flushPendingEcho(sessionID string, chState *channelState) {
-	if event, ok := chState.pendingEcho.take(); ok {
+	for _, event := range chState.pendingEcho.takeAll() {
 		p.logInputCommand(sessionID, event)
 	}
 }
@@ -742,10 +786,7 @@ func (p *SSHProxy) bufferOutput(data []byte, sessionID string, channelType sessi
 
 	chState.outputChannelType = channelType
 	p.logOutputLines(sessionID, chState, chState.outputParser.Feed(data))
-
-	// Read without a lock by the input goroutine, which must not stall behind the
-	// session logger's fsync just to note where a command started.
-	chState.outputPending.Store(int64(chState.outputParser.PendingLen()))
+	chState.publishLine()
 }
 
 // flushOutputBuffer commits a partially rendered line
@@ -753,20 +794,29 @@ func (p *SSHProxy) flushOutputBuffer(sessionID string, chState *channelState) {
 	chState.outputMutex.Lock()
 	defer chState.outputMutex.Unlock()
 	p.logOutputLines(sessionID, chState, chState.outputParser.Flush())
-	chState.outputPending.Store(0)
+	chState.publishLine()
+}
+
+// publishLine shares the line still on screen with the input goroutine, which reads it without
+// a lock so it never stalls behind the session logger's fsync just to note where a command
+// started. One word holds both halves so they always describe the same line.
+func (c *channelState) publishLine() {
+	c.outputPending.Store(uint64(uint32(c.outputParser.Committed()))<<32 | uint64(uint32(c.outputParser.PendingLen())))
+}
+
+func (c *channelState) lineOnScreen() (line uint32, length int) {
+	v := c.outputPending.Load()
+	return uint32(v >> 32), int(uint32(v))
 }
 
 // logOutputLines writes one output event per rendered line (caller must hold outputMutex)
 func (p *SSHProxy) logOutputLines(sessionID string, chState *channelState, lines []string) {
 	for _, line := range lines {
-		unechoed, isUnechoed, echoedAt := chState.pendingEcho.settle(line)
+		start, unechoed, isUnechoed := chState.commandOn(line)
 
 		event := chState.textEvent(session.SessionEventOutput, chState.outputChannelType, line)
-		if chState.commandStart >= 0 {
-			event.Command = commandOnLine(line, chState.commandStart)
-			chState.commandStart = -1
-		} else if echoedAt >= 0 {
-			event.Command = commandOnLine(line, echoedAt)
+		if start >= 0 {
+			event.Command = commandOnLine(line, start)
 		}
 		if err := p.config.SessionLogger.LogSessionEvent(event); err != nil {
 			log.Error().Err(err).
@@ -779,6 +829,18 @@ func (p *SSHProxy) logOutputLines(sessionID string, chState *channelState, lines
 			p.logInputCommand(sessionID, unechoed)
 		}
 	}
+}
+
+// commandOn returns where the command on a committed line starts, or -1, along with a held
+// command the line shows was never echoed (caller must hold outputMutex). A line flagged when
+// its command was entered belongs to that command, so it settles nothing held.
+func (c *channelState) commandOn(line string) (start int, unechoed session.SessionEvent, isUnechoed bool) {
+	if start = c.commandStart; start >= 0 {
+		c.commandStart = -1
+		return start, session.SessionEvent{}, false
+	}
+	unechoed, isUnechoed, start = c.pendingEcho.settle(line)
+	return start, unechoed, isUnechoed
 }
 
 // File transfers carry raw bytes that masking would corrupt rather than redact.
@@ -857,13 +919,14 @@ func (p *SSHProxy) proxyClientToServerWithBlocking(src io.Reader, dst io.Writer,
 			} else {
 				// Interactive/exec session — check for blocked commands at Enter
 				segStart := 0
+				typed := false
 				for i := 0; i < n; i++ {
 					b := buf[i]
 					if b == 0x0D || b == 0x0A {
 						// Forward and log everything before this CR/LF
 						if i > segStart {
 							segment := buf[segStart:i]
-							p.bufferInput(segment, sessionID, channelType, chState)
+							typed = p.bufferInput(segment, sessionID, channelType, chState) || typed
 							if _, writeErr := dst.Write(segment); writeErr != nil {
 								return writeErr
 							}
@@ -897,9 +960,11 @@ func (p *SSHProxy) proxyClientToServerWithBlocking(src io.Reader, dst io.Writer,
 								Str("sessionID", sessionID).
 								Str("command", command).
 								Msg("Blocked SSH command")
+							// Once the shell's input is cleared, its echo of what follows can't be predicted.
+							typed = false
 						} else {
 							// Allowed — forward the CR/LF through normal path
-							p.bufferInput([]byte{b}, sessionID, channelType, chState)
+							p.enterLine(sessionID, chState, typed)
 							if _, writeErr := dst.Write([]byte{b}); writeErr != nil {
 								return writeErr
 							}

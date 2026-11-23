@@ -17,9 +17,10 @@ const (
 )
 
 type terminalTranscript struct {
-	parser *ansi.Parser
-	line   []rune
-	cursor int
+	parser    *ansi.Parser
+	line      []rune
+	cursor    int
+	committed int // Lines committed so far, which identifies the line still on screen
 }
 
 func newTerminalTranscript() *terminalTranscript {
@@ -48,6 +49,14 @@ func (t *terminalTranscript) Feed(data []byte) []string {
 
 func (t *terminalTranscript) Flush() []string {
 	return appendLine(nil, t.commit())
+}
+
+func (t *terminalTranscript) Pending() string {
+	return strings.TrimRight(string(t.line), " ")
+}
+
+func (t *terminalTranscript) Committed() int {
+	return t.committed
 }
 
 func (t *terminalTranscript) PendingLen() int {
@@ -114,6 +123,7 @@ func (t *terminalTranscript) param(fallback int) int {
 func (t *terminalTranscript) commit() string {
 	line := strings.TrimRight(string(t.line), " ")
 	t.line, t.cursor = t.line[:0], 0
+	t.committed++
 	return line
 }
 
@@ -173,7 +183,9 @@ func appendLine(lines []string, line string) []string {
 
 // inputSequenceFilter drops escape sequences, which can straddle a read.
 type inputSequenceFilter struct {
-	parser *ansi.Parser
+	parser     *ansi.Parser
+	ss3        bool // ESC O was read, so the next byte ends an application-mode key
+	historyKey bool // The byte just consumed ended an up or down arrow
 }
 
 func newInputSequenceFilter() *inputSequenceFilter {
@@ -181,6 +193,14 @@ func newInputSequenceFilter() *inputSequenceFilter {
 }
 
 func (f *inputSequenceFilter) consumed(b byte) bool {
+	f.historyKey = false
+	if f.ss3 {
+		f.ss3 = false
+		if b >= 0x40 && b <= 0x7E {
+			f.historyKey = b == 'A' || b == 'B'
+			return true
+		}
+	}
 	if f.parser.State() == parser.EscapeState && isStringIntroducer(b) {
 		f.parser.Reset()
 		return true
@@ -189,12 +209,16 @@ func (f *inputSequenceFilter) consumed(b byte) bool {
 		f.parser.Reset()
 	}
 
+	state := f.parser.State()
 	switch f.parser.Advance(b) {
 	case parser.PrintAction, parser.ExecuteAction:
 		return false
-	default:
-		return true
+	case parser.DispatchAction:
+		command := f.parser.Command()
+		f.ss3 = state == parser.EscapeState && command == 'O'
+		f.historyKey = isCSIState(state) && (command == 'A' || command == 'B')
 	}
+	return true
 }
 
 func isStringIntroducer(b byte) bool {
@@ -211,42 +235,91 @@ func isStringState(state parser.State) bool {
 	}
 }
 
-// echoedCommand holds a command until the output shows whether the shell echoed
-// it. The echoed line is the better record: it carries the prompt and reflects
-// tab completion and history recall.
-type echoedCommand struct {
-	mutex     sync.Mutex
+// enteredCommand is a command line entered at a shell. line and baseline say where typing
+// began: the line on screen then, by commit count, and its rendered length.
+type enteredCommand struct {
 	text      string
+	recalled  bool // History keys were used, so the line can show more than was typed
+	line      uint32
+	baseline  int
 	timestamp time.Time
 	channel   session.SessionChannelType
-	baseline  int
 }
 
-// hold takes a command with the length of the line on screen when typing began.
-// A command displaced before any line committed is dropped: a multi-line paste
-// delivers every command ahead of its echo, so claiming no echo would be wrong.
-func (e *echoedCommand) hold(text string, channel session.SessionChannelType, baseline int) {
+// startOn returns where the command starts on a line that shows it. Typed text is found by
+// its echo, which holds even when typing began before the prompt was drawn. Recalled history
+// or a completion is found by where typing began, which holds only on the line on screen then.
+func (e enteredCommand) startOn(line string, sameLine bool) (int, bool) {
+	typed := strings.TrimSpace(e.text)
+	at := len(line) - len(typed)
+	grew := utf8.RuneCountInString(line) > e.baseline
+	echoed := !e.recalled && typed != "" && (grew || !sameLine) &&
+		strings.HasSuffix(line, typed) && (at == 0 || line[at-1] == ' ')
+
+	switch {
+	case echoed:
+		return utf8.RuneCountInString(line[:at]), true
+	case sameLine && grew:
+		return e.baseline, true
+	}
+	return 0, false
+}
+
+// echoedCommand holds pasted commands until the output shows whether the shell echoed
+// them. The echoed line is the better record: it carries the prompt and reflects tab
+// completion and history recall.
+type echoedCommand struct {
+	mutex sync.Mutex
+	held  []heldCommand
+}
+
+type heldCommand struct {
+	enteredCommand
+	next bool // Nothing else awaited a line, so the next committed line is the one it was entered on
+}
+
+// maxHeldCommands bounds a paste the shell never echoes; past it the oldest command is dropped.
+const maxHeldCommands = 64
+
+func (e *echoedCommand) hold(command enteredCommand, next bool) {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
-	e.text, e.timestamp, e.channel, e.baseline = text, time.Now(), channel, baseline
+	if len(e.held) == maxHeldCommands {
+		e.held = e.held[1:]
+	}
+	e.held = append(e.held, heldCommand{command, next && len(e.held) == 0})
 }
 
-// settle applies a held command to the first line committed after it. A longer line
-// means the shell echoed it, so that line is the record and echoedAt is where the
-// command starts on it (-1 otherwise).
+// clear drops held commands once a later command is on screen: the shell shows input in
+// order, so the ones it has not shown by then never appeared as typed.
+func (e *echoedCommand) clear() {
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+	e.held = nil
+}
+
+// settle applies the oldest held command to a committed line. A line showing it is its echo,
+// and echoedAt is where the command starts on it (-1 otherwise). A command that was next is
+// settled by the first line either way: one that does not show it means the shell did not
+// echo it, while later commands wait for their own line.
 func (e *echoedCommand) settle(line string) (unechoed session.SessionEvent, ok bool, echoedAt int) {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
-	if e.text == "" {
+	if len(e.held) == 0 {
 		return session.SessionEvent{}, false, -1
 	}
-	if utf8.RuneCountInString(line) > e.baseline {
-		e.text = ""
-		return session.SessionEvent{}, false, e.baseline
+	head := e.held[0]
+	if start, found := head.startOn(line, head.next); found {
+		e.held = e.held[1:]
+		return session.SessionEvent{}, false, start
 	}
-	unechoed, ok = e.takeUnsafe()
+	if !head.next {
+		return session.SessionEvent{}, false, -1
+	}
+	e.held = e.held[1:]
+	unechoed, ok = head.inputEvent()
 	return unechoed, ok, -1
 }
 
@@ -260,23 +333,29 @@ func commandOnLine(line string, start int) string {
 	return strings.TrimSpace(string(runes[start:]))
 }
 
-func (e *echoedCommand) take() (session.SessionEvent, bool) {
+func (e *echoedCommand) takeAll() []session.SessionEvent {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
-	return e.takeUnsafe()
+
+	var events []session.SessionEvent
+	for _, held := range e.held {
+		if event, ok := held.inputEvent(); ok {
+			events = append(events, event)
+		}
+	}
+	e.held = nil
+	return events
 }
 
-func (e *echoedCommand) takeUnsafe() (session.SessionEvent, bool) {
+func (e enteredCommand) inputEvent() (session.SessionEvent, bool) {
 	if e.text == "" {
 		return session.SessionEvent{}, false
 	}
-	event := session.SessionEvent{
+	return session.SessionEvent{
 		Timestamp:   e.timestamp,
 		EventType:   session.SessionEventInput,
 		ChannelType: e.channel,
 		Data:        []byte(e.text),
 		Rendered:    true,
-	}
-	e.text = ""
-	return event, true
+	}, true
 }

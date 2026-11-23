@@ -168,9 +168,123 @@ func TestSessionRecording(t *testing.T) {
 			},
 			want: []string{
 				"output: user@host:~$ cd cli [command: cd cli]",
-				"output: user@host:~/cli$ ls",
+				"output: user@host:~/cli$ ls [command: ls]",
 				"output: LICENSE go",
 			},
+		},
+		{
+			name: "multi-line paste the shell shows before running",
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, prompt("~"))
+				p.bufferInput([]byte(esc+"[200~ls\recho hi\r"+esc+"[201~"), "sid", shell, ch)
+				emit(p, ch, "ls\r\necho hi")
+				p.bufferInput([]byte{0x0D}, "sid", shell, ch)
+				emit(p, ch, "\r\nLICENSE go\r\nhi\r\n")
+			},
+			want: []string{
+				"output: user@host:~$ ls [command: ls]",
+				"output: echo hi [command: echo hi]",
+				"output: LICENSE go",
+				"output: hi",
+			},
+		},
+		{
+			name: "paste split across reads",
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, prompt("~"))
+				p.bufferInput([]byte("ls\r"), "sid", shell, ch)
+				emit(p, ch, "ls")
+				p.bufferInput([]byte("e"), "sid", shell, ch)
+				emit(p, ch, "\r\nLICENSE go\r\n"+prompt("~")+"e")
+				p.bufferInput([]byte("cho hi\r"), "sid", shell, ch)
+				emit(p, ch, "cho hi\r\nhi\r\n")
+			},
+			want: []string{
+				"output: user@host:~$ ls [command: ls]",
+				"output: LICENSE go",
+				"output: user@host:~$ echo hi [command: echo hi]",
+				"output: hi",
+			},
+		},
+		{
+			name: "typing before the previous line ends",
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, prompt("~"))
+				typeLine(p, ch, shell, "ls")
+				p.bufferInput([]byte("p"), "sid", shell, ch)
+				emit(p, ch, "\r\nLICENSE go\r\n"+prompt("~")+"p")
+				typeLine(p, ch, shell, "wd")
+				emit(p, ch, "\r\n/root\r\n")
+			},
+			want: []string{
+				"output: user@host:~$ ls [command: ls]",
+				"output: LICENSE go",
+				"output: user@host:~$ pwd [command: pwd]",
+				"output: /root",
+			},
+		},
+		{
+			name: "typing while a command runs",
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, prompt("~"))
+				typeLine(p, ch, shell, "sleep 1")
+				emit(p, ch, "\r\n")
+				p.bufferInput([]byte("ls"), "sid", shell, ch)
+				emit(p, ch, "ls"+prompt("~")+"ls")
+				p.bufferInput([]byte{0x0D}, "sid", shell, ch)
+				emit(p, ch, "\r\nLICENSE go\r\n")
+			},
+			want: []string{
+				"output: user@host:~$ sleep 1 [command: sleep 1]",
+				"output: lsuser@host:~$ ls [command: ls]",
+				"output: LICENSE go",
+			},
+		},
+		{
+			name: "history recall",
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, prompt("~"))
+				p.bufferInput([]byte(esc+"[A"), "sid", shell, ch)
+				emit(p, ch, "ls -la")
+				p.bufferInput([]byte{0x0D}, "sid", shell, ch)
+				emit(p, ch, "\r\ntotal 0\r\n")
+			},
+			want: []string{"output: user@host:~$ ls -la [command: ls -la]", "output: total 0"},
+		},
+		{
+			name: "history recall extended by typing",
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, prompt("~"))
+				p.bufferInput([]byte(esc+"[A"), "sid", shell, ch)
+				emit(p, ch, "ls -la")
+				typeLine(p, ch, shell, " | wc -l")
+				emit(p, ch, "\r\n1\r\n")
+			},
+			want: []string{"output: user@host:~$ ls -la | wc -l [command: ls -la | wc -l]", "output: 1"},
+		},
+		{
+			name: "arrow keys in a full-screen program enter no command",
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, "line one")
+				p.bufferInput([]byte(esc+"[B"), "sid", shell, ch)
+				emit(p, ch, esc+"[Bline two")
+				p.bufferInput([]byte{0x0D}, "sid", shell, ch)
+				emit(p, ch, esc+"[Bline three")
+			},
+			want: []string{"output: line one", "output: line two", "output: line three"},
+		},
+		{
+			name: "history search",
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, prompt("~"))
+				p.bufferInput([]byte{0x12}, "sid", shell, ch)
+				emit(p, ch, "\r(reverse-i-search)`': ")
+				p.bufferInput([]byte("ls"), "sid", shell, ch)
+				emit(p, ch, "\r(reverse-i-search)`ls': ls -la")
+				p.bufferInput([]byte{0x0D}, "sid", shell, ch)
+				emit(p, ch, "\r"+prompt("~")+"ls -la"+esc+"[K\r\ntotal 0\r\n")
+			},
+			want: []string{"output: user@host:~$ ls -la [command: ls -la]", "output: total 0"},
 		},
 		{
 			name: "input at a prompt that does not echo is recorded",
@@ -185,6 +299,15 @@ func TestSessionRecording(t *testing.T) {
 				"input: operator",
 				"output: ok",
 			},
+		},
+		{
+			name: "input at a prompt that does not echo is recorded even when the prompt ends with it",
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, "[sudo] password for user: ")
+				typeSilently(p, ch, "user:")
+				emit(p, ch, "\r\nok\r\n")
+			},
+			want: []string{"output: [sudo] password for user:", "input: user:", "output: ok"},
 		},
 		{
 			name:  "exec channel logs its command immediately",
@@ -278,12 +401,17 @@ type typedInput struct {
 	p      *SSHProxy
 	ch     *channelState
 	chunks []string
+	echoes []string // What the server writes back for each chunk, when it is not the chunk itself
 	i      int
 }
 
 func (r *typedInput) Read(b []byte) (int, error) {
 	if r.i > 0 {
-		emit(r.p, r.ch, r.chunks[r.i-1])
+		echo := r.chunks[r.i-1]
+		if r.echoes != nil {
+			echo = r.echoes[r.i-1]
+		}
+		emit(r.p, r.ch, echo)
 	}
 	if r.i >= len(r.chunks) {
 		return 0, io.EOF
@@ -321,6 +449,58 @@ func TestBlockedCommandIsNotDuplicated(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// Command blocking checks each Enter on its own, which must not make a paste look typed.
+func TestPasteThroughCommandBlocking(t *testing.T) {
+	logger := &recordingLogger{}
+	p := NewSSHProxy(SSHProxyConfig{
+		SessionLogger:          logger,
+		BlockedCommandPatterns: []*regexp.Regexp{regexp.MustCompile(`sudo`)},
+	})
+	ch := newChannelState()
+	ch.channelType = session.SessionChannelShell
+
+	emit(p, ch, prompt("~"))
+	src := &typedInput{p: p, ch: ch,
+		chunks: []string{"ls\recho hi\r"},
+		echoes: []string{"ls\r\nLICENSE go\r\n" + prompt("~") + "echo hi\r\nhi\r\n"},
+	}
+	if err := p.proxyClientToServerWithBlocking(src, io.Discard, io.Discard, "sid", ch); err != nil {
+		t.Fatalf("proxy returned %v", err)
+	}
+	p.flushOutputBuffer("sid", ch)
+
+	var got []string
+	for _, e := range logger.events {
+		got = append(got, string(e.EventType)+": "+string(e.Data)+" ["+e.Command+"]")
+	}
+	want := []string{
+		"output: user@host:~$ ls [ls]",
+		"output: LICENSE go []",
+		"output: user@host:~$ echo hi [echo hi]",
+		"output: hi []",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestInputFilterRecognizesHistoryKeys(t *testing.T) {
+	for keys, want := range map[string]bool{
+		esc + "[A": true, esc + "OB": true, esc + "[1;5A": true,
+		esc + "[D": false, esc + "OH": false, esc + "[200~": false, esc + "[<0;3;4M": false,
+	} {
+		f := newInputSequenceFilter()
+		for _, b := range []byte(keys) {
+			if !f.consumed(b) {
+				t.Errorf("%q: kept %q", keys, b)
+			}
+		}
+		if f.historyKey != want {
+			t.Errorf("%q: history key %v, want %v", keys, f.historyKey, want)
+		}
 	}
 }
 
