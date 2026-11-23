@@ -233,7 +233,8 @@ func pamExampleCommand(view pamAccountView) string {
 	case pam.AccountTypePostgres, pam.AccountTypeCockroachDB:
 		return base + " -- psql -c \"select 1\""
 	case pam.AccountTypeMySQL:
-		return base + " -- mysql -e \"select 1\""
+		// A host in ~/.my.cnf beats MYSQL_HOST; flags beat both, and --no-defaults skips the file.
+		return base + " -- sh -c 'mysql --no-defaults -h \"$INFISICAL_PAM_HOST\" -P \"$INFISICAL_PAM_PORT\" -e \"select 1\"'"
 	case pam.AccountTypeMsSQL:
 		return base + " -- sqlcmd -Q \"select 1\""
 	case pam.AccountTypeMongoDB:

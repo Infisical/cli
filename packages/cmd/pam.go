@@ -57,6 +57,9 @@ The CLI exits with the command's exit code:
     SNOWSQL_*, KUBECONFIG, CLOUDSDK_* for gcloud, AZURE_CONFIG_DIR/HTTPS_PROXY for az, which
     is signed in first). To use a variable in the command itself, wrap it in a shell:
     -- sh -c 'redis-cli -u "$INFISICAL_PAM_URL" ping'
+    A host or port in a MySQL option file (~/.my.cnf, /etc/my.cnf) overrides MYSQL_HOST and
+    MYSQL_TCP_PORT and skips the proxy, so pass them as flags instead:
+    -- sh -c 'mysql --no-defaults -h "$INFISICAL_PAM_HOST" -P "$INFISICAL_PAM_PORT" -e "select 1"'
   - AWS IAM accounts with a Gateway run the command against a local proxy (HTTPS_PROXY,
     AWS_CA_BUNDLE and placeholder credentials), and the Gateway signs each request. Without
     a Gateway, the command gets the session's temporary credentials in AWS_ACCESS_KEY_ID,
