@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -44,6 +45,7 @@ const tokenProjectID = "0b9e4f1a-2c3d-4e5f-8a7b-6c5d4e3f2a1b"
 type fakeServiceTokenAPI struct {
 	mu       sync.Mutex
 	requests []string
+	bodies   []string
 }
 
 func (f *fakeServiceTokenAPI) serve(t *testing.T) {
@@ -51,6 +53,11 @@ func (f *fakeServiceTokenAPI) serve(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.requests = append(f.requests, r.Method+" "+r.URL.Path)
+		if r.Method == http.MethodPost || r.Method == http.MethodPatch {
+			if body, err := io.ReadAll(r.Body); err == nil {
+				f.bodies = append(f.bodies, r.Method+" "+r.URL.Path+" "+string(body))
+			}
+		}
 		f.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -247,5 +254,46 @@ func TestPlainListingPrintsValues(t *testing.T) {
 	_, stdout, exited = runUnderSecretsManagerAfter(t, setup, buildSecretsCmd, "secrets", "--plain", "--projectId", tokenProjectID)
 	if exited || stdout != "EXISTING=same\n" {
 		t.Errorf("top-level secrets --plain: exited=%v stdout=%q", exited, stdout)
+	}
+}
+
+// The set example advertises NAME=@filepath, and a file argument expands the same way with a
+// service token as it does with a login session; with the expansion skipped, the literal path
+// was what got stored. A literal @ still goes out by escaping it as \@.
+func TestSecretSetWithServiceTokenExpandsFileArguments(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "deploy.key")
+	if err := os.WriteFile(file, []byte("fixture-only\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := &fakeServiceTokenAPI{}
+	fake.serve(t)
+	setup := func() { t.Setenv(util.INFISICAL_TOKEN_NAME, "st.id.secret.key") }
+	args := []string{"secrets", "set", "UPLOADED=@" + file, `LITERAL=\@/kept/as/typed`, "--projectId", tokenProjectID, "-o", "json"}
+	stderr, _, exited := runUnderSecretsManagerAfter(t, setup, buildNamespacedSecretsCmd, args...)
+	if exited {
+		t.Fatalf("exited=%v stderr=%s", exited, stderr)
+	}
+
+	written := map[string]string{}
+	for _, body := range fake.bodies {
+		parts := strings.SplitN(body, " ", 3)
+		if len(parts) != 3 || !strings.HasPrefix(parts[1], "/v3/secrets/raw/") {
+			continue
+		}
+		var payload struct {
+			SecretValue string `json:"secretValue"`
+		}
+		if json.Unmarshal([]byte(parts[2]), &payload) != nil {
+			continue
+		}
+		written[strings.TrimPrefix(parts[1], "/v3/secrets/raw/")] = payload.SecretValue
+	}
+	if got := written["UPLOADED"]; got != "fixture-only\n" {
+		t.Errorf("UPLOADED=%q, want the file contents (requests=%v)", got, fake.requests)
+	}
+	if got := written["LITERAL"]; got != "@/kept/as/typed" {
+		t.Errorf("LITERAL=%q, want the escaped @/kept/as/typed", got)
 	}
 }
