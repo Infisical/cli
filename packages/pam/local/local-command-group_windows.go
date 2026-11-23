@@ -13,10 +13,14 @@ func hasControllingTerminal() bool {
 	return true
 }
 
-// Windows has no controlling terminal; a console or Git Bash (mintty) on stdin stands in for one.
+// Windows has no controlling terminal; output to a console or Git Bash (mintty) stands in for one.
 func personAtTerminal() bool {
-	fd := os.Stdin.Fd()
-	return isatty.IsTerminal(fd) || isatty.IsCygwinTerminal(fd)
+	for _, fd := range []uintptr{os.Stdout.Fd(), os.Stderr.Fd()} {
+		if isatty.IsTerminal(fd) || isatty.IsCygwinTerminal(fd) {
+			return true
+		}
+	}
+	return false
 }
 
 func signalCommand(child *exec.Cmd, sig os.Signal, _ bool) {

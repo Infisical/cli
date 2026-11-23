@@ -318,7 +318,7 @@ var accountDisplays = map[string]AccountConnectionDisplay{
 		TypeLabel:   "MySQL",
 		DefaultPort: 3306,
 		ConnectionString: func(username, database string, port int) string {
-			return fmt.Sprintf("mysql://%s@127.0.0.1:%d/%s", username, port, database)
+			return fmt.Sprintf("mysql://%s@127.0.0.1:%d/%s", urlUser(username), port, url.PathEscape(database))
 		},
 		UsageExamples: func(username, database string, port int) []string {
 			return []string{
@@ -330,7 +330,7 @@ var accountDisplays = map[string]AccountConnectionDisplay{
 		TypeLabel:   "SQL Server",
 		DefaultPort: 1433,
 		ConnectionString: func(username, database string, port int) string {
-			return fmt.Sprintf("sqlserver://%s@127.0.0.1:%d?database=%s", username, port, database)
+			return fmt.Sprintf("sqlserver://%s@127.0.0.1:%d?database=%s", urlUser(username), port, url.QueryEscape(database))
 		},
 		UsageExamples: func(username, database string, port int) []string {
 			return []string{
@@ -372,7 +372,7 @@ var accountDisplays = map[string]AccountConnectionDisplay{
 			"curl use the HTTP one; clickhouse-client needs a native port set.",
 		},
 		ConnectionString: func(username, database string, port int) string {
-			return fmt.Sprintf("jdbc:clickhouse://127.0.0.1:%d/%s", port, database)
+			return fmt.Sprintf("jdbc:clickhouse://127.0.0.1:%d/%s", port, url.PathEscape(database))
 		},
 		UsageExamples: func(username, database string, port int) []string {
 			return []string{
@@ -389,7 +389,7 @@ var accountDisplays = map[string]AccountConnectionDisplay{
 			if username == "" {
 				return fmt.Sprintf("redis://127.0.0.1:%d", port)
 			}
-			return fmt.Sprintf("redis://%s@127.0.0.1:%d", username, port)
+			return fmt.Sprintf("redis://%s@127.0.0.1:%d", urlUser(username), port)
 		},
 		UsageExamples: func(username, database string, port int) []string {
 			return []string{fmt.Sprintf("redis-cli -h 127.0.0.1 -p %d", port)}
@@ -420,13 +420,19 @@ var accountDisplays = map[string]AccountConnectionDisplay{
 	},
 }
 
+// urlUser escapes a server-supplied name for the userinfo part of a URL, so it can't add a host or
+// query parameters that a client would follow.
+func urlUser(name string) string {
+	return url.User(name).String()
+}
+
 // postgresWireDisplay is shared by the account types reached over the Postgres wire protocol.
 func postgresWireDisplay(typeLabel string, defaultPort int) AccountConnectionDisplay {
 	return AccountConnectionDisplay{
 		TypeLabel:   typeLabel,
 		DefaultPort: defaultPort,
 		ConnectionString: func(username, database string, port int) string {
-			return fmt.Sprintf("postgres://%s@127.0.0.1:%d/%s", username, port, database)
+			return fmt.Sprintf("postgres://%s@127.0.0.1:%d/%s", urlUser(username), port, url.PathEscape(database))
 		},
 		UsageExamples: func(username, database string, port int) []string {
 			return []string{
@@ -449,7 +455,7 @@ func postgresWireDisplay(typeLabel string, defaultPort int) AccountConnectionDis
 // pass this, and would be the better fix. Until that happens, this is the fix, so do not drop it as
 // redundant.
 func mongoDBURI(database string, port int) string {
-	return fmt.Sprintf("mongodb://127.0.0.1:%d/%s?directConnection=true", port, database)
+	return fmt.Sprintf("mongodb://127.0.0.1:%d/%s?directConnection=true", port, url.PathEscape(database))
 }
 
 // ConnectionDisplayFor returns how a client reaches the given account type, and whether anything is

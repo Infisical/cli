@@ -15,6 +15,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -579,7 +580,7 @@ func localCommandEnv(response *api.PAMAccessResponse, port int, tempDir string, 
 				set[key] = value
 			}
 		}
-		set[EnvPAMURL] = fmt.Sprintf("jdbc:snowflake://127.0.0.1:%d/?ssl=off&account=%s%s", port, account,
+		set[EnvPAMURL] = fmt.Sprintf("jdbc:snowflake://127.0.0.1:%d/?ssl=off&account=%s%s", port, url.QueryEscape(account),
 			jdbcExtras(response.Metadata["database"], response.Metadata["schema"], response.Metadata["warehouse"]))
 	case AccountTypeGcpServiceAccount:
 		tokenPath, caPath, err := writeProxyFiles(tempDir, setup.caCertPEM)

@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"syscall"
+
+	"github.com/mattn/go-isatty"
 )
 
 // Without a controlling terminal nothing relies on the foreground process group, so the command gets
@@ -26,8 +28,10 @@ func hasControllingTerminal() bool {
 	return true
 }
 
+// An agent that captures every stream can still inherit a controlling terminal, so the output must
+// reach one too; stdin alone may be piped.
 func personAtTerminal() bool {
-	return hasControllingTerminal()
+	return hasControllingTerminal() && (isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsTerminal(os.Stderr.Fd()))
 }
 
 func signalCommand(child *exec.Cmd, sig os.Signal, ownGroup bool) {
