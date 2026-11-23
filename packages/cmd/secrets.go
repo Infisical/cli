@@ -157,6 +157,23 @@ func runSecretsSet(cmd *cobra.Command, args []string) {
 	runSecretsWrite(cmd, args, util.SecretWriteUpsert)
 }
 
+// expandSecretValue turns the value of a NAME=value argument into what gets stored: \@ unescapes to
+// a literal @, and @filepath is replaced by the contents of the file. Anything else goes out as typed.
+func expandSecretValue(value string) (string, error) {
+	if strings.HasPrefix(value, "\\@") {
+		return "@" + value[2:], nil
+	}
+	if strings.HasPrefix(value, "@") {
+		filePath := strings.TrimPrefix(value, "@")
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			return "", fmt.Errorf("unable to read file %s: %w", filePath, err)
+		}
+		return string(content), nil
+	}
+	return value, nil
+}
+
 var secretWriteEvents = map[util.SecretWriteMode]string{
 	util.SecretWriteUpsert:     "cli-command:secrets set",
 	util.SecretWriteCreateOnly: "cli-command:secrets create",
@@ -265,17 +282,9 @@ func runSecretsWrite(cmd *cobra.Command, args []string, mode util.SecretWriteMod
 		}
 
 		key := splitKeyValue[0]
-		value := splitKeyValue[1]
-
-		if strings.HasPrefix(value, "\\@") {
-			value = "@" + value[2:]
-		} else if strings.HasPrefix(value, "@") {
-			filePath := strings.TrimPrefix(value, "@")
-			content, err := os.ReadFile(filePath)
-			if err != nil {
-				util.HandleError(err, fmt.Sprintf("Unable to read file %s", filePath))
-			}
-			value = string(content)
+		value, err := expandSecretValue(splitKeyValue[1])
+		if err != nil {
+			util.HandleError(err)
 		}
 
 		processedArgs = append(processedArgs, fmt.Sprintf("%s=%s", key, value))
@@ -287,12 +296,9 @@ func runSecretsWrite(cmd *cobra.Command, args []string, mode util.SecretWriteMod
 	}
 
 	usesToken := token != nil && (token.Type == util.SERVICE_TOKEN_IDENTIFIER || token.Type == util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER)
-	// set has always sent a token's values as typed, @filepath included, and keeps doing so for
-	// compatibility. create and update read the file the way a login session does.
+	// @filepath expands the same way whatever the auth is, like the set example documents.
+	// A literal @ goes out by escaping it as \@.
 	writeArgs := processedArgs
-	if usesToken && mode == util.SecretWriteUpsert {
-		writeArgs = args
-	}
 
 	if writeArgs, err = util.CollectSecretArgs(mode, writeArgs, file); err != nil {
 		var invalid *util.SecretArgInvalid
