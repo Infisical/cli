@@ -153,3 +153,71 @@ func TestPosixShellQuote(t *testing.T) {
 		})
 	}
 }
+
+func TestQuoteDotEnvValue(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      models.SingleEnvironmentVariable
+		quoteStyle string
+		expected   string
+	}{
+		{
+			name:       "Single style is the historical output",
+			input:      models.SingleEnvironmentVariable{Key: "KEY1", Value: "VALUE1"},
+			quoteStyle: "single",
+			expected:   "'VALUE1'",
+		},
+		{
+			name:       "Double style keeps a multiline value parseable",
+			input:      models.SingleEnvironmentVariable{Key: "KEY1", Value: "line1\nline2"},
+			quoteStyle: "double",
+			expected:   "\"line1\nline2\"",
+		},
+		{
+			name:       "Double style escapes embedded double quotes",
+			input:      models.SingleEnvironmentVariable{Key: "KEY1", Value: `say "hi"`},
+			quoteStyle: "double",
+			expected:   `"say \"hi\""`,
+		},
+		{
+			name:       "None style emits the raw value",
+			input:      models.SingleEnvironmentVariable{Key: "KEY1", Value: `it"s a $value`},
+			quoteStyle: "none",
+			expected:   `it"s a $value`,
+		},
+		{
+			name:       "Unknown style falls back to single",
+			input:      models.SingleEnvironmentVariable{Key: "KEY1", Value: "VALUE1"},
+			quoteStyle: "triple",
+			expected:   "'VALUE1'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, quoteDotEnvValue(tt.input, tt.quoteStyle))
+		})
+	}
+}
+
+func TestFormatAsDotEnvQuoteStyles(t *testing.T) {
+	input := []models.SingleEnvironmentVariable{
+		{Key: "KEY1", Value: "line1\nline2"},
+	}
+
+	dotenv, err := formatEnvs(input, "dotenv", "double")
+	assert.NoError(t, err)
+	assert.Equal(t, "KEY1=\"line1\nline2\"\n", dotenv)
+
+	dotenvExport, err := formatEnvs(input, "dotenv-export", "double")
+	assert.NoError(t, err)
+	assert.Equal(t, "export KEY1=\"line1\nline2\"\n", dotenvExport)
+
+	plain, err := formatEnvs(input, "dotenv", "none")
+	assert.NoError(t, err)
+	assert.Equal(t, "KEY1=line1\nline2\n", plain)
+
+	legacy, err := formatEnvs(input, "dotenv", "single")
+	assert.NoError(t, err)
+	assert.Equal(t, "KEY1='line1\nline2'\n", legacy)
+}
