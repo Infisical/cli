@@ -6,8 +6,10 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -58,14 +60,10 @@ func SupportsLocalCommand(accountType string) bool {
 	return localCommandAccountTypes[accountType]
 }
 
-// ErrSessionExpired is returned when the session ended before the command did.
 var ErrSessionExpired = errors.New("the PAM session ended before the command finished")
 
-// ErrCredentialsExpired is returned when AWS credentials without a Gateway expired before the
-// session or the command did.
 var ErrCredentialsExpired = errors.New("the AWS credentials expired before the command finished")
 
-// ErrInterrupted is returned when a signal arrived before the command started.
 var ErrInterrupted = errors.New("interrupted before the command started")
 
 // interruptWatch catches signals from the moment the session is open, so an interrupt during setup
@@ -255,6 +253,7 @@ func RunLocalCommand(httpClient *resty.Client, response *api.PAMAccessResponse, 
 		return code, err
 	}
 
+	expiry = capToCertificateExpiry(response.GatewayClientCertificate, expiry)
 	session := NewLiveSession(response, expiry)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -317,11 +316,24 @@ func RunLocalCommand(httpClient *resty.Client, response *api.PAMAccessResponse, 
 	return runLocalChild(command, env, session.Expiry, interrupts)
 }
 
+// The backend can shorten the requested duration, and the gateway enforces the certificate's lifetime.
+func capToCertificateExpiry(certPEM string, expiry time.Time) time.Time {
+	block, _ := pem.Decode([]byte(certPEM))
+	if block == nil {
+		return expiry
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil || !cert.NotAfter.Before(expiry) {
+		return expiry
+	}
+	return cert.NotAfter
+}
+
 func runLocalChild(command []string, env []string, expiry time.Time, interrupts *interruptWatch) (int, error) {
 	// A terminal's Ctrl+C already reaches a child in the foreground group, so SIGINT is only forwarded
 	// when no stream is a terminal. Catching signals keeps this process alive to end the session.
 	ownGroup := !hasControllingTerminal()
-	forwardInterrupt := !isatty.IsTerminal(os.Stdin.Fd()) && !isatty.IsTerminal(os.Stdout.Fd()) && !isatty.IsTerminal(os.Stderr.Fd())
+	forwardInterrupt := ownGroup || (!isatty.IsTerminal(os.Stdin.Fd()) && !isatty.IsTerminal(os.Stdout.Fd()) && !isatty.IsTerminal(os.Stderr.Fd()))
 
 	child := exec.Command(command[0], command[1:]...)
 	child.Env = env
@@ -537,7 +549,7 @@ func localCommandEnv(response *api.PAMAccessResponse, port int, tempDir string, 
 		set["MYSQL_HOST"], set["MYSQL_TCP_PORT"] = "127.0.0.1", portStr
 	case AccountTypeMsSQL:
 		set["SQLCMDSERVER"] = "127.0.0.1," + portStr
-		set["SQLCMDUSER"] = username
+		set["SQLCMDUSER"], set["SQLCMDPASSWORD"] = username, "x"
 		if database != "" {
 			set["SQLCMDDBNAME"] = database
 		}
