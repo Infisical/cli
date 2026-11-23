@@ -876,10 +876,11 @@ type GetSecretV4ByNameResponse struct {
 }
 
 type BootstrapInstanceRequest struct {
-	Email        string `json:"email"`
-	Password     string `json:"password"`
-	Organization string `json:"organization"`
-	Domain       string `json:"domain"`
+	Email           string `json:"email"`
+	Password        string `json:"password"`
+	Organization    string `json:"organization"`
+	Domain          string `json:"domain"`
+	ActivationToken string `json:"activationToken,omitempty"`
 }
 
 type BootstrapInstanceResponse struct {

@@ -155,6 +155,7 @@
     "project-id": "|string|"
   },
   "infisical bootstrap": {
+    "activation-token": "|string|",
     "domain": "|string|",
     "email": "|string|",
     "ignore-if-bootstrapped": "|bool|false",

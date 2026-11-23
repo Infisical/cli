@@ -8,8 +8,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
+	"net/http"
 	"text/template"
 
 	"github.com/Infisical/infisical-merge/packages/api"
@@ -18,7 +19,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -105,7 +106,7 @@ func handleK8SecretOutput(bootstrapResponse api.BootstrapInstanceResponse, k8Sec
 	// Check if secret already exists
 	existingSecret, err := secretsClient.Get(ctx, k8SecretName, metav1.GetOptions{})
 	if err != nil {
-		if errors.IsNotFound(err) {
+		if k8serrors.IsNotFound(err) {
 			// Secret doesn't exist, create it
 			_, err = secretsClient.Create(ctx, k8sSecret, metav1.CreateOptions{})
 			if err != nil {
@@ -128,6 +129,24 @@ func handleK8SecretOutput(bootstrapResponse api.BootstrapInstanceResponse, k8Sec
 	return nil
 }
 
+const instanceAlreadySetUpName = "SUPER_ADMIN_INSTANCE_ALREADY_SET_UP"
+
+func isInstanceAlreadySetUp(err error) bool {
+	var apiErr *api.APIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusBadRequest && apiErr.Name == instanceAlreadySetUpName
+}
+
+func requiredBootstrapInput(cmd *cobra.Command, flag string, envNames ...string) string {
+	value, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, flag, envNames, "")
+	if err != nil {
+		util.HandleError(err, fmt.Sprintf("Unable to parse flag --%s", flag))
+	}
+	if value == "" {
+		util.PrintErrorMessageAndExit(fmt.Sprintf("%s is required. Pass --%s or set %s.", flag, flag, envNames[0]))
+	}
+	return value
+}
+
 var bootstrapCmd = &cobra.Command{
 	Use:                   "bootstrap",
 	Short:                 "Used to bootstrap your Infisical instance",
@@ -135,128 +154,85 @@ var bootstrapCmd = &cobra.Command{
 	Example:               "infisical bootstrap",
 	Args:                  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
-		email, _ := cmd.Flags().GetString("email")
-		if email == "" {
-			if envEmail, ok := os.LookupEnv(util.INFISICAL_BOOTSTRAP_EMAIL_NAME); ok {
-				email = envEmail
-			}
-		}
+		email := requiredBootstrapInput(cmd, "email", util.INFISICAL_BOOTSTRAP_EMAIL_NAME)
+		password := requiredBootstrapInput(cmd, "password", util.INFISICAL_BOOTSTRAP_PASSWORD_NAME)
+		organization := requiredBootstrapInput(cmd, "organization", util.INFISICAL_BOOTSTRAP_ORGANIZATION_NAME)
+		domain := requiredBootstrapInput(cmd, "domain", util.DomainEnvNames...)
 
-		if email == "" {
-			log.Error().Msg("email is required")
-			return
-		}
-
-		password, _ := cmd.Flags().GetString("password")
-		if password == "" {
-			if envPassword, ok := os.LookupEnv(util.INFISICAL_BOOTSTRAP_PASSWORD_NAME); ok {
-				password = envPassword
-			}
-		}
-
-		if password == "" {
-			log.Error().Msg("password is required")
-			return
-		}
-
-		organization, _ := cmd.Flags().GetString("organization")
-		if organization == "" {
-			if envOrganization, ok := os.LookupEnv(util.INFISICAL_BOOTSTRAP_ORGANIZATION_NAME); ok {
-				organization = envOrganization
-			}
-		}
-
-		if organization == "" {
-			log.Error().Msg("organization is required")
-			return
-		}
-
-		domain, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "domain", util.DomainEnvNames, "")
+		activationToken, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "activation-token", []string{util.INFISICAL_BOOTSTRAP_ACTIVATION_TOKEN_NAME}, "")
 		if err != nil {
-			util.HandleError(err, "Unable to parse domain")
-		}
-
-		if domain == "" {
-			log.Error().Msg("domain is required")
-			return
+			util.HandleError(err, "Unable to parse flag --activation-token")
 		}
 
 		outputType, err := cmd.Flags().GetString("output")
 		if err != nil {
-			log.Error().Msgf("Failed to get output type: %v", err)
-			return
+			util.HandleError(err, "Unable to parse flag --output")
 		}
 
 		k8SecretTemplate, err := cmd.Flags().GetString("k8-secret-template")
 		if err != nil {
-			log.Error().Msgf("Failed to get k8-secret-template: %v", err)
+			util.HandleError(err, "Unable to parse flag --k8-secret-template")
 		}
 
 		k8SecretName, err := cmd.Flags().GetString("k8-secret-name")
 		if err != nil {
-			log.Error().Msgf("Failed to get k8-secret-name: %v", err)
+			util.HandleError(err, "Unable to parse flag --k8-secret-name")
 		}
 
 		k8SecretNamespace, err := cmd.Flags().GetString("k8-secret-namespace")
 		if err != nil {
-			log.Error().Msgf("Failed to get k8-secret-namespace: %v", err)
+			util.HandleError(err, "Unable to parse flag --k8-secret-namespace")
 		}
 
 		if outputType == "k8-secret" {
 			if k8SecretTemplate == "" {
-				log.Error().Msg("k8-secret-template is required when using k8-secret output type")
-				return
+				util.PrintErrorMessageAndExit("k8-secret-template is required when using k8-secret output type")
 			}
 
 			if k8SecretName == "" {
-				log.Error().Msg("k8-secret-name is required when using k8-secret output type")
-				return
+				util.PrintErrorMessageAndExit("k8-secret-name is required when using k8-secret output type")
 			}
 
 			if k8SecretNamespace == "" {
-				log.Error().Msg("k8-secret-namespace is required when using k8-secret output type")
-				return
+				util.PrintErrorMessageAndExit("k8-secret-namespace is required when using k8-secret output type")
 			}
 		}
 
 		httpClient, err := util.GetRestyClientWithCustomHeaders()
 		if err != nil {
-			log.Error().Msgf("Failed to get resty client with custom headers: %v", err)
-			return
+			util.HandleError(err, "Unable to create the HTTP client")
 		}
 
 		ignoreIfBootstrapped, err := cmd.Flags().GetBool("ignore-if-bootstrapped")
 		if err != nil {
-			log.Error().Msgf("Failed to get ignore-if-bootstrapped flag: %v", err)
-			return
+			util.HandleError(err, "Unable to parse flag --ignore-if-bootstrapped")
 		}
 
 		httpClient.SetHeader("Accept", "application/json")
 
 		bootstrapResponse, err := api.CallBootstrapInstance(httpClient, api.BootstrapInstanceRequest{
-			Domain:       util.AppendAPIEndpoint(domain),
-			Email:        email,
-			Password:     password,
-			Organization: organization,
+			Domain:          util.AppendAPIEndpoint(domain),
+			Email:           email,
+			Password:        password,
+			Organization:    organization,
+			ActivationToken: activationToken,
 		})
 
 		if err != nil {
-			if !ignoreIfBootstrapped {
-				log.Error().Msgf("Failed to bootstrap instance: %v", err)
+			if ignoreIfBootstrapped && isInstanceAlreadySetUp(err) {
+				return
 			}
-			return
+			util.HandleError(err, "Failed to bootstrap instance")
 		}
 
 		if outputType == "k8-secret" {
 			if err := handleK8SecretOutput(bootstrapResponse, k8SecretTemplate, k8SecretName, k8SecretNamespace); err != nil {
-				log.Error().Msgf("Failed to handle k8-secret output: %v", err)
-				return
+				util.HandleError(err, "Failed to handle k8-secret output")
 			}
 		} else {
 			responseJSON, err := json.MarshalIndent(bootstrapResponse, "", "  ")
 			if err != nil {
-				log.Fatal().Msgf("Failed to convert response to JSON: %v", err)
-				return
+				util.HandleError(err, "Failed to convert response to JSON")
 			}
 
 			util.PrintlnStdout(string(responseJSON))
@@ -271,6 +247,7 @@ func init() {
 	bootstrapCmd.Flags().String("organization", "", "The name of the organization to create for the instance")
 	bootstrapCmd.Flags().String("output", "", "The type of output to use for the bootstrap command (json or k8-secret)")
 	bootstrapCmd.Flags().Bool("ignore-if-bootstrapped", false, "Whether to continue on error if the instance has already been bootstrapped")
+	bootstrapCmd.Flags().String("activation-token", "", "The initial setup activation token, required when the instance sets INITIAL_SETUP_ACTIVATION_TOKEN")
 	bootstrapCmd.Flags().String("k8-secret-template", "{\"data\":{\"token\":\"{{.Identity.Credentials.Token}}\"}}", "The template to use for rendering the Kubernetes secret (entire secret JSON)")
 	bootstrapCmd.Flags().String("k8-secret-namespace", "", "The namespace to create the Kubernetes secret in")
 	bootstrapCmd.Flags().String("k8-secret-name", "", "The name of the Kubernetes secret to create")
