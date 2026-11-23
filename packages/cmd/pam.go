@@ -76,6 +76,12 @@ Connecting through the proxy:
 Without '--', SSH accounts open a shell and every other type starts a local proxy (or
 credential helper) for your own client until you stop it.
 
+To use several accounts at once, such as copying data between two databases, start a
+proxy for each in the background, each on its own --port, then stop each with kill to
+end its session:
+  infisical pam access prod/orders-db --port 15432 < /dev/null > orders-db.log 2>&1 &
+  infisical pam access staging/orders-db --port 15433 < /dev/null > staging-db.log 2>&1 &
+
 Without a terminal, nothing prompts. An account that needs approval gets an access request
 filed with --reason and --duration, and the command exits with an error saying it's
 waiting for approval. An account that requires MFA exits with an error that has a link a
