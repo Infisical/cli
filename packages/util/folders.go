@@ -48,9 +48,11 @@ func GetAllFolders(params models.GetAllFoldersParameters) ([]models.SingleFolder
 	} else if params.UniversalAuthAccessToken != "" {
 		log.Debug().Msg("GetAllFolders: Trying to fetch folders using universal auth")
 
-		if params.WorkspaceId == "" {
-			PrintErrorMessageAndExit("Project ID is required when using machine identity")
+		workspaceId, err := ResolveMachineIdentityWorkspaceId(params.WorkspaceId, "")
+		if err != nil {
+			PrintErrorMessageAndExit(err.Error())
 		}
+		params.WorkspaceId = workspaceId
 
 		// get folders via machine identity
 		folders, err := GetFoldersViaMachineIdentity(params.UniversalAuthAccessToken, params.WorkspaceId, params.Environment, params.FoldersPath)
