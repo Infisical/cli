@@ -330,8 +330,8 @@ func capToCertificateExpiry(certPEM string, expiry time.Time) time.Time {
 }
 
 func runLocalChild(command []string, env []string, expiry time.Time, interrupts *interruptWatch) (int, error) {
-	// A terminal's Ctrl+C already reaches a child in the foreground group, so SIGINT is only forwarded
-	// when no stream is a terminal. Catching signals keeps this process alive to end the session.
+	// A terminal's Ctrl+C already reaches a child in the foreground group, so SIGINT is forwarded only
+	// when the child has its own group or no stream is a terminal.
 	ownGroup := !hasControllingTerminal()
 	forwardInterrupt := ownGroup || (!isatty.IsTerminal(os.Stdin.Fd()) && !isatty.IsTerminal(os.Stdout.Fd()) && !isatty.IsTerminal(os.Stderr.Fd()))
 
@@ -529,7 +529,7 @@ func localCommandEnv(response *api.PAMAccessResponse, port int, tempDir string, 
 		EnvPAMPort: portStr,
 	}
 	// The proxy injects the real credential, and some protocols refuse a supplied one.
-	unset := map[string]bool{"PGPASSWORD": true, "MYSQL_PWD": true, "SQLCMDPASSWORD": true}
+	unset := map[string]bool{"PGPASSWORD": true, "MYSQL_PWD": true}
 
 	if display, ok := ConnectionDisplayFor(response.AccountType); ok {
 		if url := display.Connection(username, database, port); url != "" {
