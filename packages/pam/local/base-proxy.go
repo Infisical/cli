@@ -42,13 +42,10 @@ type LiveSession struct {
 	Expiry                 time.Time
 }
 
-// SessionProvider supplies the live session a proxy dials through. The interactive proxies don't
-// set one and fall back to the fields on BaseProxyServer.
+// SessionProvider supplies the open session a one-shot command's loopback proxy dials through. The
+// interactive proxies don't set one and use the fields on BaseProxyServer.
 type SessionProvider interface {
-	// Ensure returns the live session, creating one if there is not already a usable one.
 	Ensure(ctx context.Context) (LiveSession, error)
-	// Current returns the live session without creating one. Termination paths use this so
-	// that shutting down an untouched proxy doesn't create a session just to end it.
 	Current() (LiveSession, bool)
 }
 
@@ -73,7 +70,7 @@ type BaseProxyServer struct {
 	shutdownOnce           sync.Once
 	shutdownCh             chan struct{}
 
-	// provider, when set, resolves the session lazily instead of using the fields above.
+	// provider, when set, supplies the session instead of the fields above.
 	provider SessionProvider
 	// keepProcessAlive suppresses the os.Exit(0) at the end of graceful shutdown, for a proxy
 	// that serves a command this process still has to wait for.

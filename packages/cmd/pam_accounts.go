@@ -50,8 +50,9 @@ func buildPAMAccountsCmd() *cobra.Command {
 		Use:   "get [folder | folder/account]",
 		Short: "List the PAM accounts you can access, or show one",
 		Long: `List the PAM accounts you can access, with whether each is ready to use, needs
-approval, or has a request pending. Name a folder to list only its accounts, or name one
-account to see how to connect to it.
+approval, or has a request pending. Name a folder to list only its accounts, name one
+account (folder/account) to see how to connect to it, or give a bare account name to find
+it in any folder.
 
 ACCESS is one of:
   ready           run 'infisical pam access <folder/account>' now
@@ -84,7 +85,7 @@ func runPAMAccountsGet(cmd *cobra.Command, args []string) {
 	if len(args) == 1 && !strings.HasSuffix(strings.TrimSpace(args[0]), "/") {
 		account, found, err := pam.LookupAccessibleAccount(httpClient, args[0])
 		if err != nil {
-			exitWithError(cmd, classifyPAMAPIError(err, "", pamDeniedList), "Unable to look up the PAM account")
+			exitWithError(cmd, classifyPAMAPIError(err, "", pamDeniedList, machineIdentity), "Unable to look up the PAM account")
 		}
 		if found {
 			view := newPAMAccountView(account, machineIdentity)
@@ -103,12 +104,16 @@ func runPAMAccountsGet(cmd *cobra.Command, args []string) {
 
 	accounts, err := pam.ListAccessibleAccounts(httpClient, "")
 	if err != nil {
-		exitWithError(cmd, classifyPAMAPIError(err, "", pamDeniedList), "Unable to list PAM accounts")
+		exitWithError(cmd, classifyPAMAPIError(err, "", pamDeniedList, machineIdentity), "Unable to list PAM accounts")
 	}
 
 	if len(args) == 1 {
-		folder := strings.Trim(strings.TrimSpace(args[0]), "/")
-		accounts = pam.FilterAccountsByFolder(accounts, folder)
+		name := strings.Trim(strings.TrimSpace(args[0]), "/")
+		matched := pam.FilterAccountsByFolder(accounts, name)
+		if len(matched) == 0 && !strings.Contains(name, "/") {
+			matched = pam.FilterAccountsByName(accounts, name)
+		}
+		accounts = matched
 		if len(accounts) == 0 {
 			exitWithError(cmd, errPAMAccountOrFolderNotFound(args[0]))
 		}
@@ -159,6 +164,10 @@ func newPAMAccountView(account api.PAMAccessibleAccount, machineIdentity bool) p
 	switch {
 	case !account.CanLaunch:
 		view.Access = pamAccessUnavailable
+		if view.DisabledReason == nil || strings.TrimSpace(*view.DisabledReason) == "" {
+			reason := pamDeniedLaunch
+			view.DisabledReason = &reason
+		}
 	case account.DisabledReason != nil && strings.TrimSpace(*account.DisabledReason) != "":
 		view.Access = pamAccessUnavailable
 	case machineIdentity && account.RequireMfa:
@@ -175,7 +184,9 @@ func newPAMAccountView(account api.PAMAccessibleAccount, machineIdentity bool) p
 		view.Access = pamAccessNeedsApproval
 	}
 
-	view.Example = pamExampleCommand(view)
+	if view.Access != pamAccessUnavailable {
+		view.Example = pamExampleCommand(view)
+	}
 	return view
 }
 
@@ -274,6 +285,10 @@ func printPAMAccountDetails(view pamAccountView) {
 	}
 	isWindows := view.Type == pam.AccountTypeWindows || view.Type == pam.AccountTypeWindowsAd
 
+	if view.Example == "" {
+		util.PrintStdout(strings.Join(lines, "\n") + "\n")
+		return
+	}
 	lines = append(lines, "", "Connect:", "  "+view.Example)
 	if isWindows {
 		lines = append(lines, "", "This starts an RDP proxy in the background. Open the .rdp file named in infisical-rdp.log with an RDP client; the password is left blank. Stop the CLI with kill to end the session.")

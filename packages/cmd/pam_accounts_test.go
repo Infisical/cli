@@ -17,7 +17,7 @@ func TestNewPAMAccountViewAccess(t *testing.T) {
 		reason          string
 	}{
 		{"ready", api.PAMAccessibleAccount{CanLaunch: true}, false, pamAccessReady, ""},
-		{"no launch", api.PAMAccessibleAccount{}, false, pamAccessUnavailable, ""},
+		{"no launch", api.PAMAccessibleAccount{}, false, pamAccessUnavailable, "permission to launch"},
 		{"no approvers", api.PAMAccessibleAccount{CanLaunch: true, RequiresApproval: true, DisabledReason: &noApprovers}, false, pamAccessUnavailable, "no approvers"},
 		{"needs approval", api.PAMAccessibleAccount{CanLaunch: true, RequiresApproval: true}, false, pamAccessNeedsApproval, ""},
 		{"mfa user", api.PAMAccessibleAccount{CanLaunch: true, RequireMfa: true}, false, pamAccessReady, ""},
@@ -32,6 +32,9 @@ func TestNewPAMAccountViewAccess(t *testing.T) {
 			}
 			if tc.reason != "" && (view.DisabledReason == nil || !strings.Contains(*view.DisabledReason, tc.reason)) {
 				t.Fatalf("reason = %v, want it to mention %q", view.DisabledReason, tc.reason)
+			}
+			if (view.Access == pamAccessUnavailable) != (view.Example == "") {
+				t.Fatalf("example = %q for access %q; only unavailable accounts have none", view.Example, view.Access)
 			}
 		})
 	}

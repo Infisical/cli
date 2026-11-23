@@ -84,14 +84,18 @@ func MFAChallengeFrom(err error) (MFAChallenge, bool) {
 	return challenge, challenge.SessionID != ""
 }
 
-func RaiseAccessRequest(httpClient *resty.Client, path, reason string, duration time.Duration) (string, error) {
+const accessRequestStatusApproved = "approved"
+
+// RaiseAccessRequest files an access request. approved is true when an auto-approval rule granted it
+// on submission, so the caller can connect at once.
+func RaiseAccessRequest(httpClient *resty.Client, path, reason string, duration time.Duration) (requestID string, approved bool, err error) {
 	response, err := api.CallPAMCreateAccessRequest(httpClient, api.PAMCreateAccessRequestBody{
 		Path:     path,
 		Reason:   reason,
 		Duration: APIDuration(duration),
 	})
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	return response.Request.ID, nil
+	return response.Request.ID, response.Request.Status == accessRequestStatusApproved, nil
 }

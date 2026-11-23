@@ -107,7 +107,16 @@ func (w *interruptWatch) exit(sig os.Signal) {
 func watchInterrupts() *interruptWatch {
 	w := &interruptWatch{signals: make(chan os.Signal, 1), done: make(chan struct{}), stopped: make(chan struct{}), torndown: make(chan struct{})}
 	w.ctx, w.cancel = context.WithCancel(context.Background())
-	signal.Notify(w.signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	// Notify un-ignores a signal, so one ignored at startup (nohup) would reach the command again.
+	var watched []os.Signal
+	for _, sig := range []os.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP} {
+		if !signal.Ignored(sig) {
+			watched = append(watched, sig)
+		}
+	}
+	if len(watched) > 0 {
+		signal.Notify(w.signals, watched...)
+	}
 	go func() {
 		defer close(w.stopped)
 		select {
@@ -342,6 +351,7 @@ func runLocalChild(command []string, env []string, expiry time.Time, interrupts 
 		startInOwnGroup(child)
 	}
 	if err := child.Start(); err != nil {
+		interrupts.commandFinished()
 		return 127, &CommandStartError{Command: command[0], Err: err}
 	}
 
@@ -539,7 +549,7 @@ func localCommandEnv(response *api.PAMAccessResponse, port int, tempDir string, 
 
 	switch response.AccountType {
 	case AccountTypePostgres, AccountTypeCockroachDB:
-		unset["PGHOSTADDR"] = true
+		unset["PGHOSTADDR"], unset["PGSERVICE"] = true, true
 		set["PGHOST"], set["PGPORT"], set["PGUSER"] = "127.0.0.1", portStr, username
 		set["PGSSLMODE"] = "disable"
 		if database != "" {

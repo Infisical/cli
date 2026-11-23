@@ -1056,6 +1056,7 @@ type PAMAccessApprovalRequestResponse struct {
 		ID        string `json:"id"`
 		ProjectId string `json:"projectId"`
 		OrgId     string `json:"organizationId"`
+		Status    string `json:"status"`
 	} `json:"request"`
 }
 
@@ -1070,6 +1071,7 @@ type PAMCreateAccessRequestResponse struct {
 		ID        string `json:"id"`
 		ProjectId string `json:"projectId"`
 		OrgId     string `json:"organizationId"`
+		Status    string `json:"status"`
 	} `json:"request"`
 }
 

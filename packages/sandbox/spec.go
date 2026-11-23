@@ -18,9 +18,8 @@ const (
 	// HardFence: no external egress, the proxy is the only route out (macOS (deny default) SBPL;
 	// Linux empty netns bridged to the proxy socket).
 	HardFence NetMode = iota
-	// SharedNet shares the host network: the Linux fallback when a network namespace is unavailable,
-	// and the choice for callers with no forward proxy to route through. Only the network fence
-	// weakens; the credential controls are unchanged.
+	// SharedNet shares the host network: the Linux fallback when a network namespace is unavailable.
+	// Only the network fence weakens; the credential controls are unchanged.
 	SharedNet
 )
 

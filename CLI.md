@@ -129,6 +129,7 @@ For a new command, add the flags with `addConfirmFlags(cmd)`, then call `confirm
 ## Backwards compatibility
 
 - **Never remove or rename a command or a flag.** Hide it instead: `Hidden: true` on a command, or `MarkHidden` plus `MarkDeprecated` on a flag (see `--enrollment-token` in `packages/cmd/agent_vault.go`). It keeps working but leaves `--help`.
+- **Retiring a command** that can't keep working (its feature was removed): keep it hidden, accept its old flags and arguments (`FParseErrWhitelist` for unknown flags), and make it exit with `command_removed` and the replacement. See `pam agentic access` in `packages/cmd/pam.go`.
 - **Never change a flag's short form, type, or default.**
 - Don't hide a command before its replacement ships. A release can be cut at any commit.
 - Don't add subcommands to the legacy top-level `secrets`, `run`, `export`, and `dynamic-secrets` commands. New Secrets Management commands go under `secrets-manager`.

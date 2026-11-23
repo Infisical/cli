@@ -55,7 +55,16 @@ func ListAccessibleAccounts(httpClient *resty.Client, search string) ([]api.PAMA
 	return all, nil
 }
 
-// FindAccessibleAccount matches a path case-insensitively, with or without a leading slash.
+func FilterAccountsByName(accounts []api.PAMAccessibleAccount, name string) []api.PAMAccessibleAccount {
+	var matched []api.PAMAccessibleAccount
+	for _, account := range accounts {
+		if strings.EqualFold(account.Name, name) {
+			matched = append(matched, account)
+		}
+	}
+	return matched
+}
+
 func FilterAccountsByFolder(accounts []api.PAMAccessibleAccount, folder string) []api.PAMAccessibleAccount {
 	var matched []api.PAMAccessibleAccount
 	for _, account := range accounts {
@@ -81,6 +90,7 @@ func LookupAccessibleAccount(httpClient *resty.Client, path string) (api.PAMAcce
 	return account, found, nil
 }
 
+// FindAccessibleAccount matches a path case-insensitively, with or without a leading slash.
 func FindAccessibleAccount(accounts []api.PAMAccessibleAccount, path string) (api.PAMAccessibleAccount, bool) {
 	key := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(path), "/"))
 	for _, account := range accounts {

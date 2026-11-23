@@ -19,7 +19,8 @@ var pamCmd = &cobra.Command{
 	Short: "Connect to accounts managed by Infisical PAM",
 	Long: `Connect to databases, servers and clusters managed by Infisical Privileged Access
 Management (PAM). Credentials never reach your machine: the Infisical Gateway adds them
-to the connection, and every session is recorded.
+to the connection, and every session is recorded. AWS IAM accounts without a Gateway are
+the exception: they get temporary credentials on this machine.
 
 The same commands work for people and AI agents:
 
@@ -128,7 +129,7 @@ func runPAMAccess(cmd *cobra.Command, args []string) {
 		util.PrintErrorMessageAndExit("--proxy starts a local proxy for your own client, so it cannot also run a command. Drop one of the two.")
 	}
 
-	accessToken, stopAuth, _ := resolvePAMAccessToken(cmd)
+	accessToken, stopAuth, machineIdentity := resolvePAMAccessToken(cmd)
 	defer stopAuth()
 	httpClient := newPAMHTTPClient(accessToken)
 
@@ -142,12 +143,19 @@ func runPAMAccess(cmd *cobra.Command, args []string) {
 		Command:      command,
 		MfaSessionId: mfaSessionID,
 	}
-	invocation := pamAccessInvocation{Path: path, HasCommand: len(command) > 0}
+	invocation := pamAccessInvocation{Path: path, HasCommand: len(command) > 0, Reason: strings.TrimSpace(reason), Duration: duration, Interactive: stdinIsTerminal()}
+	failure := pamAccessFailure{opts: opts, invocation: invocation, duration: duration, noApprovalRequest: noApprovalRequest, machineIdentity: machineIdentity}
 
 	response, err := pam.OpenSession(httpClient, opts, true)
 	if err != nil {
-		handlePAMAccessError(cmd, httpClient, err, opts, invocation, duration, noApprovalRequest)
-		return
+		if !handlePAMAccessError(cmd, httpClient, err, failure) {
+			return
+		}
+		response, err = pam.OpenSession(httpClient, opts, true)
+		if err != nil {
+			handlePAMAccessError(cmd, httpClient, err, failure)
+			return
+		}
 	}
 
 	if len(command) > 0 && response.AccountType != pam.AccountTypeSSH {
@@ -179,34 +187,50 @@ func runPAMAccess(cmd *cobra.Command, args []string) {
 	pam.RunAccess(httpClient, response, opts)
 }
 
-// handlePAMAccessError reports why a session couldn't be created. In a terminal an approval gate
-// still offers to file a request; without one, the request is filed (unless --no-approval-request)
-// and the error says what to wait for.
-func handlePAMAccessError(cmd *cobra.Command, httpClient *resty.Client, err error, opts pam.AccessOptions, invocation pamAccessInvocation, duration time.Duration, noApprovalRequest bool) {
+type pamAccessFailure struct {
+	opts              pam.AccessOptions
+	invocation        pamAccessInvocation
+	duration          time.Duration
+	noApprovalRequest bool
+	machineIdentity   bool
+}
+
+// handlePAMAccessError exits with why a session couldn't be created. It returns true only when an
+// auto-approval rule approved the request it filed, so the caller can open the session.
+func handlePAMAccessError(cmd *cobra.Command, httpClient *resty.Client, err error, f pamAccessFailure) bool {
+	opts, invocation := f.opts, f.invocation
 	if gate, ok := pam.ApprovalGateFrom(err); ok {
 		switch {
 		case !gate.HasApprovalPolicy:
 			exitWithError(cmd, errPAMApprovalNotConfigured(invocation))
 		case gate.HasPendingRequest:
 			exitWithError(cmd, errPAMApprovalPending(invocation, "", gate.Expired))
-		case noApprovalRequest:
+		case f.noApprovalRequest:
 			exitWithError(cmd, errPAMApprovalRequired(invocation))
 		}
 
-		if stdinIsTerminal() && pam.PromptAccessRequest(httpClient, err, opts) {
-			if invocation.HasCommand {
-				os.Exit(1)
+		if stdinIsTerminal() {
+			if handled, approved := pam.PromptAccessRequest(httpClient, err, opts); handled {
+				if approved {
+					return true
+				}
+				if invocation.HasCommand {
+					os.Exit(1)
+				}
+				return false
 			}
-			return
 		}
 
 		if gate.RequireReason && strings.TrimSpace(opts.Reason) == "" {
 			exitWithError(cmd, errPAMReasonRequired(invocation, true))
 		}
 
-		requestID, requestErr := pam.RaiseAccessRequest(httpClient, opts.Path, strings.TrimSpace(opts.Reason), duration)
+		requestID, approved, requestErr := pam.RaiseAccessRequest(httpClient, opts.Path, strings.TrimSpace(opts.Reason), f.duration)
 		if requestErr != nil {
-			exitWithError(cmd, classifyPAMAPIError(requestErr, opts.Path, pamDeniedRequest), "Failed to file an access request")
+			exitWithError(cmd, classifyPAMAPIError(requestErr, opts.Path, pamDeniedRequest, f.machineIdentity), "Failed to file an access request")
+		}
+		if approved {
+			return true
 		}
 		exitWithError(cmd, errPAMApprovalPending(invocation, requestID, gate.Expired))
 	}
@@ -219,18 +243,24 @@ func handlePAMAccessError(cmd *cobra.Command, httpClient *resty.Client, err erro
 		exitWithError(cmd, errPAMMFARequired(invocation, challenge.URL(), challenge.SessionID))
 	}
 
-	exitWithError(cmd, classifyPAMAPIError(err, opts.Path, pamDeniedLaunch), "Failed to create PAM session")
+	exitWithError(cmd, classifyPAMAPIError(err, opts.Path, pamDeniedLaunch, f.machineIdentity), "Failed to create PAM session")
+	return false
 }
 
 // classifyPAMAPIError reads only the status code and the error names the backend guarantees.
-func classifyPAMAPIError(err error, path string, denied string) error {
+func classifyPAMAPIError(err error, path string, denied string, machineIdentity bool) error {
 	var apiErr *api.APIError
 	if !errors.As(err, &apiErr) {
 		return err
 	}
 	switch {
 	case apiErr.StatusCode == 401, apiErr.StatusCode == 403 && apiErr.Name == "TokenError":
+		if machineIdentity {
+			return errPAMTokenRejected(err)
+		}
 		return errPAMAuthRequired(err)
+	case apiErr.StatusCode == 403 && apiErr.Name == "ProjectMembershipNotFound":
+		return errPAMNotMember(err, machineIdentity)
 	case apiErr.StatusCode == 403 && apiErr.Name == "PermissionDenied":
 		return errPAMPermissionDenied(err, denied)
 	case apiErr.StatusCode == 404 && path != "":
@@ -239,9 +269,20 @@ func classifyPAMAPIError(err error, path string, denied string) error {
 	return err
 }
 
+var pamExtraTypeLabels = map[string]string{
+	pam.AccountTypeSnowflake:         "Snowflake",
+	pam.AccountTypeAwsIam:            "AWS IAM",
+	pam.AccountTypeGcpServiceAccount: "GCP service account",
+	pam.AccountTypeAzureCli:          "Azure",
+	pam.AccountTypeWindowsAd:         "Windows AD",
+}
+
 func pamTypeLabel(accountType string) string {
 	if display, ok := pam.ConnectionDisplayFor(accountType); ok && display.TypeLabel != "" {
 		return display.TypeLabel
+	}
+	if label, ok := pamExtraTypeLabels[accountType]; ok {
+		return label
 	}
 	return accountType
 }

@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
+	"github.com/Infisical/infisical-merge/packages/models"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 	infisicalSdk "github.com/infisical/go-sdk"
@@ -16,9 +19,16 @@ import (
 
 const pamAuthMethods = "universal-auth, kubernetes, azure, gcp-id-token, gcp-iam, aws-iam, oidc-auth, jwt-auth, ldap-auth"
 
+const pamAuthAnnotation = "infisical.pamAuth"
+
 // addPAMAuthFlags declares every input the machine identity handlers read: GetCmdFlagOrEnv fails on
 // an undeclared flag, which would make the environment variable fallbacks unreachable.
 func addPAMAuthFlags(cmd *cobra.Command) {
+	if cmd.Annotations == nil {
+		cmd.Annotations = map[string]string{}
+	}
+	cmd.Annotations[serviceTokenAnnotation] = serviceTokenUnsupported[serviceTokenAnnotation]
+	cmd.Annotations[pamAuthAnnotation] = "true"
 	cmd.Flags().String("token", "", "Authenticate as a machine identity using its access token")
 	cmd.Flags().String("auth-method", "", "Authenticate as a machine identity with its own credentials instead of a ready-made --token ["+pamAuthMethods+"]")
 	cmd.Flags().String("client-id", "", "Client id for universal auth")
@@ -32,15 +42,56 @@ func addPAMAuthFlags(cmd *cobra.Command) {
 	cmd.Flags().String("organization-slug", "", "Scope the session to this sub-organization the machine identity can reach. Defaults to the organization the identity was created in")
 }
 
-// A machine identity wins over the stored user login; without a terminal nothing interactive starts.
+func usesPAMAuth(cmd *cobra.Command) bool {
+	return cmd.Annotations[pamAuthAnnotation] != ""
+}
+
+// pamToken is GetInfisicalToken without the generic TOKEN variable, which belongs to the gateway Helm
+// chart and would otherwise be sent to Infisical as a bearer token.
+func pamToken(cmd *cobra.Command) *models.TokenDetails {
+	candidates := []struct{ value, source string }{}
+	if value, _ := cmd.Flags().GetString("token"); value != "" {
+		candidates = append(candidates, struct{ value, source string }{value, "--token flag"})
+	}
+	for _, name := range []string{util.INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN_NAME, util.INFISICAL_TOKEN_NAME} {
+		if value := os.Getenv(name); value != "" {
+			candidates = append(candidates, struct{ value, source string }{value, name + " environment variable"})
+		}
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	first := candidates[0]
+	tokenType := util.UNIVERSAL_AUTH_TOKEN_IDENTIFIER
+	if strings.HasPrefix(first.value, "st.") {
+		tokenType = util.SERVICE_TOKEN_IDENTIFIER
+	}
+	return &models.TokenDetails{Type: tokenType, Token: first.value, Source: first.source}
+}
+
+// pamTokenInUse is the token resolvePAMAccessToken will use, or nil when an explicit --auth-method
+// takes precedence over a token from the environment.
+func pamTokenInUse(cmd *cobra.Command) *models.TokenDetails {
+	if !cmd.Flags().Changed("token") && cmd.Flags().Changed("auth-method") {
+		return nil
+	}
+	return pamToken(cmd)
+}
+
+// Precedence: --token, then an explicit --auth-method, then a token from the environment, then
+// INFISICAL_AUTH_METHOD, then the stored user login. Without a terminal nothing interactive starts.
 func resolvePAMAccessToken(cmd *cobra.Command) (accessToken func() string, stop func(), machineIdentity bool) {
-	token, err := util.GetInfisicalToken(cmd)
-	if err != nil {
-		util.HandleError(err, "Unable to parse token")
+	token := pamToken(cmd)
+	explicitToken := cmd.Flags().Changed("token")
+
+	if !explicitToken && cmd.Flags().Changed("auth-method") {
+		if source, stopAuth := authenticateMachineIdentity(cmd); source != nil {
+			return source, stopAuth, true
+		}
 	}
 
 	// A service token exported for other commands mustn't hijack PAM; only an explicit one is an error.
-	if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER && !cmd.Flags().Changed("token") {
+	if token != nil && token.Type == util.SERVICE_TOKEN_IDENTIFIER && !explicitToken {
 		token = nil
 	}
 
@@ -48,7 +99,7 @@ func resolvePAMAccessToken(cmd *cobra.Command) (accessToken func() string, stop 
 		if token.Type == util.SERVICE_TOKEN_IDENTIFIER {
 			exitWithError(cmd, errPAMServiceToken())
 		}
-		if !cmd.Flags().Changed("token") && errorOutputFormat(cmd) == "" {
+		if !explicitToken && errorOutputFormat(cmd) == "" {
 			printProjectsTip(cmd, fmt.Sprintf("Using the machine identity token from the %s.", token.Source))
 		}
 		if exp, ok := jwtExpiry(token.Token); ok && exp.Before(time.Now()) {
@@ -74,7 +125,7 @@ func resolvePAMAccessToken(cmd *cobra.Command) (accessToken func() string, stop 
 		exitWithError(cmd, errPAMAuthRequired(err))
 	}
 	if err != nil {
-		util.HandleError(err, "Unable to get logged in user details")
+		exitWithError(cmd, errPAMLoginUnreadable(err))
 	}
 
 	if loggedInUserDetails.LoginExpired && util.ValidateInfisicalAPIConnection() {
@@ -110,7 +161,7 @@ func newPAMHTTPClient(accessToken func() string) *resty.Client {
 func authenticateMachineIdentity(cmd *cobra.Command) (accessToken func() string, stop func()) {
 	authMethod, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "auth-method", []string{util.INFISICAL_AUTH_METHOD_NAME}, "")
 	if err != nil {
-		util.HandleError(err, "Unable to parse auth-method flag")
+		exitWithError(cmd, errPAMInvalidAuthMethod(""))
 	}
 
 	if authMethod == "" || authMethod == "user" {
@@ -119,12 +170,12 @@ func authenticateMachineIdentity(cmd *cobra.Command) (accessToken func() string,
 
 	valid, strategy := util.IsAuthMethodValid(authMethod, false)
 	if !valid {
-		util.PrintErrorMessageAndExit(fmt.Sprintf("Invalid auth method %s. Supported: %s.", quoted(authMethod, "auth method"), pamAuthMethods))
+		exitWithError(cmd, errPAMInvalidAuthMethod(authMethod))
 	}
 
 	customHeaders, err := util.GetInfisicalCustomHeadersMap()
 	if err != nil {
-		util.HandleError(err, "Unable to get custom headers")
+		exitWithError(cmd, errPAMMachineIdentityLogin(authMethod, err))
 	}
 
 	// AutoTokenRefresh stays on: a session can outlive the first token, and callers read the current
@@ -153,17 +204,17 @@ func authenticateMachineIdentity(cmd *cobra.Command) (accessToken func() string,
 	login, supported := strategies[strategy]
 	if !supported {
 		cancel()
-		util.PrintErrorMessageAndExit(fmt.Sprintf("Auth method %q is not supported here. Supported: %s.", authMethod, pamAuthMethods))
+		exitWithError(cmd, errPAMInvalidAuthMethod(authMethod))
 	}
 
 	credential, err := login()
 	if err != nil {
 		cancel()
-		util.HandleError(err, fmt.Sprintf("Unable to authenticate with %s", authMethod))
+		exitWithError(cmd, errPAMMachineIdentityLogin(authMethod, err))
 	}
 	if credential.AccessToken == "" {
 		cancel()
-		util.PrintErrorMessageAndExit(fmt.Sprintf("Authenticating with %s returned no access token.", authMethod))
+		exitWithError(cmd, errPAMMachineIdentityLogin(authMethod, errors.New("no access token was returned")))
 	}
 
 	// The client's getter returns whatever the refresh goroutine last renewed to.

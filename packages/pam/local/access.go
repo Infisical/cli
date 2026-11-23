@@ -104,12 +104,12 @@ func OpenSession(httpClient *resty.Client, opts AccessOptions, interactive bool)
 	return &response, nil
 }
 
-// PromptAccessRequest offers to file an access request when err is an approval gate. Only for a
-// terminal. Returns false when err is not an approval gate.
-func PromptAccessRequest(httpClient *resty.Client, err error, opts AccessOptions) bool {
+// PromptAccessRequest offers a terminal user an access request for an approval gate. approved
+// means an auto-approval rule granted it on submission.
+func PromptAccessRequest(httpClient *resty.Client, err error, opts AccessOptions) (handled, approved bool) {
 	duration, parseErr := time.ParseDuration(opts.Duration)
 	if parseErr != nil {
-		return false
+		return false, false
 	}
 	return handleApprovalRequired(httpClient, err, opts.Path, opts.Reason, APIDuration(duration))
 }
@@ -174,10 +174,10 @@ func NewLiveSession(response *api.PAMAccessResponse, expiry time.Time) LiveSessi
 // handleApprovalRequired intercepts the PAM_APPROVAL_REQUIRED gate. In an interactive terminal it
 // offers to submit an access request for the account; otherwise it prints guidance. Returns true when
 // the error was an approval-required error (handled here), false to let normal error handling proceed.
-func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, durationStr string) bool {
+func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, durationStr string) (handled, approved bool) {
 	var apiErr *api.APIError
 	if !errors.As(err, &apiErr) || (apiErr.Name != approvalRequiredErrorName && apiErr.Name != grantExpiredErrorName) {
-		return false
+		return false, false
 	}
 
 	expired := apiErr.Name == grantExpiredErrorName
@@ -202,13 +202,13 @@ func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, d
 	// Requesting would only hit a no-approvers error, so explain the misconfiguration instead
 	if !hasApprovalPolicy {
 		util.PrintErrorMessageAndExit("This account requires approval, but its folder has no approvers configured yet. Ask a folder admin to add approvers under the folder's Approvals tab.")
-		return true
+		return true, false
 	}
 
 	// Submitting again would only hit the duplicate-request error, so point at the existing one
 	if hasPendingRequest {
 		util.PrintErrorMessageAndExit("Your access request for this account is awaiting approval. You'll be able to launch a session once it's approved.")
-		return true
+		return true, false
 	}
 
 	// Non-interactive callers (CI, scripts) must see a non-zero exit since no session was created
@@ -218,7 +218,7 @@ func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, d
 		} else {
 			util.PrintErrorMessageAndExit("This account requires approval. Request access from the Infisical dashboard (PAM > My Access).")
 		}
-		return true
+		return true, false
 	}
 
 	if expired {
@@ -235,7 +235,7 @@ func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, d
 			util.PrintErrorMessageAndExit("Access request cancelled")
 		}
 		log.Info().Msg("No access request created.")
-		return true
+		return true, false
 	}
 
 	requestReason := reason
@@ -262,22 +262,27 @@ func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, d
 				util.PrintErrorMessageAndExit("Access request cancelled")
 			}
 			log.Info().Msg("No access request created.")
-			return true
+			return true, false
 		}
 		requestReason = strings.TrimSpace(reasonInput)
 	}
 
-	if _, reqErr := api.CallPAMCreateAccessRequest(httpClient, api.PAMCreateAccessRequestBody{
+	created, reqErr := api.CallPAMCreateAccessRequest(httpClient, api.PAMCreateAccessRequestBody{
 		Path:     path,
 		Reason:   requestReason,
 		Duration: durationStr,
-	}); reqErr != nil {
+	})
+	if reqErr != nil {
 		util.HandleError(reqErr, "Failed to submit access request")
-		return true
+		return true, false
+	}
+	if created.Request.Status == accessRequestStatusApproved {
+		log.Info().Msg("Access request approved automatically. Connecting.")
+		return true, true
 	}
 
 	log.Info().Msg("Access request submitted. You'll be able to launch a session once it's approved.")
-	return true
+	return true, false
 }
 
 // AccountConnectionDisplay describes how a client reaches one account type through a local proxy.

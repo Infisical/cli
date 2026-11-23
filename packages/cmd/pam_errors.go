@@ -54,12 +54,19 @@ func pamIsAccountPath(path string) bool {
 type pamAccessInvocation struct {
 	Path       string
 	HasCommand bool
+	Reason     string
+	Duration   time.Duration
+	// Interactive is true when a person is at a terminal, so agent-only guidance is left out.
+	Interactive bool
 }
 
 func (i pamAccessInvocation) accessCommand(extra string) string {
 	line := pamPrefix + " access " + pamAccountArg(i.Path)
 	if extra != "" {
 		line += " " + extra
+	}
+	if i.Reason != "" && !strings.Contains(extra, "--reason") {
+		line += " --reason \"" + util.SuggestedValue(i.Reason, "reason") + "\""
 	}
 	if i.HasCommand {
 		line += " -- <command>"
@@ -77,10 +84,49 @@ func errPAMAuthRequired(cause error) *util.CLIError {
 		Next:    []util.NextStep{{Purpose: "To log in", Command: "infisical login"}}}
 }
 
+// pamTokenOrigin names where a token came from without putting "--token" before a word, which the
+// redactor would treat as a token value.
+func pamTokenOrigin(source string) string {
+	if source == "--token flag" {
+		return "It was passed with --token."
+	}
+	return fmt.Sprintf("It came from the %s.", source)
+}
+
 func errPAMTokenExpired(source string) *util.CLIError {
 	return &util.CLIError{Code: errCodeAuthRequired,
-		Message: fmt.Sprintf("The machine identity access token from the %s has expired. Replace it with a new token, or authenticate with the identity's own credentials instead.", source),
+		Message: fmt.Sprintf("The machine identity access token has expired. %s Replace it with a new token, or authenticate with the identity's own credentials instead.", pamTokenOrigin(source)),
 		Next:    []util.NextStep{{Purpose: "To authenticate with universal auth credentials", Command: pamPrefix + " accounts get --auth-method universal-auth"}}}
+}
+
+func errPAMTokenRejected(cause error) *util.CLIError {
+	return &util.CLIError{Code: errCodeAuthRequired, Cause: cause,
+		Message: "Infisical rejected the machine identity's access token. It may have expired, been revoked, reached its maximum TTL or run out of uses. Get a new token, or authenticate with the identity's own credentials instead.",
+		Next:    []util.NextStep{{Purpose: "To authenticate with universal auth credentials", Command: pamPrefix + " accounts get --auth-method universal-auth"}}}
+}
+
+func errPAMInvalidAuthMethod(authMethod string) *util.CLIError {
+	return &util.CLIError{Code: errCodeInvalidFlagValue,
+		Message: fmt.Sprintf("--auth-method %s isn't supported. Use one of: %s.", quoted(authMethod, "auth method"), pamAuthMethods)}
+}
+
+func errPAMMachineIdentityLogin(authMethod string, cause error) *util.CLIError {
+	return &util.CLIError{Code: errCodeAuthRequired, Cause: cause,
+		Message: fmt.Sprintf("Couldn't authenticate as a machine identity with %s: %v. Check the identity's credentials and that the auth method is configured on it.", quoted(authMethod, "auth method"), cause)}
+}
+
+func errPAMLoginUnreadable(cause error) *util.CLIError {
+	return &util.CLIError{Code: errCodeAuthRequired, Cause: cause,
+		Message: fmt.Sprintf("Couldn't read your saved login: %v. Log in again.", cause),
+		Next:    []util.NextStep{{Purpose: "To log in", Command: "infisical login"}}}
+}
+
+func errPAMNotMember(cause error, machineIdentity bool) *util.CLIError {
+	message := "You aren't a member of PAM in this organization. Ask a PAM admin to add you."
+	if machineIdentity {
+		message = "This machine identity isn't a member of PAM in this organization. Ask a PAM admin to add it."
+	}
+	return &util.CLIError{Code: errCodePermissionDenied, Cause: cause, Message: message}
 }
 
 func errPAMAccountNotFound(path string, cause error) *util.CLIError {
@@ -99,7 +145,7 @@ func errPAMInvalidPath(path string) *util.CLIError {
 	next := []util.NextStep{{Purpose: "To list the accounts you can access", Command: pamPrefix + " accounts get"}}
 	name := pamLookupArg(path)
 	if name != "<folder/account>" {
-		next = append(next, util.NextStep{Purpose: "To list the accounts in folder " + name, Command: pamPrefix + " accounts get " + name})
+		next = append(next, util.NextStep{Purpose: "To find the folder or accounts named " + name, Command: pamPrefix + " accounts get " + name})
 	}
 	return &util.CLIError{Code: errCodeInvalidArgument,
 		Message: fmt.Sprintf("%s isn't an account path. Name the account as folder/account, for example prod/orders-db.", name),
@@ -115,8 +161,12 @@ func errPAMApprovalPending(invocation pamAccessInvocation, requestID string, reg
 	if requestID != "" {
 		filed = fmt.Sprintf("Access request %s was filed and is waiting for a person to approve it in Infisical", quoted(requestID, "request ID"))
 	}
+	message := fmt.Sprintf("%s %s. %s.", pamAccountArg(invocation.Path), what, filed)
+	if !invocation.Interactive {
+		message += " Don't look for another way to reach this account."
+	}
 	return &util.CLIError{Code: errCodeApprovalPending,
-		Message: fmt.Sprintf("%s %s. %s. Don't look for another way to reach this account.", pamAccountArg(invocation.Path), what, filed),
+		Message: message,
 		Next:    []util.NextStep{invocation.statusStep(), {Purpose: "To connect once it's approved", Command: invocation.accessCommand("")}}}
 }
 
@@ -154,7 +204,26 @@ func errPAMSessionExpired(invocation pamAccessInvocation, ranFor time.Duration, 
 	}
 	return &util.CLIError{Code: errCodeSessionExpired,
 		Message: fmt.Sprintf("The PAM session for %s ended after %s, before the command finished, so the command was stopped.", pamAccountArg(invocation.Path), ranFor),
-		Next:    []util.NextStep{{Purpose: "To run it again with a longer session, up to the account's maximum session length", Command: invocation.accessCommand("--duration 2h")}}}
+		Next:    []util.NextStep{{Purpose: "To run it again with a longer session, up to the account's maximum session length", Command: invocation.accessCommand("--duration " + pamLongerDuration(invocation.Duration))}}}
+}
+
+// pamLongerDuration suggests twice the requested duration, written the way --duration takes it.
+func pamLongerDuration(requested time.Duration) string {
+	if requested <= 0 {
+		return "<duration>"
+	}
+	longer := (2 * requested).Round(time.Minute)
+	if longer < time.Minute {
+		longer = time.Minute
+	}
+	hours, minutes := int(longer.Hours()), int(longer.Minutes())%60
+	switch {
+	case hours == 0:
+		return fmt.Sprintf("%dm", minutes)
+	case minutes == 0:
+		return fmt.Sprintf("%dh", hours)
+	}
+	return fmt.Sprintf("%dh%dm", hours, minutes)
 }
 
 func errPAMMissingCommand(path string) *util.CLIError {

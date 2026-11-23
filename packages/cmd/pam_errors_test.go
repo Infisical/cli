@@ -34,6 +34,11 @@ func pamConstructedErrors() []*util.CLIError {
 		errPAMInvalidDuration("soon"),
 		errPAMServiceToken(),
 		errPAMPermissionDenied(cause, pamDeniedLaunch),
+		errPAMTokenRejected(cause),
+		errPAMInvalidAuthMethod("kerberos"),
+		errPAMMachineIdentityLogin("universal-auth", cause),
+		errPAMLoginUnreadable(cause),
+		errPAMNotMember(cause, true),
 	}
 }
 
@@ -57,5 +62,44 @@ func TestPAMSuggestionsNeverEchoTheCommandOrUnsafePaths(t *testing.T) {
 	safe := pamAccessInvocation{Path: "/prod/orders-db"}
 	if got := safe.accessCommand(""); got != "infisical pam access prod/orders-db" {
 		t.Errorf("unexpected suggestion %q", got)
+	}
+}
+
+func TestPAMTokenExpiredNamesTheFlagWithoutLookingLikeAValue(t *testing.T) {
+	message := util.RedactCredentials(errPAMTokenExpired("--token flag").Message)
+	if strings.Contains(message, "<redacted>") {
+		t.Errorf("redaction mangled the message: %q", message)
+	}
+}
+
+func TestPAMRerunHintsKeepTheReason(t *testing.T) {
+	invocation := pamAccessInvocation{Path: "prod/orders-db", HasCommand: true, Reason: "INC-4021"}
+	got := errPAMMFARequired(invocation, "https://app.infisical.com/mfa", "abc123").Next[0].Command
+	if !strings.Contains(got, `--reason "INC-4021"`) {
+		t.Errorf("MFA rerun drops the reason: %q", got)
+	}
+	if got := errPAMReasonRequired(invocation, false).Next[0].Command; strings.Count(got, "--reason") != 1 {
+		t.Errorf("reason given twice: %q", got)
+	}
+	unsafe := pamAccessInvocation{Path: "prod/orders-db", Reason: "fix it; rm -rf /"}
+	if got := unsafe.accessCommand(""); strings.Contains(got, "rm -rf") {
+		t.Errorf("unsafe reason echoed: %q", got)
+	}
+}
+
+func TestPAMLongerDuration(t *testing.T) {
+	cases := map[time.Duration]string{0: "<duration>", 20 * time.Second: "1m", 30 * time.Minute: "1h", time.Hour: "2h", 75 * time.Minute: "2h30m", 3 * time.Hour: "6h"}
+	for in, want := range cases {
+		if got := pamLongerDuration(in); got != want {
+			t.Errorf("pamLongerDuration(%s) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestPAMApprovalPendingAgentSentenceOnlyWithoutTerminal(t *testing.T) {
+	agent := errPAMApprovalPending(pamAccessInvocation{Path: "prod/db"}, "", false).Message
+	person := errPAMApprovalPending(pamAccessInvocation{Path: "prod/db", Interactive: true}, "", false).Message
+	if !strings.Contains(agent, "Don't look for another way") || strings.Contains(person, "Don't look for another way") {
+		t.Errorf("agent: %q\nperson: %q", agent, person)
 	}
 }
