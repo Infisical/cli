@@ -25,6 +25,10 @@ const (
 	FormatYaml         string = "yaml"
 	FormatDotEnvExport string = "dotenv-export"
 	FormatDotEnvEval   string = "dotenv-eval"
+
+	QuoteStyleSingle string = "single"
+	QuoteStyleDouble string = "double"
+	QuoteStyleNone   string = "none"
 )
 
 func buildExportCmd() *cobra.Command {
@@ -51,6 +55,7 @@ infisical secrets-manager secrets export --env prod --template ./config.tmpl`,
 	exportCmd.Flags().String("projectId", "", projectIDForReads)
 	exportCmd.Flags().String("path", "/", "get secrets within a folder path")
 	exportCmd.Flags().String("template", "", "The path to the template file used to render secrets")
+	exportCmd.Flags().String("quote-style", "single", "The quote style to wrap values in for dotenv formats (single, double, none). Double quotes keep multiline values intact for dotenv parsers")
 	exportCmd.Flags().StringP("output-file", "o", "", "The path to write the output file to. Can be a full file path, directory, or filename. If not specified, output will be printed to stdout")
 
 	return exportCmd
@@ -82,6 +87,18 @@ func runExport(cmd *cobra.Command, args []string) {
 	format, err := cmd.Flags().GetString("format")
 	if err != nil {
 		util.HandleError(err)
+	}
+
+	quoteStyle, err := cmd.Flags().GetString("quote-style")
+	if err != nil {
+		util.HandleError(err)
+	}
+	quoteStyle = strings.ToLower(quoteStyle)
+	switch quoteStyle {
+	case QuoteStyleSingle, QuoteStyleDouble, QuoteStyleNone:
+	default:
+		exitWithError(cmd, &util.CLIError{Code: errCodeInvalidFlagValue,
+			Message: fmt.Sprintf("--quote-style must be %s, %s or %s, not %s.", QuoteStyleSingle, QuoteStyleDouble, QuoteStyleNone, quoted(quoteStyle, "format"))})
 	}
 
 	templatePath, err := cmd.Flags().GetString("template")
@@ -155,7 +172,7 @@ func runExport(cmd *cobra.Command, args []string) {
 	secrets = util.FilterSecretsByTag(secrets, tagSlugs)
 	secrets = util.SortSecretsByKeys(secrets)
 
-	output, err = formatEnvs(secrets, format)
+	output, err = formatEnvs(secrets, format, quoteStyle)
 	if err != nil {
 		util.HandleError(err)
 	}
@@ -275,12 +292,12 @@ func getDefaultExtension(format string) string {
 }
 
 // Format according to the format flag
-func formatEnvs(envs []models.SingleEnvironmentVariable, format string) (string, error) {
+func formatEnvs(envs []models.SingleEnvironmentVariable, format, quoteStyle string) (string, error) {
 	switch strings.ToLower(format) {
 	case FormatDotenv:
-		return formatAsDotEnv(envs), nil
+		return formatAsDotEnv(envs, quoteStyle), nil
 	case FormatDotEnvExport:
-		return formatAsDotEnvExport(envs), nil
+		return formatAsDotEnvExport(envs, quoteStyle), nil
 	case FormatDotEnvEval:
 		return formatAsDotEnvEval(envs), nil
 	case FormatJson:
@@ -307,19 +324,19 @@ func formatAsCSV(envs []models.SingleEnvironmentVariable) string {
 }
 
 // Format environment variables as a dotenv file
-func formatAsDotEnv(envs []models.SingleEnvironmentVariable) string {
+func formatAsDotEnv(envs []models.SingleEnvironmentVariable, quoteStyle string) string {
 	var dotenv string
 	for _, env := range envs {
-		dotenv += fmt.Sprintf("%s='%s'\n", env.Key, escapeNewLinesIfRequired(env))
+		dotenv += fmt.Sprintf("%s=%s\n", env.Key, quoteDotEnvValue(env, quoteStyle))
 	}
 	return dotenv
 }
 
 // Format environment variables as a dotenv file with export at the beginning
-func formatAsDotEnvExport(envs []models.SingleEnvironmentVariable) string {
+func formatAsDotEnvExport(envs []models.SingleEnvironmentVariable, quoteStyle string) string {
 	var dotenv string
 	for _, env := range envs {
-		dotenv += fmt.Sprintf("export %s='%s'\n", env.Key, escapeNewLinesIfRequired(env))
+		dotenv += fmt.Sprintf("export %s=%s\n", env.Key, quoteDotEnvValue(env, quoteStyle))
 	}
 	return dotenv
 }
@@ -375,4 +392,21 @@ func escapeNewLinesIfRequired(env models.SingleEnvironmentVariable) string {
 	}
 
 	return env.Value
+}
+
+// quoteDotEnvValue wraps a value in the requested quote style. The single
+// style keeps the historical output byte for byte. Double quotes are the way
+// to carry a multiline value through dotenv parsers, which expand escape
+// sequences inside double quotes but leave single-quoted values verbatim.
+func quoteDotEnvValue(env models.SingleEnvironmentVariable, quoteStyle string) string {
+	value := escapeNewLinesIfRequired(env)
+
+	switch quoteStyle {
+	case QuoteStyleDouble:
+		return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"`
+	case QuoteStyleNone:
+		return value
+	default:
+		return "'" + value + "'"
+	}
 }
