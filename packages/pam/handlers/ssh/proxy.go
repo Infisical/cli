@@ -55,6 +55,7 @@ type channelState struct {
 	echoLine         uint32                     // Which line that was
 	recalled         bool                       // History keys were used for the command being entered
 	echoScreenExits  uint32                     // screenExits when the command being entered started
+	recordFrom       int                        // Where the recorded command starts in inputBuffer, past keys a full-screen program took
 	interrupted      bool                       // Ctrl+C was pressed on interruptedLine, which the shell then leaves
 	interruptedLine  uint32
 
@@ -691,6 +692,7 @@ func (p *SSHProxy) bufferInput(data []byte, sessionID string, channelType sessio
 				p.flushInputBufferUnsafe(sessionID, chState)
 			}
 		}
+		chState.recordFrom = min(chState.recordFrom, len(chState.inputBuffer))
 	}
 }
 
@@ -704,7 +706,7 @@ func (p *SSHProxy) flushInputBuffer(sessionID string, chState *channelState) {
 // startCommand notes where typing began at the command's first key (caller must hold inputMutex).
 func (c *channelState) startCommand(recalled bool) {
 	if c.echoBaseline >= 0 && c.screenExits.Load() != c.echoScreenExits {
-		c.inputBuffer, c.echoBaseline, c.recalled = c.inputBuffer[:0], -1, false
+		c.recordFrom, c.echoBaseline, c.recalled = len(c.inputBuffer), -1, false
 	}
 	if c.echoBaseline < 0 {
 		c.echoLine, c.echoBaseline = c.lineOnScreen()
@@ -724,10 +726,12 @@ func (p *SSHProxy) flushInputBufferUnsafe(sessionID string, chState *channelStat
 	}
 
 	command := string(chState.inputBuffer)
-	chState.inputBuffer = chState.inputBuffer[:0]
+	shown := command[min(chState.recordFrom, len(command)):]
+	chState.inputBuffer, chState.recordFrom = chState.inputBuffer[:0], 0
 	channel := chState.inputChannelType
 	entered := enteredCommand{
-		text:      command,
+		text:      shown,
+		masked:    p.maskTyped(shown),
 		recalled:  chState.recalled,
 		line:      chState.echoLine,
 		baseline:  chState.echoBaseline,
@@ -780,9 +784,16 @@ func (c *channelState) placeCommand(entered enteredCommand) {
 	c.pendingEcho.hold(entered, idle && c.commandStart < 0)
 }
 
+// maskTyped hides in typed text what output masking hides in its echo, so a record of it holds no more.
+func (p *SSHProxy) maskTyped(text string) string {
+	if !p.masksOutput() {
+		return text
+	}
+	return string(maskTerminalOutput(p.config.OutputMaskingPatterns, []byte(text)))
+}
+
 // awaitEcho gives the echo of a blocked command time to arrive, so its record is whole.
-func (c *channelState) awaitEcho(command string, timeout time.Duration) {
-	entered := enteredCommand{text: command}
+func (c *channelState) awaitEcho(entered enteredCommand, timeout time.Duration) {
 	for deadline := time.Now().Add(timeout); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
 		c.outputMutex.Lock()
 		_, echoed := entered.echoStart(c.outputParser.Pending())
@@ -987,12 +998,14 @@ func (p *SSHProxy) proxyClientToServerWithBlocking(src io.Reader, dst io.Writer,
 						// Check accumulated command against blocked patterns
 						chState.inputMutex.Lock()
 						command := string(chState.inputBuffer)
+						shown := command[min(chState.recordFrom, len(command)):]
 						chState.inputMutex.Unlock()
 
-						if p.matchBlockedCommand(command) {
+						// Keys a full-screen program took may lead the buffer, so either reading can be what the shell runs.
+						if p.matchBlockedCommand(command) || p.matchBlockedCommand(shown) {
 							// Commit the echoed line before the notice so they read in order.
-							if channelType == session.SessionChannelShell && !strings.ContainsRune(command, '\t') {
-								chState.awaitEcho(command, blockedEchoTimeout)
+							if channelType == session.SessionChannelShell && !strings.ContainsRune(shown, '\t') {
+								chState.awaitEcho(enteredCommand{text: shown, masked: p.maskTyped(shown)}, blockedEchoTimeout)
 							}
 							p.flushInputBuffer(sessionID, chState)
 							p.flushOutputBuffer(sessionID, chState)

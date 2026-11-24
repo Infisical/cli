@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
+	"github.com/Infisical/infisical-merge/packages/pam/session/masking"
 )
 
 const (
@@ -109,6 +110,13 @@ func TestTranscriptFollowsZshRedrawOfWrappedCommand(t *testing.T) {
 	prompt := "host%" + strings.Repeat(" ", 9)
 	want := []string{prompt + "xecho " + strings.Repeat("klmnopqrst", 13), "zsh: command not found: xecho"}
 	if got := renderWide(120, prompt, typed, edited); !slices.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestTranscriptMovesDownSeveralRows(t *testing.T) {
+	got := renderWide(10, "0123456789abcdefghijABCDEFGHIJxyz"+esc+"[3A"+esc+"[2B#\r\n")
+	if want := []string{"0123456789abcdefghijABC#EFGHIJxyz"}; !slices.Equal(got, want) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
@@ -816,6 +824,58 @@ func TestTranscriptCountsFullScreenExits(t *testing.T) {
 	tr.Feed([]byte(esc + "[?1049h" + esc + "[?25l" + esc + "[?1049l" + esc + "[?47l" + esc + "[?1047l" + esc + "[?1l"))
 	if got := tr.ScreenExits(); got != 3 {
 		t.Errorf("counted %d exits, want 3", got)
+	}
+}
+
+// A held command is never recorded with a value output masking hid in its echo.
+func TestHeldCommandKeepsOutputMasking(t *testing.T) {
+	logger := &recordingLogger{}
+	patterns := []masking.Matcher{regexp.MustCompile(`token=\w+`)}
+	p := NewSSHProxy(SSHProxyConfig{SessionLogger: logger, OutputMaskingPatterns: patterns})
+	ch := newChannelState()
+	shell := session.SessionChannelShell
+
+	emit(p, ch, prompt("~"))
+	p.bufferInput([]byte("echo token=abcd\r"), "sid", shell, ch)
+	emit(p, ch, string(maskTerminalOutput(patterns, []byte("echo token=abcd")))+"\r\n"+prompt("~")+"read -s x\r\n")
+	p.bufferInput([]byte("token=efgh\r"), "sid", shell, ch)
+	emit(p, ch, "\r\n")
+	p.flushOutputBuffer("sid", ch)
+	p.flushPendingEcho("sid", ch)
+
+	tagged := false
+	for _, e := range logger.events {
+		if strings.Contains(string(e.Data)+e.Command, "abcd") || strings.Contains(string(e.Data)+e.Command, "efgh") {
+			t.Errorf("event %s %q [%q] holds a masked value", e.EventType, e.Data, e.Command)
+		}
+		tagged = tagged || strings.HasPrefix(e.Command, "echo ")
+	}
+	if !tagged {
+		t.Error("the masked echo was not matched to its command")
+	}
+}
+
+// Keys forwarded before a full-screen program's exit arrives still count toward command blocking.
+func TestScreenExitKeepsKeysForBlocking(t *testing.T) {
+	logger := &recordingLogger{}
+	p := NewSSHProxy(SSHProxyConfig{
+		SessionLogger:          logger,
+		BlockedCommandPatterns: []*regexp.Regexp{regexp.MustCompile(`^rm -rf`)},
+	})
+	ch := newChannelState()
+	ch.channelType = session.SessionChannelShell
+	var server strings.Builder
+
+	emit(p, ch, prompt("~"))
+	src := &typedInput{p: p, ch: ch,
+		chunks: []string{"rm -rf /tmp/x", " ", "\r"},
+		echoes: []string{esc + "[?1049h" + esc + "[?1049l", " ", ""},
+	}
+	if err := p.proxyClientToServerWithBlocking(src, &server, io.Discard, "sid", ch); err != nil {
+		t.Fatalf("proxy returned %v", err)
+	}
+	if strings.ContainsAny(server.String(), "\r\n") {
+		t.Errorf("the server received the Enter of a blocked command: %q", server.String())
 	}
 }
 

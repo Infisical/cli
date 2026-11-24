@@ -1,6 +1,7 @@
 package ssh
 
 import (
+	"cmp"
 	"strings"
 	"sync"
 	"time"
@@ -199,7 +200,7 @@ func (t *terminalTranscript) dispatchCSI(lines *[]string) {
 		}
 	case 'B': // cursor down, which stays within a wrapped line while it has rows below
 		if start := t.rowStart(); t.width > 0 && start+t.width < len(t.line) {
-			t.moveTo(t.column() + t.width)
+			t.moveTo(t.column() + min(t.param(1), (len(t.line)-1-start)/t.width)*t.width)
 		} else {
 			*lines = appendLine(*lines, t.commit())
 		}
@@ -365,7 +366,8 @@ func isStringState(state parser.State) bool {
 // enteredCommand is a command line entered at a shell; line and baseline say where typing began.
 type enteredCommand struct {
 	text      string
-	recalled  bool // History keys were used, so the line can show more than was typed
+	masked    string // text as output masking shows it
+	recalled  bool   // History keys were used, so the line can show more than was typed
 	line      uint32
 	baseline  int
 	timestamp time.Time
@@ -374,8 +376,18 @@ type enteredCommand struct {
 
 // echoStart returns where typed text starts on a line ending with its echo; tabs show as spaces, so whitespace runs match.
 func (e enteredCommand) echoStart(line string) (int, bool) {
-	typed, shown := []rune(strings.TrimSpace(e.text)), []rune(line)
-	if e.recalled || len(typed) == 0 {
+	if e.recalled {
+		return 0, false
+	}
+	if start, ok := echoStartOf(e.text, line); ok || e.masked == "" || e.masked == e.text {
+		return start, ok
+	}
+	return echoStartOf(e.masked, line)
+}
+
+func echoStartOf(text, line string) (int, bool) {
+	typed, shown := []rune(strings.TrimSpace(text)), []rune(line)
+	if len(typed) == 0 {
 		return 0, false
 	}
 	i, j := len(shown)-1, len(typed)-1
@@ -530,7 +542,7 @@ func (e enteredCommand) inputEvent() (session.SessionEvent, bool) {
 		Timestamp:   e.timestamp,
 		EventType:   session.SessionEventInput,
 		ChannelType: e.channel,
-		Data:        []byte(e.text),
+		Data:        []byte(cmp.Or(e.masked, e.text)),
 		Rendered:    true,
 	}, true
 }
