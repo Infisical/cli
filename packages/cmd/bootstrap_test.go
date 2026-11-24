@@ -25,7 +25,7 @@ func TestIsInstanceAlreadySetUpFromServerResponse(t *testing.T) {
 	}
 }
 
-func TestBootstrapRequestActivationToken(t *testing.T) {
+func TestBootstrapRequestSetupToken(t *testing.T) {
 	tests := []struct {
 		name      string
 		token     string
@@ -46,16 +46,16 @@ func TestBootstrapRequestActivationToken(t *testing.T) {
 			}))
 			defer server.Close()
 
-			if _, err := api.CallBootstrapInstance(resty.New(), api.BootstrapInstanceRequest{Domain: server.URL, ActivationToken: tt.token}); err != nil {
+			if _, err := api.CallBootstrapInstance(resty.New(), api.BootstrapInstanceRequest{Domain: server.URL, SetupToken: tt.token}); err != nil {
 				t.Fatalf("CallBootstrapInstance: %v", err)
 			}
 
-			got, present := body["activationToken"]
+			got, present := body["setupToken"]
 			if present != tt.wantField {
-				t.Fatalf("activationToken present = %v, want %v", present, tt.wantField)
+				t.Fatalf("setupToken present = %v, want %v", present, tt.wantField)
 			}
 			if tt.wantField && got != tt.token {
-				t.Errorf("activationToken = %v, want %q", got, tt.token)
+				t.Errorf("setupToken = %v, want %q", got, tt.token)
 			}
 		})
 	}

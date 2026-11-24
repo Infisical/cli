@@ -159,9 +159,9 @@ var bootstrapCmd = &cobra.Command{
 		organization := requiredBootstrapInput(cmd, "organization", util.INFISICAL_BOOTSTRAP_ORGANIZATION_NAME)
 		domain := requiredBootstrapInput(cmd, "domain", util.DomainEnvNames...)
 
-		activationToken, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "activation-token", []string{util.INFISICAL_BOOTSTRAP_ACTIVATION_TOKEN_NAME}, "")
+		setupToken, err := util.GetCmdFlagOrEnvWithDefaultValue(cmd, "setup-token", []string{util.INFISICAL_BOOTSTRAP_SETUP_TOKEN_NAME}, "")
 		if err != nil {
-			util.HandleError(err, "Unable to parse flag --activation-token")
+			util.HandleError(err, "Unable to parse flag --setup-token")
 		}
 
 		outputType, err := cmd.Flags().GetString("output")
@@ -211,11 +211,11 @@ var bootstrapCmd = &cobra.Command{
 		httpClient.SetHeader("Accept", "application/json")
 
 		bootstrapResponse, err := api.CallBootstrapInstance(httpClient, api.BootstrapInstanceRequest{
-			Domain:          util.AppendAPIEndpoint(domain),
-			Email:           email,
-			Password:        password,
-			Organization:    organization,
-			ActivationToken: activationToken,
+			Domain:       util.AppendAPIEndpoint(domain),
+			Email:        email,
+			Password:     password,
+			Organization: organization,
+			SetupToken:   setupToken,
 		})
 
 		if err != nil {
@@ -247,7 +247,7 @@ func init() {
 	bootstrapCmd.Flags().String("organization", "", "The name of the organization to create for the instance")
 	bootstrapCmd.Flags().String("output", "", "The type of output to use for the bootstrap command (json or k8-secret)")
 	bootstrapCmd.Flags().Bool("ignore-if-bootstrapped", false, "Whether to continue on error if the instance has already been bootstrapped")
-	bootstrapCmd.Flags().String("activation-token", "", "The initial setup activation token, required when the instance sets INITIAL_SETUP_ACTIVATION_TOKEN")
+	bootstrapCmd.Flags().String("setup-token", "", "The instance setup token, required when the instance sets INSTANCE_SETUP_TOKEN")
 	bootstrapCmd.Flags().String("k8-secret-template", "{\"data\":{\"token\":\"{{.Identity.Credentials.Token}}\"}}", "The template to use for rendering the Kubernetes secret (entire secret JSON)")
 	bootstrapCmd.Flags().String("k8-secret-namespace", "", "The namespace to create the Kubernetes secret in")
 	bootstrapCmd.Flags().String("k8-secret-name", "", "The name of the Kubernetes secret to create")
