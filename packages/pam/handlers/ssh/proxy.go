@@ -669,7 +669,8 @@ func (p *SSHProxy) bufferInput(data []byte, sessionID string, channelType sessio
 			chState.interruptedLine, _ = chState.lineOnScreen()
 			chState.interrupted = true
 		case 0x15: // Ctrl+U - clear line
-			chState.inputBuffer, chState.overflowed = chState.inputBuffer[:0], false
+			// Bash keeps the text after the cursor, so a line too long to check stays refused.
+			chState.inputBuffer = chState.inputBuffer[:0]
 		case 0x17: // Ctrl+W - delete previous word
 			// Skip trailing spaces
 			for len(chState.inputBuffer) > 0 && chState.inputBuffer[len(chState.inputBuffer)-1] == ' ' {

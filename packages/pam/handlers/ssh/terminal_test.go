@@ -925,24 +925,30 @@ func TestOverlongLineIsBlocked(t *testing.T) {
 	}
 }
 
-// Canceling a line too long to check leaves the next command free to run.
-func TestCanceledOverlongLineDoesNotBlock(t *testing.T) {
+// Ctrl+C makes the shell drop a line too long to check, but after Ctrl+A, Ctrl+U deletes nothing.
+func TestCanceledOverlongLine(t *testing.T) {
 	p := NewSSHProxy(SSHProxyConfig{
 		SessionLogger:          &recordingLogger{},
 		BlockedCommandPatterns: []*regexp.Regexp{regexp.MustCompile(`^rm -rf`)},
 	})
-	for _, cancel := range []string{"\x03", "\x15"} {
+	for _, tt := range []struct {
+		cancel  string
+		refused bool
+	}{
+		{cancel: "\x03", refused: false},
+		{cancel: "\x01\x15", refused: true},
+	} {
 		ch := newChannelState()
 		ch.channelType = session.SessionChannelShell
 		var server strings.Builder
 
 		emit(p, ch, prompt("~"))
-		src := &typedInput{p: p, ch: ch, chunks: []string{strings.Repeat("x", maxLineRunes), cancel, "ls", "\r"}}
+		src := &typedInput{p: p, ch: ch, chunks: []string{strings.Repeat(" ", maxLineRunes) + "rm -rf /tmp/x", tt.cancel, "\r"}}
 		if err := p.proxyClientToServerWithBlocking(src, &server, io.Discard, "sid", ch); err != nil {
 			t.Fatalf("proxy returned %v", err)
 		}
-		if !strings.HasSuffix(server.String(), "ls\r") {
-			t.Errorf("after %q the server did not receive the Enter of the next command", cancel)
+		if refused := !strings.HasSuffix(server.String(), "\r"); refused != tt.refused {
+			t.Errorf("after %q the Enter was refused: %v, want %v", tt.cancel, refused, tt.refused)
 		}
 	}
 }
