@@ -88,6 +88,8 @@ func resolvePAMAccessToken(cmd *cobra.Command) (accessToken func() string, stop 
 		if source, stopAuth := authenticateMachineIdentity(cmd); source != nil {
 			return source, stopAuth, true
 		}
+		// An explicit --auth-method user asks for the saved login over any token in the environment.
+		token = nil
 	}
 
 	// A service token exported for other commands mustn't hijack PAM; only an explicit one is an error.
