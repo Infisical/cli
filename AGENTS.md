@@ -38,7 +38,12 @@ Never write: narration restating the next line; section headers inside a functio
 
 ### Agent Vault hooks
 
-A service can have a hook (`packages/agentvault/hook.go`): the customer's server, which the proxy asks before it brokers. Every request to a hooked HTTP or MCP service asks it, in `forward()` after the proxy's own checks (policy, plain-HTTP refusals, tool allowlist) and before substitutions, custom headers and the credential, so the payload only ever holds what the agent sent. A database or SSH service asks once per connection, after `registerNative` and before the tunnel opens. It fails closed: anything but an `allow` or `deny` answer within 3 seconds refuses the request, and a hook Infisical sent that the proxy can't use stays a hook that always fails, never no hook. Keep any new path that attaches a credential behind the same call, and never log the hook URL beyond `scheme://host`.
+A hook (`packages/agentvault/hook.go`) is the customer's server, which the proxy asks before it brokers. Resolve sends at most one per service, as `services[].hook`, with optional narrowing: HTTP methods and path prefixes, or MCP tools. Ask it only for what that narrowing picks (`serviceHook.matches`); a hook with none, including the `{ url, secret }` older servers send, is asked about every request of its service, and a database or SSH service asks about every connection. Ask at most once per request or connection; an OAuth resend reuses the answer.
+
+- Lean every matching decision toward asking, because a miss sends the request through unchecked. A method override header or a `_method` query parameter counts as the method it names, and a form POST (`_method` in the body) as any method; paths compare without case; an ambiguous path, its decoded form and the path after path substitutions all count against the prefixes; an MCP body that can't be read matches.
+- Ask in `forward()` after the proxy's own checks and before substitutions, custom headers and the credential, so the payload holds only what the agent sent. Ask a database or SSH service once per connection, after `registerNative` and before the tunnel opens. Keep any new path that attaches a credential behind the same call.
+- Fail closed once asked: anything but an `allow` or `deny` within 3 seconds refuses, and a hook the proxy can't use is a hook that always fails, never no hook.
+- Never log the hook URL beyond `scheme://host`.
 
 ## Issue and PR guidelines
 

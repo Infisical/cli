@@ -66,22 +66,147 @@ var (
 	errHookFailed = errors.New("the service's hook didn't give a usable answer")
 )
 
+// A nil narrowing field doesn't narrow, so a hook with none is asked about every request of its service. A field
+// that doesn't fit the service's type is ignored, and an empty list is nil, since more traffic reaching the hook is
+// the safe side.
 type serviceHook struct {
+	id string
+	// Nil from servers that don't send it.
+	name *string
 	// Nil when the URL or secret Infisical sent can't be used, so every call fails rather than the hook being skipped.
-	url    *url.URL
-	secret []byte
+	url     *url.URL
+	secret  []byte
+	methods map[string]bool
+	paths   []string
+	tools   map[string]bool
 }
 
-func toServiceHook(wire *api.AgentVaultHook) *serviceHook {
+func toServiceHook(wire *api.AgentVaultServiceHook) *serviceHook {
 	if wire == nil {
 		return nil
 	}
-	hook := &serviceHook{secret: []byte(wire.Secret)}
+	hook := &serviceHook{
+		id:      wire.ID,
+		name:    wire.Name,
+		secret:  []byte(wire.Secret),
+		methods: toHookMethodSet(wire.Methods),
+		paths:   toHookPathPrefixes(wire.Paths),
+		tools:   toHookToolSet(wire.Tools),
+	}
 	parsed, err := url.Parse(wire.URL)
 	if err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" && len(hook.secret) > 0 {
 		hook.url = parsed
 	}
 	return hook
+}
+
+func toHookMethodSet(methods []string) map[string]bool {
+	if len(methods) == 0 {
+		return nil
+	}
+	return toMethodSet(methods)
+}
+
+// A list with nothing usable in it is nil, unlike toPathPrefixes: for a hook, no restriction is the safe side.
+func toHookPathPrefixes(prefixes []string) []string {
+	var out []string
+	for _, prefix := range prefixes {
+		if prefix = normalizePathPrefix(prefix); prefix != "" {
+			out = append(out, strings.ToLower(prefix))
+		}
+	}
+	return out
+}
+
+func toHookToolSet(tools []string) map[string]bool {
+	if len(tools) == 0 {
+		return nil
+	}
+	return toToolSet(tools)
+}
+
+// mcp is the parsed body of an MCP request, nil when it has none.
+func (h *serviceHook) matches(svc *resolvedService, req *http.Request, mcp *hookPayloadMCP) bool {
+	if svc.kind == serviceKindMCP {
+		return h.tools == nil || callsAnyTool(req, mcp, h.tools)
+	}
+	if h.methods != nil && !h.matchesMethod(req) {
+		return false
+	}
+	if h.paths == nil {
+		return true
+	}
+	path := requestPath(req)
+	return hookPathMatches(path, h.paths) || hookPathMatches(pathAfterSubstitutions(path, svc.substitutions), h.paths)
+}
+
+// An override header counts as the method, since a framework that honours it performs the method it names.
+// So does a form POST: Rails and Laravel take the method from a `_method` field in the body. Symfony and Laravel
+// also read `_method` from the query string whatever the body, and a query that can't be parsed matches.
+func (h *serviceHook) matchesMethod(req *http.Request) bool {
+	if h.methods[strings.ToUpper(req.Method)] {
+		return true
+	}
+	if req.Method == http.MethodPost && isFormBody(req.Header.Get("Content-Type")) {
+		return true
+	}
+	query, err := url.ParseQuery(req.URL.RawQuery)
+	if err != nil {
+		return true
+	}
+	for _, value := range query["_method"] {
+		if h.methods[strings.ToUpper(strings.TrimSpace(value))] {
+			return true
+		}
+	}
+	for _, name := range methodOverrideHeaders {
+		for _, value := range req.Header.Values(name) {
+			// Express's method-override takes the first of `DELETE, POST`, so every listed value is checked.
+			for _, item := range strings.Split(value, ",") {
+				if h.methods[strings.ToUpper(strings.TrimSpace(item))] {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func isFormBody(contentType string) bool {
+	mediaType, _, _ := strings.Cut(contentType, ";")
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	return mediaType == "application/x-www-form-urlencoded" || mediaType == "multipart/form-data"
+}
+
+// An ambiguous path matches, since the upstream may route it under a listed prefix. Past that check every escape
+// left is benign, so decoding the whole path can't merge segments, and `/v1/%72efunds` is `/v1/refunds` upstream.
+// Case is ignored, unlike the service allowlist: ASP.NET Core and IIS route paths case-insensitively, and for a
+// hook a miss lets the request through unchecked, so strictness goes the unsafe way. prefixes are lowercase.
+func hookPathMatches(escaped string, prefixes []string) bool {
+	return isAmbiguousPath(escaped) || matchesPrefix(strings.ToLower(escaped), prefixes) ||
+		matchesPrefix(strings.ToLower(decodeBenignEscapes(escaped)), prefixes)
+}
+
+// A body that can't be parsed matches, and so does a call naming no tool, so a call can't get past the hook by
+// being unreadable. Mcp-Name counts too, since a gateway may route on it.
+func callsAnyTool(req *http.Request, mcp *hookPayloadMCP, tools map[string]bool) bool {
+	for _, name := range req.Header.Values(mcpNameHeader) {
+		if tools[name] {
+			return true
+		}
+	}
+	if mcp == nil {
+		return false
+	}
+	if !mcp.Parsed {
+		return true
+	}
+	for _, call := range mcp.Calls {
+		if call.Method == mcpMethodToolsCall && (call.Tool == "" || tools[call.Tool]) {
+			return true
+		}
+	}
+	return false
 }
 
 // Only the scheme and host are ever logged: a hook's path can carry a token.
@@ -135,6 +260,7 @@ type hookPayload struct {
 	Version    string                 `json:"version"`
 	DeliveryID string                 `json:"deliveryId"`
 	Proxy      hookPayloadProxy       `json:"proxy"`
+	Hook       hookPayloadHook        `json:"hook"`
 	Session    hookPayloadSession     `json:"session"`
 	Service    hookPayloadService     `json:"service"`
 	Request    *hookPayloadRequest    `json:"request"`
@@ -147,11 +273,17 @@ type hookPayloadProxy struct {
 	Version string `json:"version"`
 }
 
+type hookPayloadHook struct {
+	ID   string  `json:"id"`
+	Name *string `json:"name"`
+}
+
 type hookPayloadSession struct {
 	ID         string                           `json:"id"`
 	Label      *string                          `json:"label"`
 	Actor      *api.AgentVaultSessionActor      `json:"actor"`
 	OnBehalfOf *api.AgentVaultSessionOnBehalfOf `json:"onBehalfOf"`
+	Metadata   map[string]string                `json:"metadata"`
 }
 
 type hookPayloadService struct {
@@ -231,12 +363,19 @@ func (ps *proxyServer) newHookPayload(svc *resolvedService, found cacheLookup) h
 	payload := hookPayload{
 		Version: hookPayloadVersion,
 		Proxy:   hookPayloadProxy{ID: ps.opts.ProxyID, Version: util.CLI_VERSION},
-		Session: hookPayloadSession{ID: found.sessionID},
+		// Always an object, so a hook server can read a key without first checking for null.
+		Session: hookPayloadSession{ID: found.sessionID, Metadata: map[string]string{}},
 		Service: hookPayloadService{ID: svc.id, Name: svc.name, Type: toServiceKind(svc.kind)},
+	}
+	if hook := svc.hook; hook != nil {
+		payload.Hook = hookPayloadHook{ID: hook.id, Name: hook.name}
 	}
 	if session := found.session; session != nil {
 		actor := session.Actor
 		payload.Session.Label, payload.Session.Actor, payload.Session.OnBehalfOf = session.Label, &actor, session.OnBehalfOf
+		if session.Metadata != nil {
+			payload.Session.Metadata = session.Metadata
+		}
 	}
 	if svc.accessBundleID != "" || svc.accessBundleName != "" {
 		payload.Service.AccessBundle = &hookPayloadBundle{ID: svc.accessBundleID, Name: svc.accessBundleName}
@@ -463,14 +602,33 @@ func hookMCPOf(prefix []byte, truncated bool, header http.Header) (*hookPayloadM
 }
 
 // askHook runs after the proxy's own checks and before substitutions, custom headers and the credential, so the
-// hook judges what the agent sent and never sees a value Infisical holds.
+// hook judges what the agent sent and never sees a value Infisical holds. A request the hook's narrowing doesn't
+// pick is let through without asking.
 func (ps *proxyServer) askHook(req *http.Request, t tunnel, svc *resolvedService, found cacheLookup, outcome *forwardOutcome) error {
+	hook := svc.hook
+	// Judged before the body is read, which only MCP tool narrowing needs.
+	if svc.kind != serviceKindMCP && !hook.matches(svc, req, nil) {
+		return nil
+	}
 	prefix, truncated, err := hookBodyPrefix(req, maxHookBodyPrefix)
 	if err != nil {
 		return err
 	}
+	var mcp *hookPayloadMCP
+	var messages []jsonrpcMessage
+	if svc.kind == serviceKindMCP {
+		mcp, messages = hookMCPOf(prefix, truncated, req.Header)
+		inspected := mcp
+		if len(prefix) == 0 {
+			inspected = nil
+		}
+		if !hook.matches(svc, req, inspected) {
+			return nil
+		}
+	}
 	body, encoding := hookBodyText(prefix, truncated, req.Header)
 	payload := ps.newHookPayload(svc, found)
+	payload.MCP = mcp
 	payload.Request = &hookPayloadRequest{
 		Method:        req.Method,
 		Scheme:        t.scheme,
@@ -483,12 +641,8 @@ func (ps *proxyServer) askHook(req *http.Request, t tunnel, svc *resolvedService
 		BodyEncoding:  encoding,
 		BodyTruncated: truncated,
 	}
-	var messages []jsonrpcMessage
-	if svc.kind == serviceKindMCP {
-		payload.MCP, messages = hookMCPOf(prefix, truncated, req.Header)
-	}
 
-	result := sharedHookClient().ask(req.Context(), svc.hook, &payload)
+	result := sharedHookClient().ask(req.Context(), hook, &payload)
 	outcome.hook = result
 	if result.Decision == hookAllow {
 		return nil

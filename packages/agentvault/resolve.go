@@ -245,21 +245,25 @@ func toPathPrefixes(prefixes []string) []string {
 	}
 	out := make([]string, 0, len(prefixes))
 	for _, prefix := range prefixes {
-		prefix = strings.TrimSpace(prefix)
-		if prefix != "/" {
-			prefix = strings.TrimRight(prefix, "/")
+		if prefix = normalizePathPrefix(prefix); prefix != "" {
+			out = append(out, prefix)
 		}
-		// After the trim, so an all-slashes prefix cannot arrive here as "" and match every path.
-		if prefix == "" {
-			continue
-		}
-		out = append(out, prefix)
 	}
 	if len(out) == 0 {
 		// A prefix no request can match, so a restriction the server sent empty allows nothing.
 		return []string{"\x00"}
 	}
 	return out
+}
+
+// Empty when nothing usable is left. Checked after the trim, so an all-slashes prefix cannot arrive as "" and match
+// every path.
+func normalizePathPrefix(prefix string) string {
+	prefix = strings.TrimSpace(prefix)
+	if prefix != "/" {
+		prefix = strings.TrimRight(prefix, "/")
+	}
+	return prefix
 }
 
 func toCustomHeaders(wire []api.AgentVaultCustomHeader) []customHeader {

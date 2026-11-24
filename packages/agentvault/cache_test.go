@@ -443,12 +443,22 @@ func TestTheSessionAHookIsToldAboutIsKeptAndRefreshed(t *testing.T) {
 	}
 
 	second := &api.AgentVaultResolvedSession{Actor: api.AgentVaultSessionActor{Type: "user", ID: "u-1", Name: "Ana"}}
+	edited := serviceWithSecret("v")
+	edited.hook = &serviceHook{secret: []byte("edited")}
 	resolver.mu.Lock()
-	resolver.result = &resolveResult{SessionID: "s1", Services: []*resolvedService{svc}, Session: second}
+	resolver.result = &resolveResult{SessionID: "s1", Services: []*resolvedService{edited}, Session: second}
 	resolver.mu.Unlock()
 	cache.refresh()
-	if found, _ := cache.lookup("agv_token", nil); found.session != second {
-		t.Fatalf("the refresh kept the old session info: %+v", found.session)
+	if found, _ := cache.lookup("agv_token", nil); found.session != second || found.services[0].hook != edited.hook {
+		t.Fatalf("the refresh kept the old session info: %+v, hook %+v", found.session, found.services[0].hook)
+	}
+
+	resolver.mu.Lock()
+	resolver.result = &resolveResult{SessionID: "s1", Services: []*resolvedService{serviceWithSecret("v")}, Session: second}
+	resolver.mu.Unlock()
+	cache.refresh()
+	if found, _ := cache.lookup("agv_token", nil); found.services[0].hook != nil {
+		t.Fatalf("a removed hook stayed on the service: %+v", found.services[0].hook)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -200,16 +201,11 @@ func TestADatabaseTargetKeepsTLSOnUnlessTheServerTurnsItOff(t *testing.T) {
 	}
 }
 
-func TestAResolveCarriesHooksAndTheSession(t *testing.T) {
+func resolveBody(t *testing.T, body string) *resolveResult {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"sessionId":"s1","services":[
-			{"id":"a","name":"stripe","accessBundleId":"b-1","accessBundleName":"payments","hostPattern":"api.stripe.com","credential":{"type":"passthrough"},"hook":{"url":"https://hooks.example.com/stripe","secret":"` + testHookSecret + `"}},
-			{"id":"b","name":"inline","accessBundleId":null,"hostPattern":"x.example","credential":{"type":"passthrough"},"hook":{"url":"not a url","secret":"` + testHookSecret + `"}},
-			{"id":"c","name":"plain","accessBundleId":"b-1","hostPattern":"y.example","credential":{"type":"passthrough"},"hook":null},
-			{"id":"d","name":"older","hostPattern":"z.example","credential":{"type":"passthrough"}}
-		],"sessionLogs":{"enabled":false},
-		"session":{"label":"Nightly refunds","actor":{"type":"machineIdentity","id":"m-1","name":"support-agent","email":null},"onBehalfOf":{"id":"u-1","name":"Ana Silva","email":"ana@acme.com"}}}`))
+		_, _ = w.Write([]byte(body))
 	}))
 	defer srv.Close()
 	old := config.INFISICAL_URL
@@ -224,20 +220,55 @@ func TestAResolveCarriesHooksAndTheSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stripe, inline, plain, older := res.Services[0], res.Services[1], res.Services[2], res.Services[3]
-	if stripe.accessBundleID != "b-1" || stripe.hook == nil || stripe.hook.origin() != "https://hooks.example.com" || string(stripe.hook.secret) != testHookSecret {
-		t.Fatalf("stripe = %+v hook %+v", stripe, stripe.hook)
+	return res
+}
+
+func TestAResolveCarriesEachServicesHookAndTheSession(t *testing.T) {
+	res := resolveBody(t, `{"sessionId":"s1","services":[
+			{"id":"a","name":"stripe","accessBundleId":"b-1","accessBundleName":"payments","hostPattern":"api.stripe.com","credential":{"type":"passthrough"},
+				"hook":{"id":"h-1","name":"refund-gate","url":"https://hooks.example.com/stripe","secret":"`+testHookSecret+`","methods":["post"],"paths":["/v1/refunds/"],"tools":null}},
+			{"id":"b","name":"linear","accessBundleId":null,"hostPattern":"x.example","credential":{"type":"passthrough"},
+				"hook":{"id":"h-1","name":"refund-gate","url":"not a url","secret":"`+testHookSecret+`","tools":["delete_issue"]}},
+			{"id":"c","name":"plain","accessBundleId":"b-1","hostPattern":"y.example","credential":{"type":"passthrough"},"hook":null},
+			{"id":"d","name":"older","hostPattern":"z.example","credential":{"type":"passthrough"}}
+		],"sessionLogs":{"enabled":false},
+		"session":{"label":"Nightly refunds","actor":{"type":"machineIdentity","id":"m-1","name":"support-agent","email":null},"onBehalfOf":{"id":"u-1","name":"Ana Silva","email":"ana@acme.com"},"metadata":{"ticket":"T-1"}}}`)
+
+	stripe, linear, plain, older := res.Services[0], res.Services[1], res.Services[2], res.Services[3]
+	hook := stripe.hook
+	if stripe.accessBundleID != "b-1" || hook == nil || hook.id != "h-1" || hook.name == nil || *hook.name != "refund-gate" ||
+		hook.origin() != "https://hooks.example.com" || string(hook.secret) != testHookSecret {
+		t.Fatalf("stripe = %+v hook %+v", stripe, hook)
 	}
-	if inline.accessBundleID != "" || inline.hook == nil || inline.hook.url != nil {
-		t.Fatalf("an unusable hook must stay a hook that fails, got %+v", inline.hook)
+	if !reflect.DeepEqual(hook.methods, map[string]bool{"POST": true}) || !reflect.DeepEqual(hook.paths, []string{"/v1/refunds"}) || hook.tools != nil {
+		t.Fatalf("stripe narrowing = %+v", hook)
+	}
+	if linear.accessBundleID != "" || linear.hook == nil || linear.hook.url != nil || !linear.hook.tools["delete_issue"] {
+		t.Fatalf("an unusable hook must stay a hook that fails, got %+v", linear.hook)
 	}
 	if plain.hook != nil || older.hook != nil {
 		t.Fatal("a service with no hook got one")
 	}
 	s := res.Session
 	if s == nil || *s.Label != "Nightly refunds" || s.Actor.Type != "machineIdentity" || s.Actor.Email != nil ||
-		s.OnBehalfOf == nil || *s.OnBehalfOf.Email != "ana@acme.com" {
+		s.OnBehalfOf == nil || *s.OnBehalfOf.Email != "ana@acme.com" || s.Metadata["ticket"] != "T-1" {
 		t.Fatalf("session = %+v", s)
+	}
+}
+
+// Servers before named hooks send only the URL and secret, which asks the hook about everything.
+func TestAnOlderServersHookIsAskedAboutEveryRequestOfItsService(t *testing.T) {
+	res := resolveBody(t, `{"sessionId":"s1","services":[
+			{"id":"a","name":"stripe","hostPattern":"api.stripe.com","credential":{"type":"passthrough"},"hook":{"url":"https://hooks.example.com/stripe","secret":"`+testHookSecret+`"}}
+		],"sessionLogs":{"enabled":false}}`)
+
+	svc := res.Services[0]
+	hook := svc.hook
+	if hook == nil || hook.url == nil || hook.id != "" || hook.name != nil || hook.methods != nil || hook.paths != nil || hook.tools != nil {
+		t.Fatalf("hook = %+v", hook)
+	}
+	if !hook.matches(svc, httptest.NewRequest(http.MethodDelete, "https://api.stripe.com/v1/anything", nil), nil) {
+		t.Fatal("an older server's hook skipped a request")
 	}
 }
 

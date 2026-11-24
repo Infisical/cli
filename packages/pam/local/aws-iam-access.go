@@ -16,7 +16,12 @@ import (
 	"github.com/Infisical/infisical-merge/packages/util"
 )
 
-func startAWSAccess(_ *resty.Client, response *api.PAMAccessResponse, path, _ string, _ int) {
+func startAWSAccess(httpClient *resty.Client, response *api.PAMAccessResponse, path, durationStr string, port int) {
+	if response.GatewayId != "" {
+		startAWSGatewayAccess(httpClient, response, path, durationStr, port)
+		return
+	}
+
 	expiresAtStr := response.Metadata["expiresAt"]
 	accessKeyId := response.Metadata["accessKeyId"]
 	secretAccessKey := response.Metadata["secretAccessKey"]
@@ -87,7 +92,10 @@ func startAWSAccess(_ *resty.Client, response *api.PAMAccessResponse, path, _ st
 	select {
 	case sig := <-sigChan:
 		log.Info().Msgf("Received signal %v, cleaning up...", sig)
+		// A second Ctrl+C then exits at once, even if Infisical is slow to answer the end call
+		signal.Stop(sigChan)
 		cleanup()
+		endSession(httpClient, response.SessionId)
 	case <-time.After(remaining):
 		fmt.Printf("\n  AWS session expired. Cleaning up credentials...\n\n")
 		cleanup()
