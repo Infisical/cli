@@ -1477,7 +1477,9 @@ func (tm *AgentManager) FetchNewAccessToken() error {
 		util.PrintErrorMessageAndExit("At this time, agent does not support refresh of tokens with 30 seconds or less ttl. Please increase access token ttl and try again")
 	}
 
-	tm.accessTokenFetchedTime = time.Now()
+	// Wall clock (Round(0)) so time the machine spends suspended counts toward
+	// the token's TTL and max TTL; the monotonic clock pauses during sleep.
+	tm.accessTokenFetchedTime = time.Now().Round(0)
 
 	log.Debug().Msg("FetchNewAccessToken: setting token")
 	tm.SetToken(credential.AccessToken, accessTokenTTL, accessTokenMaxTTL)
@@ -1738,7 +1740,7 @@ func (tm *AgentManager) RefreshAccessToken(accessToken string) error {
 
 	accessTokenTTL := time.Duration(response.AccessTokenTTL * int(time.Second))
 	accessTokenMaxTTL := time.Duration(response.AccessTokenMaxTTL * int(time.Second))
-	tm.accessTokenRefreshedTime = time.Now()
+	tm.accessTokenRefreshedTime = time.Now().Round(0)
 
 	tm.SetToken(response.AccessToken, accessTokenTTL, accessTokenMaxTTL)
 
@@ -1772,7 +1774,7 @@ func (tm *AgentManager) ManageTokenLifecycle() {
 
 				if isSavedTokenValid {
 					log.Info().Msg("token refreshed successfully from saved file")
-					tm.accessTokenFetchedTime = time.Now()
+					tm.accessTokenFetchedTime = time.Now().Round(0)
 				} else {
 					log.Error().Msg("unable to refresh token from saved file")
 				}
@@ -1828,14 +1830,36 @@ func (tm *AgentManager) ManageTokenLifecycle() {
 		if nextAccessTokenExpiresInTime.After(accessTokenMaxTTLExpiresInTime) {
 			// case: Refreshed so close that the next refresh would occur beyond max ttl
 			// Sleep until we're at 2/3 of the remaining time to max TTL
-			remainingTime := time.Until(accessTokenMaxTTLExpiresInTime)
-			time.Sleep(remainingTime * 2 / 3)
+			sleepUntilWallClock(time.Now().Round(0).Add(time.Until(accessTokenMaxTTLExpiresInTime) * 2 / 3))
 		} else {
 			// Sleep until we're at 2/3 of the TTL
 			sleepDuration := tm.accessTokenTTL * 2 / 3
 			log.Debug().Msgf("sleeping for %s (2/3 of TTL %s) before next token refresh", sleepDuration, tm.accessTokenTTL)
-			time.Sleep(sleepDuration)
+			sleepUntilWallClock(time.Now().Round(0).Add(sleepDuration))
 		}
+	}
+}
+
+// tokenLifecycleMaxSleep bounds one monotonic wait inside the token lifecycle.
+// Go's timers pause while the machine is suspended, so an unbounded
+// time.Sleep would stay asleep for the whole suspend and the agent would keep
+// an expired token long after wake; re-arming in chunks lets the loop observe
+// a wall-clock deadline soon after the machine resumes.
+const tokenLifecycleMaxSleep = 30 * time.Second
+
+// sleepUntilWallClock sleeps until deadline, re-checking the wall clock every
+// tokenLifecycleMaxSleep so a machine suspend cannot oversleep the deadline by
+// more than one chunk.
+func sleepUntilWallClock(deadline time.Time) {
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return
+		}
+		if remaining > tokenLifecycleMaxSleep {
+			remaining = tokenLifecycleMaxSleep
+		}
+		time.Sleep(remaining)
 	}
 }
 
