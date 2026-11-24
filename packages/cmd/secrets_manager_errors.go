@@ -52,7 +52,7 @@ var errorCodes = []string{
 	errCodeSessionTokenRequired, errCodeProxyRequired, errCodeProxyUnreachable, errCodeProxyUntrusted,
 	errCodeProxyNotSupported, errCodeServiceNotFound, errCodeNoServices, errCodeServiceRefused,
 	errCodeSessionInvalid, errCodeLocalPortUnavailable, errCodeSkillNotFound,
-	errCodeAccountNotFound, errCodeApprovalPending, errCodeApprovalRequired, errCodeApprovalNotConfigured,
+	errCodeAccountNotFound, errCodeApprovalPending, errCodeApprovalRequired, errCodeApprovalNotConfigured, errCodeAccessApproved,
 	errCodeReasonRequired, errCodeMFARequired, errCodeSessionExpired, errCodeCommandNotSupported,
 	errCodeCommandRemoved,
 }

@@ -31,9 +31,10 @@ The same commands work for people and AI agents:
        infisical pam access prod/orders-db -- psql -c "select 1"
        infisical pam access prod/bastion -- uptime
 
-  3. If the account needs approval, the command files an access request and exits with an
-     error saying so. A person approves it in Infisical; check the status with
-     'infisical pam accounts get <folder/account>' and run the command again.
+  3. If the account needs approval, the command files an access request. When an
+     auto-approval rule approves it, the command connects right away. Otherwise it exits
+     with an error saying so; a person approves it in Infisical, and you check the status
+     with 'infisical pam accounts get <folder/account>' and run the command again.
 
 Run as a machine identity by setting INFISICAL_TOKEN, or INFISICAL_AUTH_METHOD with that
 method's credentials. Otherwise the user logged in with 'infisical login' is used.`,
@@ -76,16 +77,19 @@ Connecting through the proxy:
 Without '--', SSH accounts open a shell and every other type starts a local proxy (or
 credential helper) for your own client until you stop it.
 
-To use several accounts at once, such as copying data between two databases, start a
-proxy for each in the background, each on its own --port, then stop each with kill to
-end its session:
+To use several database, Redis or SSH (--proxy) accounts at once, such as copying data
+between two databases, start a proxy for each in the background, each on its own --port,
+then stop each with kill to end its session:
   infisical pam access prod/orders-db --port 15432 < /dev/null > orders-db.log 2>&1 &
   infisical pam access staging/orders-db --port 15433 < /dev/null > staging-db.log 2>&1 &
+Kubernetes and GCP proxies edit your shared kubeconfig and gcloud config, so for those run
+one command per account with '--' instead.
 
 Without a terminal, nothing prompts. An account that needs approval gets an access request
-filed with --reason and --duration, and the command exits with an error saying it's
-waiting for approval. An account that requires MFA exits with an error that has a link a
-person opens; run the command again with --mfa-session afterwards.`,
+filed with --reason and --duration. If an auto-approval rule approves it, the command
+connects; otherwise it exits with an error saying it's waiting for approval. An account
+that requires MFA exits with an error that has a link a person opens; run the command
+again with --mfa-session afterwards.`,
 	Example: `  infisical pam access prod/orders-db -- psql -c "select count(*) from orders"
   infisical pam access prod/cluster -- kubectl get pods -A
   infisical pam access servers/prod-bastion -- systemctl status nginx
@@ -160,7 +164,12 @@ func runPAMAccess(cmd *cobra.Command, args []string) {
 		if !handlePAMAccessError(cmd, httpClient, err, failure) {
 			return
 		}
+		// The backend uses up an MFA session before it checks for approval, so it can't be sent twice.
+		opts.MfaSessionId = ""
 		response, err = pam.OpenSession(httpClient, opts, true)
+		if _, gated := pam.ApprovalGateFrom(err); gated {
+			exitWithError(cmd, errPAMApprovedRerun(invocation))
+		}
 		if err != nil {
 			handlePAMAccessError(cmd, httpClient, err, failure)
 			return

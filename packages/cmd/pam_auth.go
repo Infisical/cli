@@ -127,7 +127,12 @@ func resolvePAMAccessToken(cmd *cobra.Command) (accessToken func() string, stop 
 		exitWithError(cmd, errPAMAuthRequired(err))
 	}
 	if err != nil {
-		exitWithError(cmd, errPAMLoginUnreadable(err))
+		orgSelected := os.Getenv(util.INFISICAL_ORG_ENV_NAME) != ""
+		if flag := cmd.Flags().Lookup("org"); flag != nil && flag.Changed {
+			orgSelected = true
+		}
+		selectionError := orgSelected || errors.Is(err, util.ErrProfileNotFound) || errors.Is(err, util.ErrProfileDomainMismatch)
+		exitWithError(cmd, errPAMLoginUnreadable(err, selectionError))
 	}
 
 	if loggedInUserDetails.LoginExpired && util.ValidateInfisicalAPIConnection() {

@@ -13,6 +13,7 @@ const (
 	errCodeApprovalPending       = "approval_pending"
 	errCodeApprovalRequired      = "approval_required"
 	errCodeApprovalNotConfigured = "approval_not_configured"
+	errCodeAccessApproved        = "access_approved"
 	errCodeReasonRequired        = "reason_required"
 	errCodeMFARequired           = "mfa_required"
 	errCodeSessionExpired        = "session_expired"
@@ -115,7 +116,12 @@ func errPAMMachineIdentityLogin(authMethod string, cause error) *util.CLIError {
 		Message: fmt.Sprintf("Couldn't authenticate as a machine identity with %s: %v. Check the identity's credentials and that the auth method is configured on it.", quoted(authMethod, "auth method"), cause)}
 }
 
-func errPAMLoginUnreadable(cause error) *util.CLIError {
+// A profile, organization or domain selection error already says how to fix itself.
+func errPAMLoginUnreadable(cause error, selectionError bool) *util.CLIError {
+	if selectionError {
+		return &util.CLIError{Code: errCodeInvalidFlagValue, Cause: cause,
+			Message: fmt.Sprintf("Couldn't use the selected profile, organization or domain: %v.", cause)}
+	}
 	return &util.CLIError{Code: errCodeAuthRequired, Cause: cause,
 		Message: fmt.Sprintf("Couldn't read your saved login: %v. Log in again.", cause),
 		Next:    []util.NextStep{{Purpose: "To log in", Command: "infisical login"}}}
@@ -168,6 +174,12 @@ func errPAMApprovalPending(invocation pamAccessInvocation, requestID string, reg
 	return &util.CLIError{Code: errCodeApprovalPending,
 		Message: message,
 		Next:    []util.NextStep{invocation.statusStep(), {Purpose: "To connect once it's approved", Command: invocation.accessCommand("")}}}
+}
+
+func errPAMApprovedRerun(invocation pamAccessInvocation) *util.CLIError {
+	return &util.CLIError{Code: errCodeAccessApproved,
+		Message: fmt.Sprintf("Access to %s was approved, but it isn't active yet. Run the command again to connect.", pamAccountArg(invocation.Path)),
+		Next:    []util.NextStep{{Purpose: "To connect", Command: invocation.accessCommand("")}}}
 }
 
 func errPAMApprovalRequired(invocation pamAccessInvocation) *util.CLIError {

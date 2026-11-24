@@ -100,6 +100,7 @@ With `-o json`, the same error is JSON on stderr:
 | `approval_pending` | `pam access` without a terminal on an account that needs approval. An access request was filed, or one is already waiting. Suggests `pam accounts get` to check |
 | `approval_required` | `pam access --no-approval-request` on an account that needs approval. Nothing is filed |
 | `approval_not_configured` | `pam access` on an account that needs approval, in a folder with no approvers |
+| `access_approved` | `pam access` filed a request that an auto-approval rule approved, but the approval wasn't visible yet when it connected. Suggests running the same command again |
 | `reason_required` | `pam access` without `--reason` on an account whose template requires one, or whose access request requires one. Nothing is filed |
 | `mfa_required` | `pam access` without a terminal on an account that requires MFA. The message has the link a person opens; suggests re-running with `--mfa-session` |
 | `session_expired` | `pam access -- <command>`: the session's duration, or the AWS credentials of an account without a Gateway, ran out before the command finished, so the command was stopped |

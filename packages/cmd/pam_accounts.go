@@ -296,7 +296,7 @@ func printPAMAccountDetails(view pamAccountView) {
 	}
 	switch view.Access {
 	case pamAccessNeedsApproval:
-		lines = append(lines, "", "This files an access request and exits with an error until a person approves it.")
+		lines = append(lines, "", "This files an access request. Unless an auto-approval rule approves it, it exits with an error until a person does.")
 	case pamAccessPending:
 		lines = append(lines, "", "A request is waiting for a person to approve it. Check again later.")
 	}

@@ -37,7 +37,9 @@ func pamConstructedErrors() []*util.CLIError {
 		errPAMTokenRejected(cause),
 		errPAMInvalidAuthMethod("kerberos"),
 		errPAMMachineIdentityLogin("universal-auth", cause),
-		errPAMLoginUnreadable(cause),
+		errPAMLoginUnreadable(cause, false),
+		errPAMLoginUnreadable(cause, true),
+		errPAMApprovedRerun(invocation),
 		errPAMNotMember(cause, true),
 	}
 }
