@@ -75,15 +75,21 @@ func TestManageTokenLifecycleStoresWallClockTimes(t *testing.T) {
 		close(done)
 	}()
 
+	fetchedTime := func() time.Time {
+		tm.mutex.Lock()
+		defer tm.mutex.Unlock()
+		return tm.accessTokenFetchedTime
+	}
+
 	deadline := time.After(10 * time.Second)
-	for tm.accessTokenFetchedTime.IsZero() {
+	for fetchedTime().IsZero() {
 		select {
 		case <-deadline:
 			t.Fatal("ManageTokenLifecycle never fetched and refreshed the sink token")
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
-	tm.isShuttingDown = true
+	tm.isShuttingDown.Store(true)
 
 	select {
 	case <-done:

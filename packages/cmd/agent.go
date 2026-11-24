@@ -1169,7 +1169,7 @@ type AgentManager struct {
 	exitAfterAuth                   bool
 	revokeCredentialsOnShutdown     bool
 
-	isShuttingDown bool
+	isShuttingDown atomic.Bool
 
 	hookMutex    sync.Mutex
 	lastHookDone map[int]chan struct{}
@@ -1479,7 +1479,9 @@ func (tm *AgentManager) FetchNewAccessToken() error {
 
 	// Wall clock (Round(0)) so time the machine spends suspended counts toward
 	// the token's TTL and max TTL; the monotonic clock pauses during sleep.
+	tm.mutex.Lock()
 	tm.accessTokenFetchedTime = time.Now().Round(0)
+	tm.mutex.Unlock()
 
 	log.Debug().Msg("FetchNewAccessToken: setting token")
 	tm.SetToken(credential.AccessToken, accessTokenTTL, accessTokenMaxTTL)
@@ -1740,7 +1742,9 @@ func (tm *AgentManager) RefreshAccessToken(accessToken string) error {
 
 	accessTokenTTL := time.Duration(response.AccessTokenTTL * int(time.Second))
 	accessTokenMaxTTL := time.Duration(response.AccessTokenMaxTTL * int(time.Second))
+	tm.mutex.Lock()
 	tm.accessTokenRefreshedTime = time.Now().Round(0)
+	tm.mutex.Unlock()
 
 	tm.SetToken(response.AccessToken, accessTokenTTL, accessTokenMaxTTL)
 
@@ -1750,7 +1754,7 @@ func (tm *AgentManager) RefreshAccessToken(accessToken string) error {
 func (tm *AgentManager) ManageTokenLifecycle() {
 	for {
 
-		if tm.isShuttingDown {
+		if tm.isShuttingDown.Load() {
 			return
 		}
 
@@ -1774,7 +1778,9 @@ func (tm *AgentManager) ManageTokenLifecycle() {
 
 				if isSavedTokenValid {
 					log.Info().Msg("token refreshed successfully from saved file")
+					tm.mutex.Lock()
 					tm.accessTokenFetchedTime = time.Now().Round(0)
+					tm.mutex.Unlock()
 				} else {
 					log.Error().Msg("unable to refresh token from saved file")
 				}
@@ -1946,7 +1952,7 @@ func (tm *AgentManager) MonitorSecretChanges(ctx context.Context, secretTemplate
 				token := tm.GetToken()
 
 				if token != "" {
-					if tm.isShuttingDown {
+					if tm.isShuttingDown.Load() {
 						return
 					}
 
@@ -4042,7 +4048,7 @@ func runAgent(configPath string, stop <-chan struct{}, ready func()) int {
 		case <-tokenRefreshNotifier:
 			go tm.WriteTokenToFiles()
 		case <-sigChan:
-			tm.isShuttingDown = true
+			tm.isShuttingDown.Store(true)
 			tm.cancelContext()
 			log.Info().Msg("agent is gracefully shutting down...")
 			cancel()
@@ -4265,13 +4271,13 @@ var certManagerAgentCmd = &cobra.Command{
 			case <-tokenRefreshNotifier:
 				go tm.WriteTokenToFiles()
 			case <-ctx.Done():
-				tm.isShuttingDown = true
+				tm.isShuttingDown.Store(true)
 				tm.cancelContext()
 				log.Info().Msg("certificate management agent context cancelled, shutting down...")
 				cancel()
 				return
 			case <-sigChan:
-				tm.isShuttingDown = true
+				tm.isShuttingDown.Store(true)
 				tm.cancelContext()
 				log.Info().Msg("certificate management agent is gracefully shutting down...")
 				cancel()
