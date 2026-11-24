@@ -208,6 +208,12 @@ func errPAMMFARequired(invocation pamAccessInvocation, url, mfaSessionID string)
 		Next:    []util.NextStep{{Purpose: "To connect after verification", Command: invocation.accessCommand("--mfa-session " + util.SuggestedValue(mfaSessionID, "mfa-session-id"))}}}
 }
 
+func errPAMMFARequiredAfterApproval(invocation pamAccessInvocation, url, mfaSessionID string) *util.CLIError {
+	err := errPAMMFARequired(invocation, url, mfaSessionID)
+	err.Message = fmt.Sprintf("Access to %s was approved. The account also requires MFA, and each verification works for one connection, so it needs MFA once more. Ask the person you're working for to open %s and complete verification, then run the command again with --mfa-session.", pamAccountArg(invocation.Path), url)
+	return err
+}
+
 func errPAMSessionExpired(invocation pamAccessInvocation, ranFor time.Duration, awsCredentials bool) *util.CLIError {
 	if awsCredentials {
 		return &util.CLIError{Code: errCodeSessionExpired,

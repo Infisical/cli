@@ -170,6 +170,9 @@ func runPAMAccess(cmd *cobra.Command, args []string) {
 		if _, gated := pam.ApprovalGateFrom(err); gated {
 			exitWithError(cmd, errPAMApprovedRerun(invocation))
 		}
+		if challenge, ok := pam.MFAChallengeFrom(err); ok {
+			exitWithError(cmd, errPAMMFARequiredAfterApproval(invocation, challenge.URL(), challenge.SessionID))
+		}
 		if err != nil {
 			handlePAMAccessError(cmd, httpClient, err, failure)
 			return

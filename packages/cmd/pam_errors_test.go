@@ -40,6 +40,7 @@ func pamConstructedErrors() []*util.CLIError {
 		errPAMLoginUnreadable(cause, false),
 		errPAMLoginUnreadable(cause, true),
 		errPAMApprovedRerun(invocation),
+		errPAMMFARequiredAfterApproval(invocation, "https://app.infisical.com/mfa-session/abc123", "abc123"),
 		errPAMNotMember(cause, true),
 	}
 }
