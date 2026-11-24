@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 )
@@ -64,6 +65,65 @@ func TestTerminalTranscript(t *testing.T) {
 	}
 }
 
+func renderWide(width int, chunks ...string) []string {
+	t := newTerminalTranscript()
+	t.SetWidth(width)
+	var got []string
+	for _, c := range chunks {
+		got = append(got, t.Feed([]byte(c))...)
+	}
+	return append(got, t.Flush()...)
+}
+
+// Shells wrap a line longer than the terminal by writing a space and a carriage return.
+func TestTranscriptWrapsAtTerminalWidth(t *testing.T) {
+	tests := []struct {
+		name   string
+		chunks []string
+		want   []string
+	}{
+		{"bash wrap", []string{"$ echo abcdefghijklm \rnopq\r\n"}, []string{"$ echo abcdefghijklmnopq"}},
+		{"zsh wrap", []string{"% echo abcdefghijklm \r" + esc + "[Kn\rnopq\r\n"}, []string{"% echo abcdefghijklmnopq"}},
+		{"zsh partial-line marker", []string{"%" + strings.Repeat(" ", 19) + "\r \r" + "% ls\r\n"}, []string{"% ls"}},
+		{"edit a row above", []string{"$ echo abcdefghijklm \rnopq" + esc + "[A\r" + esc + "[7CX" + esc + "[B\r\n"}, []string{"$ echo Xbcdefghijklmnopq"}},
+		{"newline moves down within the line", []string{"$ echo abcdefghijklm \rnopq" + esc + "[A\n\rNO\r\n"}, []string{"$ echo abcdefghijklmNOpq"}},
+		{"erase a row keeps the rows after it", []string{"$ echo abcdefghijklm \rnopq" + esc + "[A\r" + esc + "[K\r\n"}, []string{strings.Repeat(" ", 20) + "nopq"}},
+		{"short lines unchanged", []string{"ab\rc\n" + esc + "[2Jx\n"}, []string{"cb", "x"}},
+		{"delete and insert stay within a row", []string{"$ echo abcdefghijklm \rnopq" + esc + "[A\r" + esc + "[7C" + esc + "[2P" + esc + "[1@" + esc + "[B\r\n"},
+			[]string{"$ echo  cdefghijklm nopq"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := renderWide(20, tt.chunks...); !slices.Equal(got, tt.want) {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// zsh redraws a wrapped command after an edit at its start with row-local deletes and moves.
+func TestTranscriptFollowsZshRedrawOfWrappedCommand(t *testing.T) {
+	typed := "e\becho " + strings.Repeat("klmnopqrst", 10) + "k \r" + esc + "[Kl\rlmnopqrst" + strings.Repeat("klmnopqrst", 2)
+	edited := esc + "[A" + esc + "[15Dxecho " + esc + "[9P" + esc + "[91Clmnopqrstk" + esc + "[9P" + esc + "[19Cklmnopqrst" +
+		esc + "[A" + esc + "[15D" + esc + "[1B" + esc + "[15C" + esc + "[?1l" + esc + ">" + esc + "[?2004l\r\r\nzsh: command not found: xecho\r\n"
+	prompt := "host%" + strings.Repeat(" ", 9)
+	want := []string{prompt + "xecho " + strings.Repeat("klmnopqrst", 13), "zsh: command not found: xecho"}
+	if got := renderWide(120, prompt, typed, edited); !slices.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// Widening the terminal while a wrap is pending must not move the cursor's row before the line.
+func TestTranscriptSurvivesWideningMidWrap(t *testing.T) {
+	for _, erase := range []string{"[1K", "[2K", "[3K", "[K", "[1P", "[1@", "[1X"} {
+		tr := newTerminalTranscript()
+		tr.SetWidth(10)
+		tr.Feed([]byte(strings.Repeat("x", 10)))
+		tr.SetWidth(50)
+		tr.Feed([]byte(esc + erase + "y\r\n"))
+	}
+}
+
 func TestTranscriptBoundsPathologicalInput(t *testing.T) {
 	tr := newTerminalTranscript()
 	tr.Feed([]byte(strings.Repeat("x", 100_000)))
@@ -77,6 +137,22 @@ func TestTranscriptBoundsPathologicalInput(t *testing.T) {
 
 	if n := len(tr.line); n > maxLineRunes {
 		t.Errorf("line grew to %d runes, want at most %d", n, maxLineRunes)
+	}
+
+	// Inserting on a row that runs past the line limit.
+	huge := newTerminalTranscript()
+	huge.SetWidth(5000)
+	huge.Feed([]byte(strings.Repeat("z", maxLineRunes-1) + "\r" + esc + "[3000@"))
+	if n := len(huge.line); n > maxLineRunes {
+		t.Errorf("line grew to %d runes after inserts, want at most %d", n, maxLineRunes)
+	}
+
+	// A tab near the line limit on a terminal whose width is not a multiple of the tab width.
+	wide := newTerminalTranscript()
+	wide.SetWidth(30)
+	wide.Feed([]byte(strings.Repeat("y", maxLineRunes-1) + "\t\t"))
+	if n := len(wide.line); n > maxLineRunes {
+		t.Errorf("wrapped line grew to %d runes, want at most %d", n, maxLineRunes)
 	}
 }
 
@@ -261,6 +337,184 @@ func TestSessionRecording(t *testing.T) {
 				emit(p, ch, "\r\n1\r\n")
 			},
 			want: []string{"output: user@host:~$ ls -la | wc -l [command: ls -la | wc -l]", "output: 1"},
+		},
+		{
+			name: "typed faster than the echo comes back",
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, prompt("~"))
+				typeSilently(p, ch, "pwd")
+				emit(p, ch, "pwd\r\n/root\r\n"+prompt("~"))
+			},
+			want: []string{"output: user@host:~$ pwd [command: pwd]", "output: /root", "output: user@host:~$"},
+		},
+		{
+			name: "several commands typed faster than the echo comes back",
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, prompt("~"))
+				typeSilently(p, ch, "pwd")
+				typeSilently(p, ch, "whoami")
+				emit(p, ch, "pwd\r\n/root\r\n"+prompt("~")+"whoami\r\nroot\r\n")
+			},
+			want: []string{
+				"output: user@host:~$ pwd [command: pwd]",
+				"output: /root",
+				"output: user@host:~$ whoami [command: whoami]",
+				"output: root",
+			},
+		},
+		{
+			name: "silent read that prints no newline",
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, prompt("~"))
+				typeLine(p, ch, shell, "read -s x")
+				emit(p, ch, "\r\n")
+				typeSilently(p, ch, "hunter2")
+				emit(p, ch, prompt("~"))
+				typeLine(p, ch, shell, "id -u")
+				emit(p, ch, "\r\n0\r\n")
+			},
+			want: []string{
+				"output: user@host:~$ read -s x [command: read -s x]",
+				"output: user@host:~$ id -u [command: id -u]",
+				"input: hunter2",
+				"output: 0",
+			},
+		},
+		{
+			name: "typed before the prompt is drawn, entered before the echo finishes",
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, prompt("~"))
+				typeLine(p, ch, shell, "ls")
+				emit(p, ch, "\r\nLICENSE\r\n")
+				p.bufferInput([]byte("id -u"), "sid", shell, ch)
+				emit(p, ch, prompt("~")+"id -")
+				p.bufferInput([]byte{0x0D}, "sid", shell, ch)
+				emit(p, ch, "u\r\n0\r\n")
+			},
+			want: []string{
+				"output: user@host:~$ ls [command: ls]",
+				"output: LICENSE",
+				"output: user@host:~$ id -u [command: id -u]",
+				"output: 0",
+			},
+		},
+		{
+			name: "keys typed into a full-screen program stay out of the next command",
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, prompt("~"))
+				typeLine(p, ch, shell, "less f")
+				emit(p, ch, "\r\n"+esc+"[?1049hcontents\r\n")
+				p.bufferInput([]byte("q"), "sid", shell, ch)
+				emit(p, ch, esc+"[?1049l"+prompt("~"))
+				typeLine(p, ch, shell, "pwd")
+				emit(p, ch, "\r\n/root\r\n"+prompt("~"))
+				p.bufferInput([]byte("q"), "sid", shell, ch)
+				emit(p, ch, esc+"[?1049l")
+				p.bufferInput([]byte{0x0D}, "sid", shell, ch)
+				emit(p, ch, "\r\n")
+			},
+			want: []string{
+				"output: user@host:~$ less f [command: less f]",
+				"output: contents",
+				"output: user@host:~$ pwd [command: pwd]",
+				"output: /root",
+				"output: user@host:~$",
+			},
+		},
+		{
+			name: "command longer than the terminal",
+			steps: func(p *SSHProxy, ch *channelState) {
+				ch.setWidth(30)
+				emit(p, ch, "$ ")
+				typeSilently(p, ch, "echo "+strings.Repeat("ab", 20))
+				emit(p, ch, "echo "+strings.Repeat("ab", 11)+"a \rb"+strings.Repeat("ab", 8)+"\r\nok\r\n")
+			},
+			want: []string{"output: $ echo " + strings.Repeat("ab", 20) + " [command: echo " + strings.Repeat("ab", 20) + "]", "output: ok"},
+		},
+		{
+			name: "typing inside a full-screen program is not a command",
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, prompt("~"))
+				typeLine(p, ch, shell, "vim .env")
+				emit(p, ch, "\r\n"+esc+"[?1049h"+esc+"[H")
+				typeLine(p, ch, shell, "DB_PASSWORD=hunter2")
+				emit(p, ch, "\r\n")
+				p.bufferInput([]byte(esc+"[B"), "sid", shell, ch)
+				p.bufferInput([]byte{0x0D}, "sid", shell, ch)
+				emit(p, ch, esc+"[2;1Hapi_token=sk_live_abcdef\r\n")
+				typeLine(p, ch, shell, ":wq")
+				emit(p, ch, esc+"[?1049l"+prompt("~"))
+				typeLine(p, ch, shell, "ls")
+				emit(p, ch, "\r\n")
+			},
+			want: []string{
+				"output: user@host:~$ vim .env [command: vim .env]",
+				"output: DB_PASSWORD=hunter2",
+				"output: api_token=sk_live_abcdef",
+				"output: :wq",
+				"output: user@host:~$ ls [command: ls]",
+			},
+		},
+		{
+			name: "completion typed before the prompt is drawn",
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, prompt("~"))
+				typeLine(p, ch, shell, "ls")
+				emit(p, ch, "\r\nLICENSE\r\n")
+				p.bufferInput([]byte("cd Doc\t"), "sid", shell, ch)
+				emit(p, ch, prompt("~")+"cd Documents/")
+				p.bufferInput([]byte{0x0D}, "sid", shell, ch)
+				emit(p, ch, "\r\n")
+			},
+			want: []string{
+				"output: user@host:~$ ls [command: ls]",
+				"output: LICENSE",
+				"output: user@host:~$ cd Documents/ [command: cd Documents/]",
+			},
+		},
+		{
+			name: "password typed before its prompt appears",
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, prompt("~"))
+				typeLine(p, ch, shell, "sudo ls")
+				emit(p, ch, "\r\n")
+				p.bufferInput([]byte("hunter2"), "sid", shell, ch)
+				emit(p, ch, "[sudo] password for user: ")
+				p.bufferInput([]byte{0x0D}, "sid", shell, ch)
+				emit(p, ch, "\r\nLICENSE\r\n")
+			},
+			want: []string{
+				"output: user@host:~$ sudo ls [command: sudo ls]",
+				"output: [sudo] password for user:",
+				"output: LICENSE",
+				"input: hunter2",
+			},
+		},
+		{
+			name: "history recalled right after Ctrl+C",
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, prompt("~"))
+				typeLine(p, ch, shell, "npm start")
+				emit(p, ch, "\r\nlistening")
+				p.bufferInput([]byte{0x03}, "sid", shell, ch)
+				p.bufferInput([]byte(esc+"[A"), "sid", shell, ch)
+				p.bufferInput([]byte{0x0D}, "sid", shell, ch)
+				emit(p, ch, "^C\r\n"+prompt("~")+"npm start\r\n")
+			},
+			want: []string{
+				"output: user@host:~$ npm start [command: npm start]",
+				"output: listening^C",
+				"output: user@host:~$ npm start",
+			},
+		},
+		{
+			name: "pasted tab shown as spaces",
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, prompt("~"))
+				p.bufferInput([]byte("printf 'a\tb'\r"), "sid", shell, ch)
+				emit(p, ch, "printf 'a\tb'\r\n")
+			},
+			want: []string{"output: user@host:~$ printf 'a  b' [command: printf 'a  b']"},
 		},
 		{
 			name: "arrow keys in a full-screen program enter no command",
@@ -501,6 +755,67 @@ func TestInputFilterRecognizesHistoryKeys(t *testing.T) {
 		if f.historyKey != want {
 			t.Errorf("%q: history key %v, want %v", keys, f.historyKey, want)
 		}
+	}
+}
+
+// laggingInput delivers a command, then its Enter while the echo of the last key is still in
+// flight from the server.
+type laggingInput struct {
+	p  *SSHProxy
+	ch *channelState
+	i  int
+}
+
+func (r *laggingInput) Read(b []byte) (int, error) {
+	r.i++
+	switch r.i {
+	case 1:
+		return copy(b, "sudo what"), nil
+	case 2:
+		emit(r.p, r.ch, "sudo wha")
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			emit(r.p, r.ch, "t")
+		}()
+		return copy(b, "\r"), nil
+	default:
+		return 0, io.EOF
+	}
+}
+
+// A command blocked before its echo arrives is still recorded whole.
+func TestBlockedCommandWaitsForItsEcho(t *testing.T) {
+	logger := &recordingLogger{}
+	p := NewSSHProxy(SSHProxyConfig{
+		SessionLogger:          logger,
+		BlockedCommandPatterns: []*regexp.Regexp{regexp.MustCompile(`sudo`)},
+	})
+	ch := newChannelState()
+	ch.channelType = session.SessionChannelShell
+
+	emit(p, ch, prompt("~"))
+	if err := p.proxyClientToServerWithBlocking(&laggingInput{p: p, ch: ch}, io.Discard, io.Discard, "sid", ch); err != nil {
+		t.Fatalf("proxy returned %v", err)
+	}
+
+	var got []string
+	for _, e := range logger.events {
+		got = append(got, string(e.EventType)+": "+string(e.Data)+" ["+e.Command+"]")
+	}
+	want := []string{
+		"output: user@host:~$ sudo what [sudo what]",
+		"output: [BLOCKED] Command not permitted []",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestTranscriptCountsFullScreenExits(t *testing.T) {
+	tr := newTerminalTranscript()
+	tr.Feed([]byte(esc + "[?1049h" + esc + "[?25l" + esc + "[?1049l" + esc + "[?47l" + esc + "[?1047l" + esc + "[?1l"))
+	if got := tr.ScreenExits(); got != 3 {
+		t.Errorf("counted %d exits, want 3", got)
 	}
 }
 

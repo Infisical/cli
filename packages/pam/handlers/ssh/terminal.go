@@ -4,6 +4,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/Infisical/infisical-merge/packages/pam/session"
@@ -17,10 +18,14 @@ const (
 )
 
 type terminalTranscript struct {
-	parser    *ansi.Parser
-	line      []rune
-	cursor    int
-	committed int // Lines committed so far, which identifies the line still on screen
+	parser      *ansi.Parser
+	line        []rune
+	cursor      int
+	width       int  // Columns of the client's terminal (0 if unknown); longer lines wrap onto rows
+	wrapPending bool // A row's last column was just written, so the cursor still belongs to that row
+	committed   int  // Lines committed so far, which identifies the line still on screen
+	screenExits int  // Times a full-screen program left the alternate screen
+	alternate   bool // A full-screen program is on the alternate screen
 }
 
 func newTerminalTranscript() *terminalTranscript {
@@ -59,6 +64,47 @@ func (t *terminalTranscript) Committed() int {
 	return t.committed
 }
 
+func (t *terminalTranscript) ScreenExits() int {
+	return t.screenExits
+}
+
+// SetWidth applies a new terminal width; a wrap pending at the old width no longer applies.
+func (t *terminalTranscript) SetWidth(columns int) {
+	t.width, t.wrapPending = min(max(columns, 0), maxLineRunes), false
+}
+
+func (t *terminalTranscript) Width() int {
+	return t.width
+}
+
+func (t *terminalTranscript) Alternate() bool {
+	return t.alternate
+}
+
+func (t *terminalTranscript) rowStart() int {
+	switch {
+	case t.width == 0:
+		return 0
+	case t.wrapPending:
+		return max(t.cursor-t.width, 0)
+	default:
+		return t.cursor - t.cursor%t.width
+	}
+}
+
+// column returns the cursor's position, which stays in a row's last column until the next character wraps.
+func (t *terminalTranscript) column() int {
+	if t.wrapPending {
+		return t.cursor - 1
+	}
+	return t.cursor
+}
+
+// moveTo puts the cursor at pos and ends any pending wrap.
+func (t *terminalTranscript) moveTo(pos int) {
+	t.cursor, t.wrapPending = clampColumn(pos), false
+}
+
 func (t *terminalTranscript) PendingLen() int {
 	n := len(t.line)
 	for n > 0 && t.line[n-1] == ' ' {
@@ -75,13 +121,23 @@ func isCSIState(state parser.State) bool {
 func (t *terminalTranscript) execute(control byte, lines *[]string) {
 	switch control {
 	case '\n', 0x0B, 0x0C:
+		// Within a wrapped line a shell moves down to its next row this way.
+		if t.width > 0 && t.rowStart()+t.width < len(t.line) {
+			t.moveTo(t.column() + t.width)
+			return
+		}
 		*lines = appendLine(*lines, t.commit())
 	case '\r':
-		t.cursor = 0
+		t.moveTo(t.rowStart())
 	case 0x08:
-		t.cursor = max(t.cursor-1, 0)
+		t.moveTo(max(t.column()-1, t.rowStart()))
 	case '\t':
-		for stop := (t.cursor/tabWidth + 1) * tabWidth; t.cursor < stop; {
+		start := t.rowStart()
+		stop := min(start+((t.column()-start)/tabWidth+1)*tabWidth, maxLineRunes)
+		if t.width > 0 {
+			stop = min(stop, start+t.width-1)
+		}
+		for t.cursor < stop {
 			t.writeRune(' ', lines)
 		}
 	}
@@ -90,28 +146,76 @@ func (t *terminalTranscript) execute(control byte, lines *[]string) {
 func (t *terminalTranscript) dispatchCSI(lines *[]string) {
 	switch t.parser.Command() {
 	case 'K', 'J': // erase in line, erase in display
+		start := 0
+		if t.parser.Command() == 'K' {
+			start = t.rowStart()
+		}
+		// Erasing one row of a wrapped line leaves the rows after it.
+		if end := start + t.width; t.parser.Command() == 'K' && t.width > 0 && end < len(t.line) {
+			switch t.param(0) {
+			case 1:
+				t.blank(start, t.column()+1)
+			case 2:
+				t.blank(start, end)
+			default:
+				t.blank(t.column(), end)
+			}
+			break
+		}
 		switch t.param(0) {
 		case 1:
-			t.blank(0, t.cursor)
+			t.blank(start, t.cursor)
 		case 2, 3:
-			t.line, t.cursor = t.line[:0], 0
+			t.line = t.line[:min(start, len(t.line))]
+			t.moveTo(start)
 		default:
-			t.line = t.line[:min(t.cursor, len(t.line))]
+			t.line = t.line[:min(t.column(), len(t.line))]
 		}
 	case 'C': // cursor forward
-		t.cursor = clampColumn(t.cursor + t.param(1))
+		if t.width > 0 {
+			t.moveTo(min(t.column()+t.param(1), t.rowStart()+t.width-1))
+		} else {
+			t.moveTo(t.cursor + t.param(1))
+		}
 	case 'D': // cursor back
-		t.cursor = clampColumn(t.cursor - t.param(1))
+		t.moveTo(max(t.column()-t.param(1), t.rowStart()))
 	case 'G', '`': // absolute column
-		t.cursor = clampColumn(t.param(1) - 1)
+		if t.width > 0 {
+			t.moveTo(t.rowStart() + min(max(t.param(1)-1, 0), t.width-1))
+		} else {
+			t.moveTo(t.param(1) - 1)
+		}
 	case 'P': // delete characters
 		t.deleteChars(t.param(1))
 	case '@': // insert blanks
 		t.insertBlanks(t.param(1))
 	case 'X': // erase characters
-		t.blank(t.cursor, t.cursor+t.param(1))
-	case 'A', 'B', 'E', 'F', 'H', 'f', 'd': // vertical and absolute moves; no rows to move between
+		t.blank(t.column(), min(t.column()+t.param(1), t.rowEnd()))
+	case 'A': // cursor up, which stays within a wrapped line while it has rows above
+		if start := t.rowStart(); t.width > 0 && start >= t.width {
+			t.moveTo(t.column() - min(t.param(1), start/t.width)*t.width)
+		} else {
+			*lines = appendLine(*lines, t.commit())
+		}
+	case 'B': // cursor down, which stays within a wrapped line while it has rows below
+		if start := t.rowStart(); t.width > 0 && start+t.width < len(t.line) {
+			t.moveTo(t.column() + t.width)
+		} else {
+			*lines = appendLine(*lines, t.commit())
+		}
+	case 'E', 'F', 'H', 'f', 'd': // moves to other lines or absolute positions, which no row maps to
 		*lines = appendLine(*lines, t.commit())
+	case '?'<<8 | 'h': // private mode set; 47, 1047 and 1049 switch to the alternate screen
+		if mode := t.param(0); mode == 47 || mode == 1047 || mode == 1049 {
+			*lines = appendLine(*lines, t.commit())
+			t.alternate = true
+		}
+	case '?'<<8 | 'l': // private mode reset; 47, 1047 and 1049 switch back, leaving what was drawn behind
+		if mode := t.param(0); mode == 47 || mode == 1047 || mode == 1049 {
+			*lines = appendLine(*lines, t.commit())
+			t.alternate = false
+			t.screenExits++
+		}
 	}
 }
 
@@ -122,7 +226,7 @@ func (t *terminalTranscript) param(fallback int) int {
 
 func (t *terminalTranscript) commit() string {
 	line := strings.TrimRight(string(t.line), " ")
-	t.line, t.cursor = t.line[:0], 0
+	t.line, t.cursor, t.wrapPending = t.line[:0], 0, false
 	t.committed++
 	return line
 }
@@ -139,6 +243,7 @@ func (t *terminalTranscript) writeRune(r rune, lines *[]string) {
 		t.line = append(t.line, r)
 	}
 	t.cursor++
+	t.wrapPending = t.width > 0 && t.cursor%t.width == 0
 }
 
 func (t *terminalTranscript) padTo(col int) {
@@ -153,21 +258,43 @@ func (t *terminalTranscript) blank(start, end int) {
 	}
 }
 
-func (t *terminalTranscript) deleteChars(n int) {
-	if n <= 0 || t.cursor >= len(t.line) {
-		return
+// rowEnd returns where the row holding the cursor ends, or the line limit when rows are unknown.
+func (t *terminalTranscript) rowEnd() int {
+	if t.width == 0 {
+		return maxLineRunes
 	}
-	t.line = append(t.line[:t.cursor], t.line[min(t.cursor+n, len(t.line)):]...)
+	return t.rowStart() + t.width
 }
 
-func (t *terminalTranscript) insertBlanks(n int) {
-	t.padTo(t.cursor)
-	if n = min(n, maxLineRunes-len(t.line)); n <= 0 {
+// deleteChars removes n characters at the cursor, shifting only the cursor's row.
+func (t *terminalTranscript) deleteChars(n int) {
+	col := t.column()
+	if n <= 0 || col >= len(t.line) {
 		return
 	}
-	t.line = append(t.line, make([]rune, n)...)
-	copy(t.line[t.cursor+n:], t.line[t.cursor:])
-	t.blank(t.cursor, t.cursor+n)
+	if end := t.rowEnd(); end < len(t.line) {
+		n = min(n, end-col)
+		copy(t.line[col:], t.line[col+n:end])
+		t.blank(end-n, end)
+		return
+	}
+	t.line = append(t.line[:col], t.line[min(col+n, len(t.line)):]...)
+}
+
+// insertBlanks opens n blanks at the cursor, losing what the shift pushes past the row's end.
+func (t *terminalTranscript) insertBlanks(n int) {
+	col := t.column()
+	t.padTo(col)
+	end := t.rowEnd()
+	if n = min(n, end-col, maxLineRunes-col); n <= 0 {
+		return
+	}
+	if grown := min(len(t.line)+n, end, maxLineRunes); grown > len(t.line) {
+		t.line = append(t.line, make([]rune, grown-len(t.line))...)
+	}
+	last := min(end, len(t.line))
+	copy(t.line[col+n:last], t.line[col:last-n])
+	t.blank(col, col+n)
 }
 
 func clampColumn(col int) int {
@@ -235,8 +362,7 @@ func isStringState(state parser.State) bool {
 	}
 }
 
-// enteredCommand is a command line entered at a shell. line and baseline say where typing
-// began: the line on screen then, by commit count, and its rendered length.
+// enteredCommand is a command line entered at a shell; line and baseline say where typing began.
 type enteredCommand struct {
 	text      string
 	recalled  bool // History keys were used, so the line can show more than was typed
@@ -246,28 +372,71 @@ type enteredCommand struct {
 	channel   session.SessionChannelType
 }
 
-// startOn returns where the command starts on a line that shows it. Typed text is found by
-// its echo, which holds even when typing began before the prompt was drawn. Recalled history
-// or a completion is found by where typing began, which holds only on the line on screen then.
-func (e enteredCommand) startOn(line string, sameLine bool) (int, bool) {
-	typed := strings.TrimSpace(e.text)
-	at := len(line) - len(typed)
-	grew := utf8.RuneCountInString(line) > e.baseline
-	echoed := !e.recalled && typed != "" && (grew || !sameLine) &&
-		strings.HasSuffix(line, typed) && (at == 0 || line[at-1] == ' ')
+// echoStart returns where typed text starts on a line ending with its echo; tabs show as spaces, so whitespace runs match.
+func (e enteredCommand) echoStart(line string) (int, bool) {
+	typed, shown := []rune(strings.TrimSpace(e.text)), []rune(line)
+	if e.recalled || len(typed) == 0 {
+		return 0, false
+	}
+	i, j := len(shown)-1, len(typed)-1
+	for j >= 0 {
+		if unicode.IsSpace(typed[j]) {
+			for j >= 0 && unicode.IsSpace(typed[j]) {
+				j--
+			}
+			if i < 0 || !unicode.IsSpace(shown[i]) {
+				return 0, false
+			}
+			for i >= 0 && unicode.IsSpace(shown[i]) {
+				i--
+			}
+			continue
+		}
+		if i < 0 || shown[i] != typed[j] {
+			return 0, false
+		}
+		i, j = i-1, j-1
+	}
+	if i >= 0 && !unicode.IsSpace(shown[i]) {
+		return 0, false
+	}
+	return i + 1, true
+}
 
-	switch {
-	case echoed:
-		return utf8.RuneCountInString(line[:at]), true
-	case sameLine && grew:
+// completionStart finds text a completion extended by the part typed before the first tab.
+func (e enteredCommand) completionStart(line string) (int, bool) {
+	before, _, completed := strings.Cut(e.text, "\t")
+	typed := strings.TrimSpace(before)
+	if e.recalled || !completed || typed == "" {
+		return 0, false
+	}
+	for at := len(line) - len(typed); at >= 0; at-- {
+		if strings.HasPrefix(line[at:], typed) && (at == 0 || line[at-1] == ' ') {
+			return utf8.RuneCountInString(line[:at]), true
+		}
+	}
+	return 0, false
+}
+
+// startOn returns where the command starts on a line that shows it: by its echo, or with byPosition on the line
+// typing began on, by where it began unless that line was still empty.
+func (e enteredCommand) startOn(line string, sameLine, byPosition bool) (int, bool) {
+	grew := utf8.RuneCountInString(line) > e.baseline
+	if start, ok := e.echoStart(line); ok && (grew || !sameLine) {
+		return start, true
+	}
+	if start, ok := e.completionStart(line); ok && (grew || !sameLine) {
+		return start, true
+	}
+	if byPosition && sameLine && grew && e.baseline > 0 {
 		return e.baseline, true
 	}
 	return 0, false
 }
 
-// echoedCommand holds pasted commands until the output shows whether the shell echoed
-// them. The echoed line is the better record: it carries the prompt and reflects tab
-// completion and history recall.
+// echoedCommand holds commands until the output shows whether the shell echoed
+// them. The echoed line is the better record: it carries the prompt and reflects
+// tab completion and history recall.
 type echoedCommand struct {
 	mutex sync.Mutex
 	held  []heldCommand
@@ -275,10 +444,10 @@ type echoedCommand struct {
 
 type heldCommand struct {
 	enteredCommand
-	next bool // Nothing else awaited a line, so the next committed line is the one it was entered on
+	next bool // Entered at an unchanged line with nothing ahead of it, so the next committed line settles it
 }
 
-// maxHeldCommands bounds a paste the shell never echoes; past it the oldest command is dropped.
+// maxHeldCommands bounds what the shell never echoes; past it the oldest command is dropped.
 const maxHeldCommands = 64
 
 func (e *echoedCommand) hold(command enteredCommand, next bool) {
@@ -291,36 +460,37 @@ func (e *echoedCommand) hold(command enteredCommand, next bool) {
 	e.held = append(e.held, heldCommand{command, next && len(e.held) == 0})
 }
 
-// clear drops held commands once a later command is on screen: the shell shows input in
-// order, so the ones it has not shown by then never appeared as typed.
+func (e *echoedCommand) empty() bool {
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+	return len(e.held) == 0
+}
+
 func (e *echoedCommand) clear() {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 	e.held = nil
 }
 
-// settle applies the oldest held command to a committed line. A line showing it is its echo,
-// and echoedAt is where the command starts on it (-1 otherwise). A command that was next is
-// settled by the first line either way: one that does not show it means the shell did not
-// echo it, while later commands wait for their own line.
-func (e *echoedCommand) settle(line string) (unechoed session.SessionEvent, ok bool, echoedAt int) {
+// settle matches a committed line to the held command it shows; those held before it were never echoed. A next
+// command is settled by this line either way, so an unechoed secret never matches later output.
+func (e *echoedCommand) settle(line string) (echoedAt int, unechoed []session.SessionEvent) {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
-	if len(e.held) == 0 {
-		return session.SessionEvent{}, false, -1
+	for k, held := range e.held {
+		sameLine := k == 0 && held.next
+		if start, ok := held.startOn(line, sameLine, sameLine && (held.recalled || held.text == "")); ok {
+			unechoed = inputEvents(e.held[:k])
+			e.held = e.held[k+1:]
+			return start, unechoed
+		}
 	}
-	head := e.held[0]
-	if start, found := head.startOn(line, head.next); found {
+	if len(e.held) > 0 && e.held[0].next {
+		unechoed = inputEvents(e.held[:1])
 		e.held = e.held[1:]
-		return session.SessionEvent{}, false, start
 	}
-	if !head.next {
-		return session.SessionEvent{}, false, -1
-	}
-	e.held = e.held[1:]
-	unechoed, ok = head.inputEvent()
-	return unechoed, ok, -1
+	return -1, unechoed
 }
 
 // commandOnLine returns what was typed after the prompt on a committed line, or "" when
@@ -337,13 +507,18 @@ func (e *echoedCommand) takeAll() []session.SessionEvent {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
+	events := inputEvents(e.held)
+	e.held = nil
+	return events
+}
+
+func inputEvents(held []heldCommand) []session.SessionEvent {
 	var events []session.SessionEvent
-	for _, held := range e.held {
-		if event, ok := held.inputEvent(); ok {
+	for _, h := range held {
+		if event, ok := h.inputEvent(); ok {
 			events = append(events, event)
 		}
 	}
-	e.held = nil
 	return events
 }
 
