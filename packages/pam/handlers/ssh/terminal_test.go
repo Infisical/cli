@@ -4,6 +4,7 @@ import (
 	"io"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -244,6 +245,24 @@ func TestSessionRecording(t *testing.T) {
 			want: []string{"output: user@host:~$", "input: whoami", "output: root"},
 		},
 		{
+			name: "unechoed typing on the alternate screen is kept as input",
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, prompt("~")+esc+"[?1049h")
+				typeSilently(p, ch, "cat /etc/shadow > /tmp/x")
+			},
+			want: []string{"output: user@host:~$", "input: cat /etc/shadow > /tmp/x"},
+		},
+		{
+			name: "unechoed commands held when the screen switches are kept as input",
+			steps: func(p *SSHProxy, ch *channelState) {
+				emit(p, ch, prompt("~"))
+				typeSilently(p, ch, "one")
+				typeSilently(p, ch, "two")
+				emit(p, ch, esc+"[?1049h")
+			},
+			want: []string{"output: user@host:~$", "input: one", "input: two"},
+		},
+		{
 			name: "multi-line paste counts as echoed",
 			steps: func(p *SSHProxy, ch *channelState) {
 				emit(p, ch, prompt("~"))
@@ -424,9 +443,11 @@ func TestSessionRecording(t *testing.T) {
 			want: []string{
 				"output: user@host:~$ less f [command: less f]",
 				"output: contents",
+				"input: q",
 				"output: user@host:~$ pwd [command: pwd]",
 				"output: /root",
 				"output: user@host:~$",
+				"input: q",
 			},
 		},
 		{
@@ -457,8 +478,10 @@ func TestSessionRecording(t *testing.T) {
 			},
 			want: []string{
 				"output: user@host:~$ vim .env [command: vim .env]",
+				"input: DB_PASSWORD=hunter2",
 				"output: DB_PASSWORD=hunter2",
 				"output: api_token=sk_live_abcdef",
+				"input: :wq",
 				"output: :wq",
 				"output: user@host:~$ ls [command: ls]",
 			},
@@ -876,6 +899,49 @@ func TestScreenExitKeepsKeysForBlocking(t *testing.T) {
 	}
 	if strings.ContainsAny(server.String(), "\r\n") {
 		t.Errorf("the server received the Enter of a blocked command: %q", server.String())
+	}
+}
+
+// A line too long to keep whole can't be checked, so its Enter is refused.
+func TestOverlongLineIsBlocked(t *testing.T) {
+	p := NewSSHProxy(SSHProxyConfig{
+		SessionLogger:          &recordingLogger{},
+		BlockedCommandPatterns: []*regexp.Regexp{regexp.MustCompile(`^rm -rf`)},
+	})
+	ch := newChannelState()
+	ch.channelType = session.SessionChannelShell
+	var server strings.Builder
+
+	emit(p, ch, prompt("~"))
+	src := &typedInput{p: p, ch: ch, chunks: []string{strings.Repeat(" ", maxLineRunes-3) + "rm -rf /tmp/x", "\r"}}
+	if err := p.proxyClientToServerWithBlocking(src, &server, io.Discard, "sid", ch); err != nil {
+		t.Fatalf("proxy returned %v", err)
+	}
+	if strings.ContainsAny(server.String(), "\r\n") {
+		t.Error("the server received the Enter of a line too long to check")
+	}
+}
+
+// However many commands go unechoed, none is lost from the recording.
+func TestUnechoedCommandsPastTheHoldLimitAreKept(t *testing.T) {
+	logger := &recordingLogger{}
+	p := NewSSHProxy(SSHProxyConfig{SessionLogger: logger})
+	ch := newChannelState()
+
+	emit(p, ch, prompt("~"))
+	for i := range maxHeldCommands + 1 {
+		typeSilently(p, ch, "cmd"+strconv.Itoa(i))
+	}
+	p.flushPendingEcho("sid", ch)
+
+	inputs := 0
+	for _, e := range logger.events {
+		if e.EventType == session.SessionEventInput {
+			inputs++
+		}
+	}
+	if inputs != maxHeldCommands+1 {
+		t.Errorf("recorded %d of %d unechoed commands", inputs, maxHeldCommands+1)
 	}
 }
 

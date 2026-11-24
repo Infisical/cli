@@ -459,29 +459,25 @@ type heldCommand struct {
 	next bool // Entered at an unchanged line with nothing ahead of it, so the next committed line settles it
 }
 
-// maxHeldCommands bounds what the shell never echoes; past it the oldest command is dropped.
+// maxHeldCommands bounds what the shell never echoes; past it the oldest command is returned as input.
 const maxHeldCommands = 64
 
-func (e *echoedCommand) hold(command enteredCommand, next bool) {
+func (e *echoedCommand) hold(command enteredCommand, next bool) []session.SessionEvent {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
+	var evicted []session.SessionEvent
 	if len(e.held) == maxHeldCommands {
-		e.held = e.held[1:]
+		evicted, e.held = inputEvents(e.held[:1]), e.held[1:]
 	}
 	e.held = append(e.held, heldCommand{command, next && len(e.held) == 0})
+	return evicted
 }
 
 func (e *echoedCommand) empty() bool {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 	return len(e.held) == 0
-}
-
-func (e *echoedCommand) clear() {
-	e.mutex.Lock()
-	defer e.mutex.Unlock()
-	e.held = nil
 }
 
 // settle matches a committed line to the held command it shows; those held before it were never echoed. A next

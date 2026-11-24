@@ -56,6 +56,7 @@ type channelState struct {
 	recalled         bool                       // History keys were used for the command being entered
 	echoScreenExits  uint32                     // screenExits when the command being entered started
 	recordFrom       int                        // Where the recorded command starts in inputBuffer, past keys a full-screen program took
+	overflowed       bool                       // The line outgrew inputBuffer, so command blocking can't see all of it
 	interrupted      bool                       // Ctrl+C was pressed on interruptedLine, which the shell then leaves
 	interruptedLine  uint32
 
@@ -688,8 +689,9 @@ func (p *SSHProxy) bufferInput(data []byte, sessionID string, channelType sessio
 				chState.inputBuffer = append(chState.inputBuffer, b)
 			}
 			// Safety: flush if buffer gets too large
-			if len(chState.inputBuffer) >= 1024 {
+			if len(chState.inputBuffer) >= maxLineRunes {
 				p.flushInputBufferUnsafe(sessionID, chState)
+				chState.overflowed = true
 			}
 		}
 		chState.recordFrom = min(chState.recordFrom, len(chState.inputBuffer))
@@ -721,6 +723,7 @@ func (c *channelState) startCommand(recalled bool) {
 
 // flushInputBufferUnsafe records the buffered command (caller must hold the lock).
 func (p *SSHProxy) flushInputBufferUnsafe(sessionID string, chState *channelState) {
+	chState.overflowed = false
 	if len(chState.inputBuffer) == 0 && chState.echoBaseline < 0 {
 		return
 	}
@@ -748,20 +751,30 @@ func (p *SSHProxy) flushInputBufferUnsafe(sessionID string, chState *channelStat
 		return
 	}
 
-	// Keys typed into a full-screen program that has since exited entered no command.
+	// Keys typed into a full-screen program that has since exited entered no command, but stay as input in case the shell read them.
+	unplaced := command[:len(command)-len(shown)]
+	if leftOver {
+		unplaced = command
+	}
+	if unplaced != "" {
+		p.logInputCommand(sessionID, chState.textEvent(session.SessionEventInput, channel, p.maskTyped(unplaced)))
+	}
 	if !leftOver {
-		chState.placeCommand(entered)
+		for _, input := range chState.placeCommand(entered) {
+			p.logInputCommand(sessionID, input)
+		}
 	}
 }
 
 // placeCommand flags the line on screen when it shows the command just entered, or holds the command for a later line.
-func (c *channelState) placeCommand(entered enteredCommand) {
+// It returns the commands left to record as input.
+func (c *channelState) placeCommand(entered enteredCommand) []session.SessionEvent {
 	c.outputMutex.Lock()
 	defer c.outputMutex.Unlock()
 
-	// What is typed into a full-screen program, such as an editor, is not a shell command.
+	// What is typed into a full-screen program, such as an editor, is not a shell command, but the shell may have read it.
 	if c.outputParser.Alternate() {
-		return
+		return inputEvents([]heldCommand{{enteredCommand: entered}})
 	}
 
 	sameLine := uint32(c.outputParser.Committed()) == entered.line
@@ -769,19 +782,19 @@ func (c *channelState) placeCommand(entered enteredCommand) {
 	if c.commandStart < 0 && c.pendingEcho.empty() {
 		if start, ok := entered.startOn(c.outputParser.Pending(), sameLine, true); ok {
 			c.commandStart, c.commandEntered = start, entered
-			return
+			return nil
 		}
 	}
 
 	// Keys that left their line, as in a full-screen program, entered no command.
 	if entered.text == "" && !sameLine {
-		return
+		return nil
 	}
 	idle := sameLine && c.outputParser.PendingLen() == entered.baseline
 	if !sameLine {
 		entered.baseline = c.outputParser.PendingLen()
 	}
-	c.pendingEcho.hold(entered, idle && c.commandStart < 0)
+	return c.pendingEcho.hold(entered, idle && c.commandStart < 0)
 }
 
 // maskTyped hides in typed text what output masking hides in its echo, so a record of it holds no more.
@@ -831,7 +844,9 @@ func (p *SSHProxy) bufferOutput(data []byte, sessionID string, channelType sessi
 	p.logOutputLines(sessionID, chState, chState.outputParser.Feed(data))
 	// Nothing held or flagged outlives a full-screen program starting or exiting.
 	if exits := uint32(chState.outputParser.ScreenExits()); exits != chState.screenExits.Load() || chState.outputParser.Alternate() != alternate {
-		chState.pendingEcho.clear()
+		for _, input := range chState.pendingEcho.takeAll() {
+			p.logInputCommand(sessionID, input)
+		}
 		chState.commandStart, chState.commandEntered = -1, enteredCommand{}
 		chState.screenExits.Store(exits)
 	}
@@ -999,10 +1014,11 @@ func (p *SSHProxy) proxyClientToServerWithBlocking(src io.Reader, dst io.Writer,
 						chState.inputMutex.Lock()
 						command := string(chState.inputBuffer)
 						shown := command[min(chState.recordFrom, len(command)):]
+						overflowed := chState.overflowed
 						chState.inputMutex.Unlock()
 
 						// Keys a full-screen program took may lead the buffer, so either reading can be what the shell runs.
-						if p.matchBlockedCommand(command) || p.matchBlockedCommand(shown) {
+						if overflowed || p.matchBlockedCommand(command) || p.matchBlockedCommand(shown) {
 							// Commit the echoed line before the notice so they read in order.
 							if channelType == session.SessionChannelShell && !strings.ContainsRune(shown, '\t') {
 								chState.awaitEcho(enteredCommand{text: shown, masked: p.maskTyped(shown)}, blockedEchoTimeout)
