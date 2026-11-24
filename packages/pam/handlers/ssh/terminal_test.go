@@ -735,6 +735,9 @@ func TestBlockedCommandIsNotDuplicated(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("got %q, want %q", got, want)
 	}
+	if n := len(logger.events); n == 0 || !logger.events[n-1].Blocked {
+		t.Error("the notice is not marked as written for a blocked command")
+	}
 }
 
 // Command blocking checks each Enter on its own, which must not make a paste look typed.
@@ -919,6 +922,28 @@ func TestOverlongLineIsBlocked(t *testing.T) {
 	}
 	if strings.ContainsAny(server.String(), "\r\n") {
 		t.Error("the server received the Enter of a line too long to check")
+	}
+}
+
+// Canceling a line too long to check leaves the next command free to run.
+func TestCanceledOverlongLineDoesNotBlock(t *testing.T) {
+	p := NewSSHProxy(SSHProxyConfig{
+		SessionLogger:          &recordingLogger{},
+		BlockedCommandPatterns: []*regexp.Regexp{regexp.MustCompile(`^rm -rf`)},
+	})
+	for _, cancel := range []string{"\x03", "\x15"} {
+		ch := newChannelState()
+		ch.channelType = session.SessionChannelShell
+		var server strings.Builder
+
+		emit(p, ch, prompt("~"))
+		src := &typedInput{p: p, ch: ch, chunks: []string{strings.Repeat("x", maxLineRunes), cancel, "ls", "\r"}}
+		if err := p.proxyClientToServerWithBlocking(src, &server, io.Discard, "sid", ch); err != nil {
+			t.Fatalf("proxy returned %v", err)
+		}
+		if !strings.HasSuffix(server.String(), "ls\r") {
+			t.Errorf("after %q the server did not receive the Enter of the next command", cancel)
+		}
 	}
 }
 

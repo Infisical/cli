@@ -404,6 +404,7 @@ func (p *SSHProxy) handleChannelRequests(requests <-chan *ssh.Request, targetCha
 						// Log the blocked exec to session recording
 						blockedEvent := chState.textEvent(session.SessionEventInput, session.SessionChannelExec,
 							fmt.Sprintf("$ %s\n[BLOCKED] Command not permitted", command))
+						blockedEvent.Blocked = true
 						if err := p.config.SessionLogger.LogSessionEvent(blockedEvent); err != nil {
 							log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to log blocked exec command")
 						}
@@ -663,12 +664,12 @@ func (p *SSHProxy) bufferInput(data []byte, sessionID string, channelType sessio
 				chState.inputBuffer = chState.inputBuffer[:len(chState.inputBuffer)-1]
 			}
 		case 0x03: // Ctrl+C - cancel current input
-			chState.inputBuffer = chState.inputBuffer[:0]
+			chState.inputBuffer, chState.overflowed = chState.inputBuffer[:0], false
 			chState.echoBaseline, chState.recalled = -1, false
 			chState.interruptedLine, _ = chState.lineOnScreen()
 			chState.interrupted = true
 		case 0x15: // Ctrl+U - clear line
-			chState.inputBuffer = chState.inputBuffer[:0]
+			chState.inputBuffer, chState.overflowed = chState.inputBuffer[:0], false
 		case 0x17: // Ctrl+W - delete previous word
 			// Skip trailing spaces
 			for len(chState.inputBuffer) > 0 && chState.inputBuffer[len(chState.inputBuffer)-1] == ' ' {
@@ -1032,6 +1033,7 @@ func (p *SSHProxy) proxyClientToServerWithBlocking(src io.Reader, dst io.Writer,
 
 							// Log the blocked message as output so it appears in session replay
 							blockedEvent := chState.textEvent(session.SessionEventOutput, channelType, "[BLOCKED] Command not permitted")
+							blockedEvent.Blocked = true
 							if logErr := p.config.SessionLogger.LogSessionEvent(blockedEvent); logErr != nil {
 								log.Error().Err(logErr).Str("sessionID", sessionID).Msg("Failed to log blocked command event")
 							}

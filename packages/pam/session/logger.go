@@ -54,6 +54,7 @@ type SessionEvent struct {
 	Data        []byte             `json:"data"`                  // SSH: gateway-rendered text; RDP: JSON envelope (base64-marshaled)
 	Rendered    bool               `json:"rendered,omitempty"`    // Data is display-ready; absent on recordings that stored raw bytes
 	Command     string             `json:"command,omitempty"`     // On the output line where a typed command was echoed: the command without its prompt
+	Blocked     bool               `json:"blocked,omitempty"`     // On the event the gateway writes when it refuses a command, which recorded text can't fake
 	ElapsedTime float64            `json:"elapsedTime"`           // Seconds since session start (for replay)
 }
 
