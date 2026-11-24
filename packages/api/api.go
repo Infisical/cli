@@ -21,7 +21,7 @@ import (
 var USER_AGENT = "cli"
 
 const (
-	operationCallGetRawSecretsV3                   = "CallGetRawSecretsV3"
+	operationCallGetSecretsV4                      = "CallGetSecretsV4"
 	operationCallGetEncryptedWorkspaceKey          = "CallGetEncryptedWorkspaceKey"
 	operationCallGetServiceTokenDetails            = "CallGetServiceTokenDetails"
 	operationCallLogin1V3                          = "CallLogin1V3"
@@ -952,7 +952,7 @@ func CallGetSecretsV4(httpClient *resty.Client, request GetSecretsV4Request) (Ge
 	response, err := req.Get(fmt.Sprintf("%v/v4/secrets", config.INFISICAL_URL))
 
 	if err != nil {
-		return GetSecretsV4Response{}, NewGenericRequestError(operationCallGetRawSecretsV3, err)
+		return GetSecretsV4Response{}, NewGenericRequestError(operationCallGetSecretsV4, err)
 	}
 
 	if response.IsError() &&
@@ -960,11 +960,11 @@ func CallGetSecretsV4(httpClient *resty.Client, request GetSecretsV4Request) (Ge
 			strings.Contains(strings.ToLower(response.String()), "failed to find bot key") ||
 			strings.Contains(strings.ToLower(response.String()), "bot is not active")) {
 		additionalContext := fmt.Sprintf(`Project with id %s is incompatible with your current CLI version. Upgrade your project by visiting the project settings page. If you're self-hosting and project upgrade option isn't yet available, contact your administrator to upgrade your Infisical instance to the latest release.`, request.WorkspaceId)
-		return GetSecretsV4Response{}, NewAPIErrorWithResponse(operationCallGetRawSecretsV3, response, &additionalContext)
+		return GetSecretsV4Response{}, NewAPIErrorWithResponse(operationCallGetSecretsV4, response, &additionalContext)
 	}
 
 	if response.IsError() {
-		return GetSecretsV4Response{}, NewAPIErrorWithResponse(operationCallGetRawSecretsV3, response, nil)
+		return GetSecretsV4Response{}, NewAPIErrorWithResponse(operationCallGetSecretsV4, response, nil)
 	}
 
 	getRawSecretsV4Response.ETag = response.Header().Get(("etag"))
