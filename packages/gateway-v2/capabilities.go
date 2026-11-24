@@ -8,6 +8,8 @@ const CapabilitySupportedAccountTypes = "supported_account_types"
 
 const CapabilityClickhouseNativeProtocol = "clickhouseNativeProtocol"
 
+const CapabilityAzureBlobRecording = "azureBlobRecording"
+
 const CapabilityOutputMasking = "outputMasking"
 
 const CapabilityCertificateScan = "certificateScan"

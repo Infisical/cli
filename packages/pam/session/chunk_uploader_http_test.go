@@ -6,6 +6,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/go-resty/resty/v2"
 )
@@ -136,5 +137,32 @@ func TestReconcileSession_DrainsPermanentlyRejectedQueue(t *testing.T) {
 
 	if cu.HasPendingChunks("sess") {
 		t.Error("queue still holds permanently rejected chunks")
+	}
+}
+
+func TestPutCiphertext_SendsPresignedHeaders(t *testing.T) {
+	var gotBlobType, gotContentType string
+	var gotLength int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBlobType = r.Header.Get("x-ms-blob-type")
+		gotContentType = r.Header.Get("Content-Type")
+		gotLength = r.ContentLength
+		w.WriteHeader(http.StatusCreated)
+	}))
+	t.Cleanup(srv.Close)
+
+	presigned := api.ChunkPresignedPutResponse{
+		URL:     srv.URL + "/container/chunk",
+		Method:  http.MethodPut,
+		Headers: map[string]string{"x-ms-blob-type": "BlockBlob"},
+	}
+	if err := putCiphertext(presigned, []byte("ciphertext")); err != nil {
+		t.Fatalf("putCiphertext: %v", err)
+	}
+	if gotBlobType != "BlockBlob" {
+		t.Fatalf("x-ms-blob-type = %q, want BlockBlob", gotBlobType)
+	}
+	if gotContentType != "application/octet-stream" || gotLength != int64(len("ciphertext")) {
+		t.Fatalf("unexpected request: content-type=%q length=%d", gotContentType, gotLength)
 	}
 }

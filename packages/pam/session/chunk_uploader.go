@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -28,8 +29,9 @@ import (
 const (
 	// Storage backend values sent to and received from the Infisical API
 	// These are distinct from the ResourceType* constants which identify protocol types
-	storageBackendPostgres = "postgres"
-	storageBackendAwsS3    = "aws-s3"
+	storageBackendPostgres  = "postgres"
+	storageBackendAwsS3     = "aws-s3"
+	storageBackendAzureBlob = "azure-blob"
 
 	pamRecordingAadVersion = "v1"
 
@@ -45,7 +47,7 @@ const (
 	// Allows time for a reconnecting user to re-populate recording secrets
 	orphanChunkGracePeriod = 5 * time.Minute
 
-	s3PutTimeout = 2 * time.Minute
+	objectStoragePutTimeout = 2 * time.Minute
 )
 
 type ChunkUploader struct {
@@ -304,7 +306,7 @@ func (cu *ChunkUploader) UploadChunk(sessionID string, pc *pendingChunk) error {
 	}
 
 	switch pc.StorageBackend {
-	case storageBackendAwsS3:
+	case storageBackendAwsS3, storageBackendAzureBlob:
 		presigned, err := api.CallPAMSessionChunkPresignedPut(
 			cu.httpClient,
 			sessionID,
@@ -318,8 +320,8 @@ func (cu *ChunkUploader) UploadChunk(sessionID string, pc *pendingChunk) error {
 			cu.dropIfPermanent(sessionID, pc, err)
 			return fmt.Errorf("presigned PUT mint failed: %w", err)
 		}
-		if err := s3PutCiphertext(presigned.URL, pc.Ciphertext); err != nil {
-			return fmt.Errorf("S3 PUT failed: %w", err)
+		if err := putCiphertext(presigned, pc.Ciphertext); err != nil {
+			return fmt.Errorf("object storage PUT failed: %w", err)
 		}
 	case storageBackendPostgres:
 		// no-op: ciphertext sent inline with the metadata POST below
@@ -481,24 +483,32 @@ func (cu *ChunkUploader) CleanupSession(sessionID string) bool {
 	return true
 }
 
-func s3PutCiphertext(presignedURL string, ciphertext []byte) error {
-	ctx, cancel := context.WithTimeout(context.Background(), s3PutTimeout)
+func putCiphertext(presigned api.ChunkPresignedPutResponse, ciphertext []byte) error {
+	ctx, cancel := context.WithTimeout(context.Background(), objectStoragePutTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, presignedURL, bytes.NewReader(ciphertext))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, presigned.URL, bytes.NewReader(ciphertext))
 	if err != nil {
 		return fmt.Errorf("new request: %w", err)
 	}
 	req.ContentLength = int64(len(ciphertext))
 	req.Header.Set("Content-Type", "application/octet-stream")
+	for name, value := range presigned.Headers {
+		req.Header.Set(name, value)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		// url.Error repeats the presigned URL, signature included
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			return fmt.Errorf("PUT to %s: %w", req.URL.Host, urlErr.Err)
+		}
 		return fmt.Errorf("PUT: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("S3 PUT returned %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("PUT returned %d: %s", resp.StatusCode, string(body))
 	}
 	return nil
 }

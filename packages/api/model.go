@@ -1137,10 +1137,11 @@ type ChunkPresignedPutRequest struct {
 }
 
 type ChunkPresignedPutResponse struct {
-	URL              string `json:"url"`
-	ObjectKey        string `json:"objectKey"`
-	Method           string `json:"method"`
-	ExpiresInSeconds int    `json:"expiresInSeconds"`
+	URL              string            `json:"url"`
+	ObjectKey        string            `json:"objectKey"`
+	Method           string            `json:"method"`
+	Headers          map[string]string `json:"headers,omitempty"`
+	ExpiresInSeconds int               `json:"expiresInSeconds"`
 }
 
 type ChunkMetadataRequest struct {
