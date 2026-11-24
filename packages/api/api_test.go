@@ -10,8 +10,7 @@ import (
 	"github.com/go-resty/resty/v2"
 )
 
-// Errors from CallGetSecretsV4 used to carry a CallGetRawSecretsV3 label, naming
-// a function and an endpoint version that are not involved in the request.
+// The error label must match the operation that sent the request.
 func TestCallGetSecretsV4ErrorNamesTheV4Operation(t *testing.T) {
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
