@@ -319,7 +319,7 @@ func startAWSGatewayAccess(httpClient *resty.Client, response *api.PAMAccessResp
 	if err != nil {
 		duration, parseErr := time.ParseDuration(durationStr)
 		if parseErr != nil {
-			endSession(httpClient, response.SessionId)
+			EndSession(httpClient, response.SessionId)
 			util.HandleError(parseErr, "Failed to parse duration")
 			return
 		}
@@ -350,17 +350,17 @@ func startAWSGatewayAccess(httpClient *resty.Client, response *api.PAMAccessResp
 	}
 
 	if err := proxy.ValidateResourceTypeSupported(); err != nil {
-		endSession(httpClient, response.SessionId)
+		EndSession(httpClient, response.SessionId)
 		util.HandleError(err, "Gateway version outdated")
 		return
 	}
 	if err := proxy.generateCA(); err != nil {
-		endSession(httpClient, response.SessionId)
+		EndSession(httpClient, response.SessionId)
 		util.HandleError(err, "Failed to generate CA for proxy")
 		return
 	}
 	if err := proxy.Start(port); err != nil {
-		endSession(httpClient, response.SessionId)
+		EndSession(httpClient, response.SessionId)
 		util.HandleError(err, "Failed to start proxy server")
 		return
 	}

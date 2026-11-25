@@ -42,16 +42,10 @@ type LiveSession struct {
 	Expiry                 time.Time
 }
 
-// SessionProvider supplies the live session a proxy dials through. Proxies launched by
-// `pam access` hold a
-// session for their whole lifetime and do not set one, falling back to the fields on
-// BaseProxyServer. The agent runner supplies a provider that creates the session on the first
-// connection, so an account nobody touches never opens one.
+// SessionProvider supplies the open session a one-shot command's loopback proxy dials through. The
+// interactive proxies don't set one and use the fields on BaseProxyServer.
 type SessionProvider interface {
-	// Ensure returns the live session, creating one if there is not already a usable one.
 	Ensure(ctx context.Context) (LiveSession, error)
-	// Current returns the live session without creating one. Termination paths use this so
-	// that shutting down an untouched proxy doesn't create a session just to end it.
 	Current() (LiveSession, bool)
 }
 
@@ -76,10 +70,10 @@ type BaseProxyServer struct {
 	shutdownOnce           sync.Once
 	shutdownCh             chan struct{}
 
-	// provider, when set, resolves the session lazily instead of using the fields above.
+	// provider, when set, supplies the session instead of the fields above.
 	provider SessionProvider
-	// keepProcessAlive suppresses the os.Exit(0) at the end of graceful shutdown. The agent
-	// runner sets it so one proxy shutting down cannot kill the agent it launched.
+	// keepProcessAlive suppresses the os.Exit(0) at the end of graceful shutdown, for a proxy
+	// that serves a command this process still has to wait for.
 	keepProcessAlive bool
 
 	// The direct address that failed, so later connections skip it. Keyed by address because a
@@ -104,7 +98,7 @@ func (b *BaseProxyServer) staticSession() LiveSession {
 	}
 }
 
-// session returns the live session, creating one first if the proxy is lazy.
+// session returns the live session from the provider, or the fixed one.
 func (b *BaseProxyServer) session() (LiveSession, error) {
 	if b.provider != nil {
 		return b.provider.Ensure(b.ctx)
@@ -430,7 +424,6 @@ func (b *BaseProxyServer) handshakeGatewayConnection(relayConn net.Conn, alpn AL
 }
 
 // NotifySessionTermination sends a termination notification through the gateway.
-// If no session was ever created (a lazy proxy nobody connected to), there is nothing to end.
 func (b *BaseProxyServer) NotifySessionTermination() {
 	session, ok := b.currentSession()
 	if !ok {
@@ -441,8 +434,7 @@ func (b *BaseProxyServer) NotifySessionTermination() {
 }
 
 // TerminateSession ends one specific session, over the gateway if it can and through the API if
-// not. Callers that hold a session the proxy is no longer tracking use this: a lazy proxy retires
-// sessions it will not hand out again, and each of those still has to be ended.
+// not.
 func (b *BaseProxyServer) TerminateSession(session LiveSession) {
 	if session.SessionId == "" {
 		return
@@ -543,8 +535,8 @@ func PromptForReason(required bool) (string, error) {
 
 const reasonRequiredErrorName = "PAM_REASON_REQUIRED"
 
-// CallPAMAccessWithMFA attempts to access a PAM account and handles MFA if required.
-// This is used by the legacy proxy implementations.
+// CallPAMAccessWithMFA creates a PAM session, prompting for a reason or completing MFA in the
+// browser when it can prompt. Otherwise the API error is returned unchanged for the caller to report.
 func CallPAMAccessWithMFA(
 	httpClient *resty.Client,
 	pamRequest api.PAMAccessRequest,
@@ -552,12 +544,9 @@ func CallPAMAccessWithMFA(
 ) (api.PAMAccessResponse, error) {
 	pamResponse, err := api.CallPAMAccess(httpClient, pamRequest)
 	if err != nil {
-		if apiErr, ok := err.(*api.APIError); ok {
-			if apiErr.Name == reasonRequiredErrorName {
-				if !interactive || !isatty.IsTerminal(os.Stdin.Fd()) {
-					return api.PAMAccessResponse{}, fmt.Errorf(
-						"a reason is required to access this account — pass one with --reason")
-				}
+		if apiErr, ok := err.(*api.APIError); ok && interactive {
+			// The reason prompt reads stdin; browser MFA only needs a person, so piped input still gets it.
+			if apiErr.Name == reasonRequiredErrorName && isatty.IsTerminal(os.Stdin.Fd()) {
 				log.Info().Msg("A reason is required to access this account.")
 				reason, promptErr := PromptForReason(true)
 				if promptErr != nil {
@@ -567,7 +556,7 @@ func CallPAMAccessWithMFA(
 				return CallPAMAccessWithMFA(httpClient, pamRequest, interactive)
 			}
 
-			if apiErr.Name == "SESSION_MFA_REQUIRED" {
+			if apiErr.Name == "SESSION_MFA_REQUIRED" && personAtTerminal() {
 				if details, ok := apiErr.Details.(map[string]interface{}); ok {
 					mfaSessionId, _ := details["mfaSessionId"].(string)
 					mfaMethod, _ := details["mfaMethod"].(string)

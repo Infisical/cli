@@ -66,116 +66,89 @@ func parsePath(path string) (folder, account string) {
 
 // AccessOptions is one invocation of `infisical pam access`.
 type AccessOptions struct {
-	Path       string
-	Reason     string
-	Duration   string
-	TargetHost string
-	Port       int
-	Proxy      bool
-	Command    []string
+	Path         string
+	Reason       string
+	Duration     string
+	TargetHost   string
+	Port         int
+	Proxy        bool
+	Command      []string
+	MfaSessionId string
 }
 
-// StartPAMAccess initiates a PAM session for the account at the given path.
-// The account type is determined from the API response and routed to the appropriate handler.
-func StartPAMAccess(accessToken string, opts AccessOptions) {
-	path, reason, durationStr, targetHost, port := opts.Path, opts.Reason, opts.Duration, opts.TargetHost, opts.Port
-
-	// Normalize path for display (ensure leading slash)
-	displayPath := normalizePath(path)
-
-	log.Info().Msgf("Starting PAM access for: %s", strings.TrimPrefix(displayPath, "/"))
-	log.Info().Msgf("Session duration: %s", durationStr)
-
-	httpClient, err := util.GetRestyClientWithCustomHeaders()
-	if err != nil {
-		util.HandleError(err, "Failed to build the API client")
-		return
-	}
-	httpClient.SetAuthToken(accessToken)
-	httpClient.SetHeader("User-Agent", api.USER_AGENT)
-
-	// The API parses durations with npm ms, which can't read Go compound formats like "2h30m",
-	// so send plain milliseconds and keep the Go format for local parsing/display
-	duration, err := time.ParseDuration(durationStr)
-	if err != nil {
-		util.HandleError(err, "Invalid duration format. Use formats like '1h', '30m', '2h30m'")
-		return
-	}
-	apiDurationStr := fmt.Sprintf("%dms", duration.Milliseconds())
-
-	pamResponse, err := CallPAMAccessWithMFA(httpClient, api.PAMAccessRequest{
-		Path:       path,
-		Duration:   apiDurationStr,
-		Reason:     reason,
-		TargetHost: targetHost,
-	}, true)
-	if err != nil {
-		if handleApprovalRequired(httpClient, err, path, reason, apiDurationStr) {
-			return
-		}
-		util.HandleError(err, "Failed to create PAM session")
-		return
-	}
-
-	log.Info().Msgf("Session created with ID: %s", pamResponse.SessionId)
-	log.Info().Msgf("Account type: %s", pamResponse.AccountType)
-
-	if len(opts.Command) > 0 && pamResponse.AccountType != AccountTypeSSH {
-		endSession(httpClient, pamResponse.SessionId)
-		util.PrintErrorMessageAndExit(fmt.Sprintf(
-			"Commands can only be run against SSH accounts, and %s is a %s account. Drop the '--' and this command starts a local proxy for it instead.",
-			strings.TrimPrefix(displayPath, "/"), pamResponse.AccountType))
-		return
-	}
-
-	// Route based on account type from API response
-	switch pamResponse.AccountType {
-	// Database types - all use the same proxy mechanism with different display configs
-	case AccountTypePostgres, AccountTypeCockroachDB, AccountTypeMySQL, AccountTypeMsSQL, AccountTypeMongoDB, AccountTypeOracleDB, AccountTypeClickhouse:
-		startDatabaseProxy(httpClient, &pamResponse, displayPath, durationStr, port)
-
-	case AccountTypeSSH:
-		startSSHAccess(httpClient, &pamResponse, displayPath, opts)
-	case AccountTypeRedis:
-		startRedisProxy(httpClient, &pamResponse, displayPath, durationStr, port)
-	case AccountTypeSnowflake:
-		startSnowflakeProxy(httpClient, &pamResponse, displayPath, durationStr, port)
-	case AccountTypeKubernetes:
-		startKubernetesProxy(httpClient, &pamResponse, displayPath, durationStr, port)
-	case AccountTypeAwsIam:
-		startAWSAccess(httpClient, &pamResponse, displayPath, durationStr, port)
-	case AccountTypeGcpServiceAccount:
-		startGCPProxy(httpClient, &pamResponse, displayPath, durationStr, port)
-	case AccountTypeAzureCli:
-		startAzureAccess(httpClient, &pamResponse, displayPath, durationStr, port)
-	case AccountTypeWindows, AccountTypeWindowsAd:
-		startRDPProxy(httpClient, &pamResponse, displayPath, durationStr, port)
-	default:
-		endSession(httpClient, pamResponse.SessionId)
-		util.PrintErrorMessageAndExit(fmt.Sprintf("Unsupported account type: %s", pamResponse.AccountType))
-	}
+// APIDuration renders a duration the way the API parses it: npm ms can't read Go compound formats
+// like "2h30m".
+func APIDuration(duration time.Duration) string {
+	return fmt.Sprintf("%dms", duration.Milliseconds())
 }
 
-// CreateSession launches a PAM session for the account at the given path and returns the raw
-// response. It is non-interactive: callers that cannot prompt (because a child process owns the
-// terminal) get an error rather than a hung prompt.
-func CreateSession(httpClient *resty.Client, path, reason, targetHost string, duration time.Duration) (*api.PAMAccessResponse, error) {
-	// The API parses durations with npm ms, which can't read Go compound formats like "2h30m",
-	// so send plain milliseconds
+// OpenSession creates the PAM session for opts.Path. Prompts (reason, MFA) happen only when
+// interactive is set and stdin is a terminal; otherwise the API error is returned for the caller to
+// report.
+func OpenSession(httpClient *resty.Client, opts AccessOptions, interactive bool) (*api.PAMAccessResponse, error) {
+	duration, err := time.ParseDuration(opts.Duration)
+	if err != nil {
+		return nil, fmt.Errorf("invalid duration %q: %w", opts.Duration, err)
+	}
+
 	response, err := CallPAMAccessWithMFA(httpClient, api.PAMAccessRequest{
-		Path:       path,
-		Duration:   fmt.Sprintf("%dms", duration.Milliseconds()),
-		Reason:     reason,
-		TargetHost: targetHost,
-	}, false)
+		Path:         opts.Path,
+		Duration:     APIDuration(duration),
+		Reason:       opts.Reason,
+		TargetHost:   opts.TargetHost,
+		MfaSessionId: opts.MfaSessionId,
+	}, interactive)
 	if err != nil {
 		return nil, err
 	}
 	return &response, nil
 }
 
-// endSession releases a created session on paths that exit before a proxy or shell owns it
-func endSession(httpClient *resty.Client, sessionId string) {
+// PromptAccessRequest offers a terminal user an access request for an approval gate. approved
+// means an auto-approval rule granted it on submission.
+func PromptAccessRequest(httpClient *resty.Client, err error, opts AccessOptions) (handled, approved bool) {
+	duration, parseErr := time.ParseDuration(opts.Duration)
+	if parseErr != nil {
+		return false, false
+	}
+	return handleApprovalRequired(httpClient, err, opts.Path, opts.Reason, APIDuration(duration))
+}
+
+// RunAccess hands an open session to the handler for its account type, and returns once it ends.
+func RunAccess(httpClient *resty.Client, pamResponse *api.PAMAccessResponse, opts AccessOptions) {
+	displayPath := normalizePath(opts.Path)
+	durationStr, port := opts.Duration, opts.Port
+
+	log.Debug().Msgf("Session created with ID: %s", pamResponse.SessionId)
+	log.Debug().Msgf("Account type: %s", pamResponse.AccountType)
+
+	switch pamResponse.AccountType {
+	case AccountTypePostgres, AccountTypeCockroachDB, AccountTypeMySQL, AccountTypeMsSQL, AccountTypeMongoDB, AccountTypeOracleDB, AccountTypeClickhouse:
+		startDatabaseProxy(httpClient, pamResponse, displayPath, durationStr, port)
+	case AccountTypeSSH:
+		startSSHAccess(httpClient, pamResponse, displayPath, opts)
+	case AccountTypeRedis:
+		startRedisProxy(httpClient, pamResponse, displayPath, durationStr, port)
+	case AccountTypeSnowflake:
+		startSnowflakeProxy(httpClient, pamResponse, displayPath, durationStr, port)
+	case AccountTypeKubernetes:
+		startKubernetesProxy(httpClient, pamResponse, displayPath, durationStr, port)
+	case AccountTypeAwsIam:
+		startAWSAccess(httpClient, pamResponse, displayPath, durationStr, port)
+	case AccountTypeGcpServiceAccount:
+		startGCPProxy(httpClient, pamResponse, displayPath, durationStr, port)
+	case AccountTypeAzureCli:
+		startAzureAccess(httpClient, pamResponse, displayPath, durationStr, port)
+	case AccountTypeWindows, AccountTypeWindowsAd:
+		startRDPProxy(httpClient, pamResponse, displayPath, durationStr, port)
+	default:
+		EndSession(httpClient, pamResponse.SessionId)
+		util.PrintErrorMessageAndExit(fmt.Sprintf("Unsupported account type: %s", pamResponse.AccountType))
+	}
+}
+
+// EndSession releases a created session on paths that exit before a proxy or shell owns it
+func EndSession(httpClient *resty.Client, sessionId string) {
 	if err := api.CallPAMSessionTermination(httpClient, sessionId); err != nil {
 		log.Debug().Err(err).Msg("Failed to end session while exiting early")
 	}
@@ -201,10 +174,10 @@ func NewLiveSession(response *api.PAMAccessResponse, expiry time.Time) LiveSessi
 // handleApprovalRequired intercepts the PAM_APPROVAL_REQUIRED gate. In an interactive terminal it
 // offers to submit an access request for the account; otherwise it prints guidance. Returns true when
 // the error was an approval-required error (handled here), false to let normal error handling proceed.
-func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, durationStr string) bool {
+func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, durationStr string) (handled, approved bool) {
 	var apiErr *api.APIError
 	if !errors.As(err, &apiErr) || (apiErr.Name != approvalRequiredErrorName && apiErr.Name != grantExpiredErrorName) {
-		return false
+		return false, false
 	}
 
 	expired := apiErr.Name == grantExpiredErrorName
@@ -229,13 +202,13 @@ func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, d
 	// Requesting would only hit a no-approvers error, so explain the misconfiguration instead
 	if !hasApprovalPolicy {
 		util.PrintErrorMessageAndExit("This account requires approval, but its folder has no approvers configured yet. Ask a folder admin to add approvers under the folder's Approvals tab.")
-		return true
+		return true, false
 	}
 
 	// Submitting again would only hit the duplicate-request error, so point at the existing one
 	if hasPendingRequest {
 		util.PrintErrorMessageAndExit("Your access request for this account is awaiting approval. You'll be able to launch a session once it's approved.")
-		return true
+		return true, false
 	}
 
 	// Non-interactive callers (CI, scripts) must see a non-zero exit since no session was created
@@ -245,7 +218,7 @@ func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, d
 		} else {
 			util.PrintErrorMessageAndExit("This account requires approval. Request access from the Infisical dashboard (PAM > My Access).")
 		}
-		return true
+		return true, false
 	}
 
 	if expired {
@@ -262,7 +235,7 @@ func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, d
 			util.PrintErrorMessageAndExit("Access request cancelled")
 		}
 		log.Info().Msg("No access request created.")
-		return true
+		return true, false
 	}
 
 	requestReason := reason
@@ -289,22 +262,27 @@ func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, d
 				util.PrintErrorMessageAndExit("Access request cancelled")
 			}
 			log.Info().Msg("No access request created.")
-			return true
+			return true, false
 		}
 		requestReason = strings.TrimSpace(reasonInput)
 	}
 
-	if _, reqErr := api.CallPAMCreateAccessRequest(httpClient, api.PAMCreateAccessRequestBody{
+	created, reqErr := api.CallPAMCreateAccessRequest(httpClient, api.PAMCreateAccessRequestBody{
 		Path:     path,
 		Reason:   requestReason,
 		Duration: durationStr,
-	}); reqErr != nil {
+	})
+	if reqErr != nil {
 		util.HandleError(reqErr, "Failed to submit access request")
-		return true
+		return true, false
+	}
+	if created.Request.Status == accessRequestStatusApproved {
+		log.Info().Msg("Access request approved automatically. Connecting.")
+		return true, true
 	}
 
 	log.Info().Msg("Access request submitted. You'll be able to launch a session once it's approved.")
-	return true
+	return true, false
 }
 
 // AccountConnectionDisplay describes how a client reaches one account type through a local proxy.
@@ -340,7 +318,7 @@ var accountDisplays = map[string]AccountConnectionDisplay{
 		TypeLabel:   "MySQL",
 		DefaultPort: 3306,
 		ConnectionString: func(username, database string, port int) string {
-			return fmt.Sprintf("mysql://%s@127.0.0.1:%d/%s", username, port, database)
+			return fmt.Sprintf("mysql://%s@127.0.0.1:%d/%s", urlUser(username), port, url.PathEscape(database))
 		},
 		UsageExamples: func(username, database string, port int) []string {
 			return []string{
@@ -352,7 +330,7 @@ var accountDisplays = map[string]AccountConnectionDisplay{
 		TypeLabel:   "SQL Server",
 		DefaultPort: 1433,
 		ConnectionString: func(username, database string, port int) string {
-			return fmt.Sprintf("sqlserver://%s@127.0.0.1:%d?database=%s", username, port, database)
+			return fmt.Sprintf("sqlserver://%s@127.0.0.1:%d?database=%s", urlUser(username), port, url.QueryEscape(database))
 		},
 		UsageExamples: func(username, database string, port int) []string {
 			return []string{
@@ -394,7 +372,7 @@ var accountDisplays = map[string]AccountConnectionDisplay{
 			"curl use the HTTP one; clickhouse-client needs a native port set.",
 		},
 		ConnectionString: func(username, database string, port int) string {
-			return fmt.Sprintf("jdbc:clickhouse://127.0.0.1:%d/%s", port, database)
+			return fmt.Sprintf("jdbc:clickhouse://127.0.0.1:%d/%s", port, url.PathEscape(database))
 		},
 		UsageExamples: func(username, database string, port int) []string {
 			return []string{
@@ -411,7 +389,7 @@ var accountDisplays = map[string]AccountConnectionDisplay{
 			if username == "" {
 				return fmt.Sprintf("redis://127.0.0.1:%d", port)
 			}
-			return fmt.Sprintf("redis://%s@127.0.0.1:%d", username, port)
+			return fmt.Sprintf("redis://%s@127.0.0.1:%d", urlUser(username), port)
 		},
 		UsageExamples: func(username, database string, port int) []string {
 			return []string{fmt.Sprintf("redis-cli -h 127.0.0.1 -p %d", port)}
@@ -442,13 +420,19 @@ var accountDisplays = map[string]AccountConnectionDisplay{
 	},
 }
 
+// urlUser escapes a server-supplied name for the userinfo part of a URL, so it can't add a host or
+// query parameters that a client would follow.
+func urlUser(name string) string {
+	return url.User(name).String()
+}
+
 // postgresWireDisplay is shared by the account types reached over the Postgres wire protocol.
 func postgresWireDisplay(typeLabel string, defaultPort int) AccountConnectionDisplay {
 	return AccountConnectionDisplay{
 		TypeLabel:   typeLabel,
 		DefaultPort: defaultPort,
 		ConnectionString: func(username, database string, port int) string {
-			return fmt.Sprintf("postgres://%s@127.0.0.1:%d/%s", username, port, database)
+			return fmt.Sprintf("postgres://%s@127.0.0.1:%d/%s", urlUser(username), port, url.PathEscape(database))
 		},
 		UsageExamples: func(username, database string, port int) []string {
 			return []string{
@@ -471,7 +455,7 @@ func postgresWireDisplay(typeLabel string, defaultPort int) AccountConnectionDis
 // pass this, and would be the better fix. Until that happens, this is the fix, so do not drop it as
 // redundant.
 func mongoDBURI(database string, port int) string {
-	return fmt.Sprintf("mongodb://127.0.0.1:%d/%s?directConnection=true", port, database)
+	return fmt.Sprintf("mongodb://127.0.0.1:%d/%s?directConnection=true", port, url.PathEscape(database))
 }
 
 // ConnectionDisplayFor returns how a client reaches the given account type, and whether anything is
@@ -774,14 +758,14 @@ func startRDPProxy(httpClient *resty.Client, response *api.PAMAccessResponse, pa
 func startSSHAccess(httpClient *resty.Client, response *api.PAMAccessResponse, path string, opts AccessOptions) {
 	duration, err := time.ParseDuration(opts.Duration)
 	if err != nil {
-		endSession(httpClient, response.SessionId)
+		EndSession(httpClient, response.SessionId)
 		util.HandleError(err, "Failed to parse duration")
 		return
 	}
 
 	username, ok := response.Metadata["username"]
 	if !ok {
-		endSession(httpClient, response.SessionId)
+		EndSession(httpClient, response.SessionId)
 		util.HandleError(fmt.Errorf("PAM response metadata is missing 'username'"), "Failed to start SSH session")
 		return
 	}

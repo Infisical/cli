@@ -87,8 +87,8 @@ func generateSeatbeltProfile(spec Spec) string {
 		`(allow network-inbound (local ip "*:*"))`,
 	)
 	if spec.NetMode == SharedNet {
-		// SharedNet keeps only the credential and filesystem controls. It is for callers that have no
-		// proxy to route through, so the child reaches the network itself and needs a resolver to do it.
+		// SharedNet keeps only the credential and filesystem controls. The child reaches the network
+		// itself, so it needs a resolver to do it.
 		// mDNSResponder is allowed in this branch alone: granting it above would hand the hard fence the
 		// DNS exfil channel its loopback-only egress rule exists to deny.
 		add(

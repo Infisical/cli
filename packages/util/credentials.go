@@ -52,6 +52,15 @@ var ErrOrgSwitchNeedsMFA = errors.New("organization requires MFA")
 // (login) treat it as "no usable session yet" rather than a failure.
 var ErrProfileDomainMismatch = errors.New("profile belongs to a different instance")
 
+// ErrOrgSelection marks a failure to scope the session to the --org/INFISICAL_ORG organization.
+var ErrOrgSelection = errors.New("organization selection failed")
+
+// orgSelectionError keeps the underlying message while matching ErrOrgSelection.
+type orgSelectionError struct{ err error }
+
+func (e orgSelectionError) Error() string   { return e.err.Error() }
+func (e orgSelectionError) Unwrap() []error { return []error{ErrOrgSelection, e.err} }
+
 var domainMismatchNoticeOnce sync.Once
 
 // StoreUserCredsInKeyRing stores the session credentials under the given
@@ -237,7 +246,7 @@ func GetCurrentLoggedInUserDetails(setConfigVariables bool) (LoggedInUserDetails
 	// or write to the keyring.
 	if selector, selectorSource := GetOrgOverride(); selector != "" && setConfigVariables && isAuthenticated {
 		if err := applyOrgOverride(&details, selector, selectorSource); err != nil {
-			return LoggedInUserDetails{}, err
+			return LoggedInUserDetails{}, orgSelectionError{err}
 		}
 	}
 

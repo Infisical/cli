@@ -263,6 +263,9 @@ func init() {
 
 		if !silent && err == nil && loggedInDetails.IsUserLoggedIn && !loggedInDetails.LoginExpired {
 			token, err := util.GetInfisicalToken(cmd)
+			if usesPAMAuth(cmd) {
+				token, err = pamTokenInUse(cmd), nil
+			}
 
 			if err == nil && token != nil && !ignoresEnvServiceToken(cmd, args, token) {
 				warnTokenOverridesSession(cmd, token)
