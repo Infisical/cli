@@ -129,11 +129,18 @@ func handleK8SecretOutput(bootstrapResponse api.BootstrapInstanceResponse, k8Sec
 	return nil
 }
 
-const instanceAlreadySetUpName = "SUPER_ADMIN_INSTANCE_ALREADY_SET_UP"
+const (
+	instanceAlreadySetUpName    = "SUPER_ADMIN_INSTANCE_ALREADY_SET_UP"
+	instanceAlreadySetUpMessage = "Instance has already been set up"
+)
 
 func isInstanceAlreadySetUp(err error) bool {
 	var apiErr *api.APIError
-	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusBadRequest && apiErr.Name == instanceAlreadySetUpName
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusBadRequest {
+		return false
+	}
+	// Servers before v0.167.15 send a generic BadRequest text, so only the message identifies this case there.
+	return apiErr.Name == instanceAlreadySetUpName || apiErr.ErrorMessage == instanceAlreadySetUpMessage
 }
 
 func requiredBootstrapInput(cmd *cobra.Command, flag string, envNames ...string) string {

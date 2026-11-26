@@ -12,16 +12,32 @@ import (
 )
 
 func TestIsInstanceAlreadySetUpFromServerResponse(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`{"statusCode":400,"message":"Instance has already been set up","error":"SUPER_ADMIN_INSTANCE_ALREADY_SET_UP"}`))
-	}))
-	defer server.Close()
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		want   bool
+	}{
+		{"current server", http.StatusBadRequest, `{"statusCode":400,"message":"Instance has already been set up","error":"SUPER_ADMIN_INSTANCE_ALREADY_SET_UP"}`, true},
+		{"server before v0.167.15", http.StatusBadRequest, `{"statusCode":400,"message":"Instance has already been set up","error":"BadRequest"}`, true},
+		{"user already exists", http.StatusBadRequest, `{"statusCode":400,"message":"User already exists","error":"Instance initialization"}`, false},
+		{"invalid setup token", http.StatusForbidden, `{"statusCode":403,"message":"The activation token is missing or incorrect.","error":"SUPER_ADMIN_INVALID_ACTIVATION_TOKEN"}`, false},
+	}
 
-	_, err := api.CallBootstrapInstance(resty.New(), api.BootstrapInstanceRequest{Domain: server.URL})
-	if !isInstanceAlreadySetUp(err) {
-		t.Fatalf("expected the server's response to be recognized as already set up, got %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+
+			_, err := api.CallBootstrapInstance(resty.New(), api.BootstrapInstanceRequest{Domain: server.URL})
+			if got := isInstanceAlreadySetUp(err); got != tt.want {
+				t.Fatalf("isInstanceAlreadySetUp = %v, want %v (err: %v)", got, tt.want, err)
+			}
+		})
 	}
 }
 
