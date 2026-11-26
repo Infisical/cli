@@ -471,6 +471,7 @@ func (g *Gateway) registerHeartBeat(ctx context.Context, errCh chan error) {
 		}
 		capabilities[CapabilitySupportedAccountTypes] = pam.GetSupportedResourceTypes()
 		capabilities[CapabilityClickhouseNativeProtocol] = true
+		capabilities[CapabilityAzureBlobRecording] = true
 		capabilities[CapabilityOutputMasking] = true
 		capabilities[CapabilityCertificateScan] = true
 		capabilities[CapabilityWindowsCertificateScan] = true
