@@ -203,7 +203,8 @@
     "k8-secret-template": "|string|{\"data\":{\"token\":\"{{.Identity.Credentials.Token}}\"}}",
     "organization": "|string|",
     "output": "|string|",
-    "password": "|string|"
+    "password": "|string|",
+    "setup-token": "|string|"
   },
   "infisical cert-manager": {},
   "infisical cert-manager agent": {

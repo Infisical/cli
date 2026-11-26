@@ -880,6 +880,7 @@ type BootstrapInstanceRequest struct {
 	Password     string `json:"password"`
 	Organization string `json:"organization"`
 	Domain       string `json:"domain"`
+	SetupToken   string `json:"setupToken,omitempty"`
 }
 
 type BootstrapInstanceResponse struct {
