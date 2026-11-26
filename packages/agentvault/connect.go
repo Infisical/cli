@@ -147,7 +147,7 @@ func (c *ConnectClient) OpenTunnel(ctx context.Context, service string) (net.Con
 
 func (c *ConnectClient) connect(ctx context.Context, service string, probe bool) (net.Conn, error) {
 	if len(service) > maxNativeServiceNameLength {
-		return nil, fmt.Errorf("%q is longer than any database or SSH service name can be", service)
+		return nil, fmt.Errorf("%q is longer than any database, SSH, or TLS service name can be", service)
 	}
 	conn, err := c.dial(ctx)
 	if err != nil {
@@ -292,8 +292,11 @@ type readerConn struct {
 func (c *readerConn) Read(p []byte) (int, error) { return c.reader.Read(p) }
 
 func closeWrite(c net.Conn) {
-	if rc, ok := c.(*readerConn); ok {
-		c = rc.Conn
+	switch wrapped := c.(type) {
+	case *readerConn:
+		c = wrapped.Conn
+	case *hangUpConn:
+		c = wrapped.Conn
 	}
 	if cw, ok := c.(interface{ CloseWrite() error }); ok {
 		_ = cw.CloseWrite()

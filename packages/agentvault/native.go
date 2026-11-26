@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	pamhandlers "github.com/Infisical/infisical-merge/packages/pam/handlers"
 	pammysql "github.com/Infisical/infisical-merge/packages/pam/handlers/mysql"
@@ -26,8 +27,10 @@ const (
 	serviceKindPostgres = "postgres"
 	serviceKindMySQL    = "mysql"
 	serviceKindSSH      = "ssh"
+	serviceKindTLS      = "tls"
 
-	credentialSSHKey = "ssh-key"
+	credentialSSHKey     = "ssh-key"
+	credentialClientCert = "client-certificate"
 
 	// A CONNECT target under this suffix names a service, not a host. The suffix never resolves, so a
 	// named-service tunnel can never be confused with one to a real host.
@@ -60,7 +63,7 @@ func (t nativeTarget) addr() string {
 }
 
 func isNativeKind(kind string) bool {
-	return kind == serviceKindPostgres || kind == serviceKindMySQL || kind == serviceKindSSH
+	return kind == serviceKindPostgres || kind == serviceKindMySQL || kind == serviceKindSSH || kind == serviceKindTLS
 }
 
 func nativeServiceName(hostname string) (string, bool) {
@@ -131,14 +134,35 @@ func checkSSHKey(svc *resolvedService) error {
 	return nil
 }
 
-// handleNativeConnect serves a CONNECT that names a database or SSH service. Every refusal happens before the
+func checkClientCert(svc *resolvedService) error {
+	if svc.kind != serviceKindTLS {
+		return nil
+	}
+	if svc.credential.kind != credentialClientCert {
+		return fmt.Errorf("service %q has no client certificate right now: its stored certificate is missing, or its dynamic secret lease is pending or failed. Try again shortly; if it persists, ask an admin to check the service", svc.name)
+	}
+	pair, err := tls.X509KeyPair([]byte(svc.credential.certificate), svc.credential.privateKey)
+	if err != nil {
+		return fmt.Errorf("the client certificate stored on service %q can't be used: %s. Ask an admin to update the service", svc.name, err)
+	}
+	now := time.Now()
+	if now.Before(pair.Leaf.NotBefore) {
+		return fmt.Errorf("the client certificate stored on service %q isn't valid until %s. Ask an admin to update the service", svc.name, pair.Leaf.NotBefore.UTC().Format(time.RFC3339))
+	}
+	if now.After(pair.Leaf.NotAfter) {
+		return fmt.Errorf("the client certificate stored on service %q expired at %s. Ask an admin to update the service", svc.name, pair.Leaf.NotAfter.UTC().Format(time.RFC3339))
+	}
+	return nil
+}
+
+// handleNativeConnect serves a CONNECT that names a database, SSH, or TLS service. Every refusal happens before the
 // tunnel opens, as a status `connect` can show. After the 200 the connection goes to PAM's handler for the
 // protocol, which logs in with the service's account and relays everything else.
 func (ps *proxyServer) handleNativeConnect(w http.ResponseWriter, r *http.Request, sessionToken, serviceName string) {
 	// The database leg after this is plaintext, so the tunnel to it is only offered over TLS.
 	if r.TLS == nil {
 		writeUncheckedProxyError(w, http.StatusForbidden, decisionBlocked, errorCodeTLSRequired,
-			"database and SSH services are reached with `infisical agent-vault connect`, which talks to the proxy over TLS")
+			"database, SSH, and TLS services are reached with `infisical agent-vault connect`, which talks to the proxy over TLS")
 		return
 	}
 
@@ -151,7 +175,7 @@ func (ps *proxyServer) handleNativeConnect(w http.ResponseWriter, r *http.Reques
 
 	svc := findNativeService(services, serviceName)
 	if svc == nil {
-		ps.refuseNative(w, sessionToken, serviceName, fmt.Sprintf("this session has no database or SSH service named %q", serviceName))
+		ps.refuseNative(w, sessionToken, serviceName, fmt.Sprintf("this session has no database, SSH, or TLS service named %q", serviceName))
 		return
 	}
 	// A probe only checks the service for `connect`, which says why it was refused, so only a real connection is
@@ -169,6 +193,10 @@ func (ps *proxyServer) handleNativeConnect(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err := checkSSHKey(svc); err != nil {
+		refuse(err.Error())
+		return
+	}
+	if err := checkClientCert(svc); err != nil {
 		refuse(err.Error())
 		return
 	}
@@ -239,7 +267,8 @@ func (ps *proxyServer) handleNativeConnect(w http.ResponseWriter, r *http.Reques
 	opened.Msg("agent-vault: native connection opened")
 	client := &hangUpConn{Conn: clientConn}
 	err = serveNative(conn.ctx, client, svc, tlsConfig, logger)
-	if err != nil && conn.ctx.Err() == nil && !isClientHangUp(err) && !client.hungUp.Load() {
+	var upstreamErr *upstreamError
+	if err != nil && conn.ctx.Err() == nil && (errors.As(err, &upstreamErr) || !isClientHangUp(err) && !client.hungUp.Load()) {
 		log.Warn().Err(err).Str("service", svc.name).Str("sessionKey", conn.key).Msg("agent-vault: native connection ended with an error")
 		logger.recordOutcome(decisionError, "The proxy couldn't connect to the service: "+err.Error())
 		return
@@ -247,7 +276,7 @@ func (ps *proxyServer) handleNativeConnect(w http.ResponseWriter, r *http.Reques
 	log.Info().Str("service", svc.name).Str("sessionKey", conn.key).Msg("agent-vault: native connection closed")
 }
 
-var errNativeTunnelsFull = errors.New("the proxy is serving as many database and SSH connections as it can. Close some and try again, or run another proxy")
+var errNativeTunnelsFull = errors.New("the proxy is serving as many database, SSH, and TLS connections as it can. Close some and try again, or run another proxy")
 
 // PAM's handlers return a bare EOF when the client hangs up, which is how most connections end. A failure to reach or
 // log in to the server comes back wrapped with what failed.
@@ -298,7 +327,7 @@ func (ps *proxyServer) writeNativeRefusal(w http.ResponseWriter, sessionToken, s
 	if refusal.hook != nil {
 		event = refusal.hook.logFields(event)
 	}
-	event.Msg("agent-vault: refused a database or SSH connection")
+	event.Msg("agent-vault: refused a database, SSH, or TLS connection")
 	writeProxyError(w, refusal.status, refusal.decision, refusal.code, refusal.body)
 }
 
@@ -371,12 +400,89 @@ func serveNative(ctx context.Context, conn net.Conn, svc *resolvedService, tlsCo
 			}
 		}
 		return pamssh.NewSSHProxy(config).HandleConnection(ctx, conn)
+	case serviceKindTLS:
+		return serveTLSTunnel(ctx, conn, target, cred, tlsConfig, logger)
 	}
 	return fmt.Errorf("service kind %q has no native handler", svc.kind)
 }
 
-// NativeServicesPath lists the session's database and SSH services for `infisical agent-vault connect`, so it can
-// open a port for each and print the command that reaches it.
+func serveTLSTunnel(ctx context.Context, client net.Conn, target nativeTarget, cred credential, tlsConfig *tls.Config, logger *nativeSessionLogger) error {
+	pair, err := tls.X509KeyPair([]byte(cred.certificate), cred.privateKey)
+	if err != nil {
+		return err
+	}
+	cfg := tlsConfig.Clone()
+	cfg.Certificates = []tls.Certificate{pair}
+	dialer := &tls.Dialer{NetDialer: &net.Dialer{Timeout: tlsHandshakeTimeout}, Config: cfg}
+	upstream, err := dialer.DialContext(ctx, "tcp", target.addr())
+	if err != nil {
+		return fmt.Errorf("connect to %s: %w", target.addr(), err)
+	}
+	defer upstream.Close()
+	logger.recordTunnelOpened()
+
+	closeBoth := func() {
+		_ = client.Close()
+		_ = upstream.Close()
+	}
+	stop := context.AfterFunc(ctx, closeBoth)
+	defer stop()
+
+	// Half-closed rather than closed, so a client that closes its write side after its request still gets the reply.
+	done := make(chan error, 2)
+	go func() {
+		_, err := io.Copy(upstreamConn{upstream}, client)
+		if err == nil {
+			err = markUpstream(upstream.(*tls.Conn).CloseWrite())
+		}
+		done <- err
+	}()
+	go func() {
+		_, err := io.Copy(client, upstreamConn{upstream})
+		if err == nil {
+			closeWrite(client)
+		}
+		done <- err
+	}()
+	if err := <-done; err != nil {
+		closeBoth()
+		<-done
+		return err
+	}
+	err = <-done
+	closeBoth()
+	return err
+}
+
+// upstreamError is a failure on the server's side of a TLS tunnel. A client half-close is how a TLS tunnel normally
+// ends, so it must not hide one, such as a server that rejects the client certificate after a TLS 1.3 handshake.
+type upstreamError struct{ err error }
+
+func (e *upstreamError) Error() string { return e.err.Error() }
+func (e *upstreamError) Unwrap() error { return e.err }
+
+// io.Copy needs a bare EOF to end cleanly, so that one stays unmarked.
+func markUpstream(err error) error {
+	if err == nil || err == io.EOF {
+		return err
+	}
+	return &upstreamError{err}
+}
+
+type upstreamConn struct{ net.Conn }
+
+func (c upstreamConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	return n, markUpstream(err)
+}
+
+func (c upstreamConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	return n, markUpstream(err)
+}
+
+// NativeServicesPath lists the session's database, SSH, and TLS services for `infisical agent-vault connect`, so it
+// can open a port for each and print the command that reaches it.
 const NativeServicesPath = "/_agent-vault/native-services"
 
 type NativeServiceInfo struct {

@@ -154,7 +154,7 @@ func derefString(s *string) string {
 // Anything unrecognised is http, so a newer backend's type is brokered the way this proxy already knows how.
 func toServiceKind(wire string) string {
 	switch wire {
-	case serviceKindMCP, serviceKindPostgres, serviceKindMySQL, serviceKindSSH:
+	case serviceKindMCP, serviceKindPostgres, serviceKindMySQL, serviceKindSSH, serviceKindTLS:
 		return wire
 	}
 	return serviceKindHTTP
@@ -168,7 +168,7 @@ func toNativeTarget(kind string, wire *api.AgentVaultNativeTarget) *nativeTarget
 	// TLS on and verified unless the server says otherwise, so a missing or partial tls object fails closed.
 	target := &nativeTarget{host: wire.Host, port: wire.Port, database: wire.Database, tlsEnabled: true, tlsVerify: true}
 	if wire.TLS != nil {
-		if wire.TLS.Enabled != nil {
+		if wire.TLS.Enabled != nil && kind != serviceKindTLS {
 			target.tlsEnabled = *wire.TLS.Enabled
 		}
 		if wire.TLS.Verify != nil {
@@ -202,6 +202,12 @@ func toCredential(wire api.AgentVaultCredential) credential {
 		return credential{
 			kind:        credentialSSHKey,
 			username:    wire.Username,
+			privateKey:  []byte(wire.PrivateKey),
+			certificate: wire.Certificate,
+		}
+	case credentialClientCert:
+		return credential{
+			kind:        credentialClientCert,
 			privateKey:  []byte(wire.PrivateKey),
 			certificate: wire.Certificate,
 		}

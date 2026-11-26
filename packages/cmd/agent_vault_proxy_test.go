@@ -30,6 +30,7 @@ var agentVaultProxyEnv = []string{
 	"INFISICAL_AGENT_VAULT_SOCKS5_TLS_CERT",
 	"INFISICAL_AGENT_VAULT_SOCKS5_TLS_KEY",
 	"INFISICAL_AGENT_VAULT_SOCKS5_ALLOW_PRIVATE_DESTINATIONS",
+	"INFISICAL_AGENT_VAULT_HTTP2_HOSTS",
 }
 
 func readProxyInputs(t *testing.T, env map[string]string, args ...string) (agentVaultProxyInputs, error) {
@@ -335,5 +336,20 @@ func TestAgentVaultProxySocks5OwnCertificate(t *testing.T) {
 	}
 	if len(in.warnings) != 1 || !strings.Contains(in.warnings[0], "--socks5-tls-key is visible in the process list") {
 		t.Fatalf("a key on the command line should warn: %v", in.warnings)
+	}
+}
+
+func TestAgentVaultProxyRefusesHTTP2HostsThatCannotMatch(t *testing.T) {
+	for _, bad := range []string{"https://grpc.example.com", "grpc.example.com/v1", "grpc.example.com:grpc", "grpc.example.com:0", "grpc.example.com:99999", "[::1", "::1"} {
+		_, err := readProxyInputs(t, nil, "--http2-hosts", "ok.example.com,"+bad)
+		if err == nil {
+			t.Errorf("%q: accepted", bad)
+		} else if !strings.Contains(err.Error(), "entry 2") || strings.Contains(err.Error(), bad) {
+			t.Errorf("%q: the error should name the entry by position, not echo it: %v", bad, err)
+		}
+	}
+	in, err := readProxyInputs(t, map[string]string{"INFISICAL_AGENT_VAULT_HTTP2_HOSTS": "grpc.example.com, *.build.example.com:8443, [::1], [::1]:8443"})
+	if err != nil || in.http2Hosts != "grpc.example.com, *.build.example.com:8443, [::1], [::1]:8443" {
+		t.Fatalf("got %q, %v", in.http2Hosts, err)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -33,14 +34,15 @@ const agentVaultFingerprintsTimeout = 15 * time.Second
 
 var agentVaultConnectCmd = &cobra.Command{
 	Use:   "connect [service...]",
-	Short: "Open local ports to the database and SSH services in a session",
-	Long: `Open local ports to the database and SSH services in an Agent Vault session.
+	Short: "Open local ports to the database, SSH, and TLS services in a session",
+	Long: `Open local ports to the database, SSH, and TLS services in an Agent Vault session.
 
 Each service gets its own port on 127.0.0.1, and its address and an example command are printed once the port is
 open. Connect your usual client (psql, mysql, ssh) there with any username and no password: each connection is
-tunnelled to the Agent Vault proxy over TLS, and the proxy logs in with the service's account. The ports stay
-open until you stop this command. With one service, --port picks its local port; otherwise the system picks free
-ones. With --all, a service the proxy refuses is skipped and the reason printed.
+tunnelled to the Agent Vault proxy over TLS, and the proxy logs in with the service's account. Connect to a TLS
+service without TLS: the proxy adds TLS and the service's client certificate. The ports stay open until you stop
+this command. With one service, --port picks its local port; otherwise the system picks free ones. With --all, a
+service the proxy refuses is skipped and the reason printed.
 
 The session token and proxy address are read from INFISICAL_AGENT_VAULT_SESSION_TOKEN and
 INFISICAL_AGENT_VAULT_PROXY_ADDRESS, which 'agent-vault run' sets for the agent, or from the flags. When
@@ -59,7 +61,7 @@ lists for the session's proxies.`,
 			return nil
 		}
 		if len(args) == 0 {
-			return fmt.Errorf("name at least one service, or pass --all to open every database and SSH service in the session")
+			return fmt.Errorf("name at least one service, or pass --all to open every database, SSH, and TLS service in the session")
 		}
 		return nil
 	},
@@ -172,7 +174,11 @@ func runAgentVaultConnect(cmd *cobra.Command, args []string) {
 	}
 	fmt.Print(strings.Join(blocks, "\n"))
 	if silent, _ := cmd.Flags().GetBool("silent"); !silent {
-		fmt.Fprintln(os.Stderr, "\nUse any username and no password: the proxy logs in with each service's account. Press Ctrl+C to close the ports.")
+		hint := "Use any username and no password: the proxy logs in with each service's account."
+		if !slices.ContainsFunc(services, func(s agentvault.NativeServiceInfo) bool { return s.Type != "tls" }) {
+			hint = "Connect without TLS: the proxy adds TLS and each service's client certificate."
+		}
+		fmt.Fprintln(os.Stderr, "\n"+hint+" Press Ctrl+C to close the ports.")
 	}
 
 	Telemetry.CaptureEventAsync("cli-command:agent-vault connect", posthog.NewProperties().
@@ -261,7 +267,7 @@ func pickAgentVaultConnectServices(available []agentvault.NativeServiceInfo, nam
 	return picked, nil
 }
 
-var agentVaultConnectTypeLabels = map[string]string{"postgres": "PostgreSQL", "mysql": "MySQL", "ssh": "SSH"}
+var agentVaultConnectTypeLabels = map[string]string{"postgres": "PostgreSQL", "mysql": "MySQL", "ssh": "SSH", "tls": "TLS"}
 
 // The database is left out of the examples: a Postgres client always gets the service's own database, and a MySQL
 // client starts there unless it names another (it can also switch later), so a name pasted into a shell command
@@ -288,6 +294,8 @@ func agentVaultConnectExample(serviceType string, port int) string {
 	case "ssh":
 		// The proxy presents a new host key on every connection, and the hop is local, so the key isn't checked.
 		return fmt.Sprintf("ssh -p %d -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null agent@127.0.0.1", port)
+	case "tls":
+		return fmt.Sprintf("tcp://127.0.0.1:%d", port)
 	}
 	return ""
 }
@@ -408,7 +416,7 @@ func init() {
 	agentVaultConnectCmd.Flags().String("session-token", "", "the session token, or set "+agentVaultSessionTokenEnv)
 	agentVaultConnectCmd.Flags().String("proxy", "", "the proxy's host:port, or set "+agentVaultProxyAddressEnv)
 	agentVaultConnectCmd.Flags().String("ca-fingerprint", "", "trust the proxy only if its certificate authority has this SHA256 fingerprint, shown in the Certificate Authority column on the Proxies page in Infisical")
-	agentVaultConnectCmd.Flags().Bool("all", false, "open a port for every database and SSH service in the session, skipping any the proxy refuses")
+	agentVaultConnectCmd.Flags().Bool("all", false, "open a port for every database, SSH, and TLS service in the session, skipping any the proxy refuses")
 	agentVaultConnectCmd.Flags().Int("port", 0, "the local port to open, when connecting to one service (default: a free port)")
 	agentVaultCmd.AddCommand(agentVaultConnectCmd)
 }

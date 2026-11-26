@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"runtime"
@@ -91,6 +92,7 @@ not un-intercepted.`,
 			DataDir:    in.dataDir,
 			OwnCa:      in.ownCa,
 			Socks5:     in.socks5,
+			HTTP2Hosts: in.http2Hosts,
 			OnReady: func() {
 				Telemetry.CaptureEventAsync("cli-command:agent-vault proxy", posthog.NewProperties().
 					Set("version", util.CLI_VERSION).
@@ -120,6 +122,7 @@ type agentVaultProxyInputs struct {
 	listenHost string
 	ownCa      *agentvault.OwnCa
 	socks5     *agentvault.Socks5Options
+	http2Hosts string
 	warnings   []string
 }
 
@@ -196,6 +199,31 @@ func readAgentVaultProxyInputs(cmd *cobra.Command) (agentVaultProxyInputs, error
 	if in.socks5, err = readAgentVaultSocks5Inputs(cmd, &in); err != nil {
 		return in, err
 	}
+
+	http2Hosts, http2HostsSource, err := agentVaultFlagOrEnv(cmd, "http2-hosts", "INFISICAL_AGENT_VAULT_HTTP2_HOSTS")
+	if err != nil {
+		return in, err
+	}
+	for i, entry := range strings.Split(http2Hosts, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if strings.Contains(entry, "/") {
+			return in, fmt.Errorf("%s takes hosts only, such as grpc.example.com or grpc.example.com:8443, but entry %d has a scheme or path", http2HostsSource, i+1)
+		}
+		if !strings.Contains(entry, ":") || strings.HasPrefix(entry, "[") && strings.HasSuffix(entry, "]") {
+			continue
+		}
+		_, port, err := net.SplitHostPort(entry)
+		if err != nil {
+			return in, fmt.Errorf("%s takes hosts only, such as grpc.example.com or grpc.example.com:8443, but entry %d is not a host", http2HostsSource, i+1)
+		}
+		if !agentvault.ValidPort(port) {
+			return in, fmt.Errorf("%s takes a port number from 1 to 65535 after the host, but entry %d has some other port", http2HostsSource, i+1)
+		}
+	}
+	in.http2Hosts = http2Hosts
 
 	return in, nil
 }
@@ -383,6 +411,7 @@ func addAgentVaultProxyFlags(cmd *cobra.Command) {
 	cmd.Flags().String("ca-key", "", "private key for --ca-cert: PEM, base64 PEM or file path")
 	cmd.Flags().Int("port", agentvault.DefaultPort, "port for the HTTP proxy; 0 binds any free port, which the startup line then reports")
 	cmd.Flags().String("listen-host", "", "host or IP address the HTTP proxy listens on, such as 127.0.0.1 (default: all interfaces)")
+	cmd.Flags().String("http2-hosts", "", "comma-separated host patterns whose tunnels also offer HTTP/2, such as gRPC APIs; a host without a port means port 443, and every other host stays HTTP/1.1 only (default: none)")
 	cmd.Flags().Int("socks5-port", 0, "port for SOCKS5 over TLS, which listens on all interfaces (default: off)")
 	cmd.Flags().String("socks5-tls-name", "", "DNS name or IP address clients reach the SOCKS5 port by; the proxy makes the port's certificate for it")
 	cmd.Flags().String("socks5-tls-cert", "", "your own certificate for the SOCKS5 port, instead of one the proxy makes: PEM, base64 PEM or file path")

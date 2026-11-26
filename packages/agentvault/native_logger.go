@@ -348,6 +348,14 @@ func (l *nativeSessionLogger) loggingOnLocked() bool {
 	return l.grant != nil && l.ps.sessionLogs != nil
 }
 
+// recordTunnelOpened writes the only row a TLS tunnel gets, since its traffic isn't recorded.
+func (l *nativeSessionLogger) recordTunnelOpened() {
+	l.bill()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.writeLocked(&nativeDetail{Note: "Connection opened; its traffic is not recorded"}, l.now())
+}
+
 // recordOutcome writes a row for a connection that never reached the service, with the reason as its note.
 func (l *nativeSessionLogger) recordOutcome(decision, reason string) {
 	l.recordRefusal(decision, reason, nil)

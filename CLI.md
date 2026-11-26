@@ -16,7 +16,7 @@ infisical secrets-manager secrets get API_KEY --env prod
 - **Action**: `get`, `create`, `update`, or `delete`.
   - `get` without a name lists; `get <name>` shows one. Don't add a separate `list`.
   - `create` fails if the item exists, and `update` fails if it doesn't. Don't add upserts like `set`.
-- **Workflow commands** act on a whole environment rather than one resource: `run` sits directly under the product, and `export` under the resource it writes out (`secrets-manager secrets export`). Agent Vault also has `agent-vault proxy`, which runs the proxy, and `agent-vault connect`, which opens local ports to a session's database and SSH services.
+- **Workflow commands** act on a whole environment rather than one resource: `run` sits directly under the product, and `export` under the resource it writes out (`secrets-manager secrets export`). Agent Vault also has `agent-vault proxy`, which runs the proxy, and `agent-vault connect`, which opens local ports to a session's database, SSH, and TLS services.
 - **Lifecycle actions** are for long-running things such as agents and services: `start`, `stop`, `install`, `uninstall`.
 - **Other resource actions** cover what CRUD can't say: `revoke` ends something that keeps existing (`agent-vault sessions revoke`), `push` uploads a local copy (`agent-vault skills push`), and `pull` downloads one to edit and push back (`agent-vault skills pull`).
 

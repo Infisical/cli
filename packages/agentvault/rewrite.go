@@ -256,6 +256,12 @@ func applyBodySubstitutions(req *http.Request, serviceName string, subs []substi
 			Msg("agent-vault: body substitution skipped on an encoded body; the placeholder is going upstream unchanged")
 		return false, nil
 	}
+	if req.ProtoMajor == 2 && isGRPC(req) {
+		log.Warn().
+			Str("service", serviceName).
+			Msg("agent-vault: body substitution skipped on a gRPC body; the placeholder is going upstream unchanged")
+		return false, nil
+	}
 	// Judged before reading, so an oversize body costs no memory. The check below still has to stand on its
 	// own: a chunked request declares -1, and a declared length is a claim rather than a fact.
 	if req.ContentLength > maxBodyRewriteSize {

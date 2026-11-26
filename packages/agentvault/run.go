@@ -364,13 +364,18 @@ func serve(opts Options, s startup) error {
 		config.PollInterval = 60
 	}
 
+	transport := newUpstreamTransport()
 	ps := &proxyServer{
 		opts:      opts,
 		ca:        ca,
-		transport: newUpstreamTransport(),
+		transport: transport,
 		config:    config,
 		persisted: state,
 		legacy:    s.legacy,
+	}
+	if opts.HTTP2Hosts != "" {
+		ps.http2Hosts = parseHostPatterns(opts.HTTP2Hosts)
+		ps.http2Base = transport
 	}
 	if opts.Socks5 != nil {
 		ps.socks5AllowPrivate = opts.Socks5.AllowPrivateDestinations
@@ -380,6 +385,9 @@ func serve(opts Options, s startup) error {
 				return err
 			}
 			ps.guardedTransport = guarded
+			if opts.HTTP2Hosts != "" {
+				ps.guardedHTTP2Base = guarded
+			}
 		}
 	}
 	resolver, err := newInfisicalResolver(opts.ProxyToken)

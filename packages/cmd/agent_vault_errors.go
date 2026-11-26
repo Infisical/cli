@@ -204,12 +204,12 @@ func errAgentVaultConnectLocalPort(service string, port int, cause error) *util.
 
 func errAgentVaultConnectAllRefused() *util.CLIError {
 	return &util.CLIError{Code: errCodeServiceRefused,
-		Message: "The proxy refused every database and SSH service in this session, for the reasons printed above. Fix one of them, or ask an Agent Vault admin to."}
+		Message: "The proxy refused every database, SSH, and TLS service in this session, for the reasons printed above. Fix one of them, or ask an Agent Vault admin to."}
 }
 
 func errAgentVaultConnectNoServices() *util.CLIError {
 	return &util.CLIError{Code: errCodeNoServices,
-		Message: "This session has no database or SSH services: ask an Agent Vault admin to add one to the session's access bundle."}
+		Message: "This session has no database, SSH, or TLS services: ask an Agent Vault admin to add one to the session's access bundle."}
 }
 
 func errAgentVaultConnectServiceNotFound(name string, available []agentvault.NativeServiceInfo) *util.CLIError {
@@ -218,7 +218,7 @@ func errAgentVaultConnectServiceNotFound(name string, available []agentvault.Nat
 		names[i] = service.Name
 	}
 	return &util.CLIError{Code: errCodeServiceNotFound,
-		Message: fmt.Sprintf("This session has no database or SSH service named %s: its services are %s. If you just added it, try again in a minute.", quoted(name, "service"), strings.Join(names, ", "))}
+		Message: fmt.Sprintf("This session has no database, SSH, or TLS service named %s: its services are %s. If you just added it, try again in a minute.", quoted(name, "service"), strings.Join(names, ", "))}
 }
 
 // The proxy's refusals are written for the person reading them, so they are passed on as they are.

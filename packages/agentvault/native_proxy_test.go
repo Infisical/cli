@@ -169,12 +169,20 @@ func TestNativeRefusalsHappenBeforeTheTunnel(t *testing.T) {
 	missingValues.personalValuesMissing = true
 	badKey := nativeServiceAt(serviceKindSSH, "bastion", "127.0.0.1:1")
 	badKey.credential = credential{kind: credentialSSHKey, username: "agent", privateKey: []byte("not a key")}
-	_, client, _ := newNativeProxy(t, []*resolvedService{missingValues, badKey})
+	caKey, caCert, err := generateRootCa()
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiredCert := tlsService(t, caKey, caCert, "engine", "127.0.0.1:1", time.Now().Add(-time.Minute))
+	noCert := nativeServiceAt(serviceKindTLS, "pending", "127.0.0.1:1")
+	_, client, _ := newNativeProxy(t, []*resolvedService{missingValues, badKey, expiredCert, noCert})
 
 	for _, tc := range []struct{ service, want string }{
-		{"nope", `no database or SSH service named "nope"`},
+		{"nope", `no database, SSH, or TLS service named "nope"`},
 		{"members", "needs your own username or password"},
 		{"bastion", `the SSH key stored on service "bastion" can't be used`},
+		{"engine", `the client certificate stored on service "engine" expired`},
+		{"pending", `service "pending" has no client certificate right now`},
 	} {
 		err := client.Probe(context.Background(), tc.service)
 		var refused *ProxyRefusedError

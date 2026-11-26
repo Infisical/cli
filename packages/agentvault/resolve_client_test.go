@@ -201,6 +201,16 @@ func TestADatabaseTargetKeepsTLSOnUnlessTheServerTurnsItOff(t *testing.T) {
 	}
 }
 
+func TestATLSServiceCannotTurnTLSOff(t *testing.T) {
+	var wire api.AgentVaultNativeTarget
+	if err := json.Unmarshal([]byte(`{"host":"engine.internal","port":444,"tls":{"enabled":false,"verify":true}}`), &wire); err != nil {
+		t.Fatal(err)
+	}
+	if target := toNativeTarget(serviceKindTLS, &wire); target == nil || !target.tlsEnabled || !target.tlsVerify {
+		t.Fatalf("target %+v, want TLS on and verified", target)
+	}
+}
+
 func resolveBody(t *testing.T, body string) *resolveResult {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
