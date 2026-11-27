@@ -10,13 +10,13 @@ import (
 )
 
 // These are the rules from CLI.md that can be checked mechanically. They apply to every visible
-// command under `secrets-manager`; hidden commands are kept only for backwards compatibility.
+// command under the trees in conventionRoots; hidden commands are kept only for backwards compatibility.
 
 var (
 	crudActions      = map[string]bool{"get": true, "create": true, "update": true, "delete": true}
 	lifecycleActions = map[string]bool{"start": true, "stop": true, "install": true, "uninstall": true}
 	workflowCommands = map[string]bool{"run": true, "export": true, "proxy": true, "connect": true}
-	resourceActions  = map[string]bool{"revoke": true, "push": true, "pull": true}
+	resourceActions  = map[string]bool{"revoke": true, "push": true, "pull": true, "issue": true, "renew": true}
 )
 
 type conventionRule struct {
@@ -33,7 +33,7 @@ var conventionRules = []conventionRule{
 		if crudActions[name] || lifecycleActions[name] || workflowCommands[name] || resourceActions[name] {
 			return ""
 		}
-		return fmt.Sprintf("%q is not an action from CLI.md (get, create, update, delete, revoke, push, pull, or a lifecycle or workflow command)", name)
+		return fmt.Sprintf("%q is not an action from CLI.md (get, create, update, delete, revoke, push, pull, issue, renew, or a lifecycle or workflow command)", name)
 	}},
 	{"plural-resource", func(cmd *cobra.Command) string {
 		if !cmd.HasAvailableSubCommands() || cmd.Parent() == RootCmd || strings.HasSuffix(cmd.Name(), "s") {
@@ -100,9 +100,8 @@ var conventionRules = []conventionRule{
 // conventionExceptions lists commands that predate CLI.md, with the rules each one breaks. It is
 // the remaining cleanup: remove an entry once the command is fixed. New commands must not be added.
 var conventionExceptions = map[string][]string{
-	"infisical secrets-manager dynamic-secrets lease":       {"plural-resource"},
-	"infisical secrets-manager dynamic-secrets lease list":  {"action"},
-	"infisical secrets-manager dynamic-secrets lease renew": {"action"},
+	"infisical secrets-manager dynamic-secrets lease":      {"plural-resource"},
+	"infisical secrets-manager dynamic-secrets lease list": {"action"},
 }
 
 func visibleCommands(cmd *cobra.Command) []*cobra.Command {
@@ -116,10 +115,19 @@ func visibleCommands(cmd *cobra.Command) []*cobra.Command {
 	return commands
 }
 
+var conventionRoots = [][]string{
+	{secretsManagerCommandName},
+	{"cert-manager", "applications"},
+	{"cert-manager", "certificates"},
+}
+
 func TestCommandConventions(t *testing.T) {
-	root := findCommand(t, []string{secretsManagerCommandName})
+	var commands []*cobra.Command
+	for _, root := range conventionRoots {
+		commands = append(commands, visibleCommands(findCommand(t, root))...)
+	}
 	violations := map[string][]string{}
-	for _, cmd := range visibleCommands(root) {
+	for _, cmd := range commands {
 		for _, rule := range conventionRules {
 			if problem := rule.check(cmd); problem != "" {
 				path := cmd.CommandPath()

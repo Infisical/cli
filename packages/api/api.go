@@ -596,19 +596,27 @@ func CallGetProjectBySlug(httpClient *resty.Client, slug string) (ProjectSetting
 }
 
 func CallGetPkiApplicationByName(httpClient *resty.Client, name string) (PkiApplication, error) {
+	return getPkiApplication(httpClient, "by-name/"+url.PathEscape(name), "CallGetPkiApplicationByName")
+}
+
+func CallGetPkiApplicationByID(httpClient *resty.Client, applicationId string) (PkiApplication, error) {
+	return getPkiApplication(httpClient, url.PathEscape(applicationId), "CallGetPkiApplicationByID")
+}
+
+func getPkiApplication(httpClient *resty.Client, path, operation string) (PkiApplication, error) {
 	var applicationResponse GetPkiApplicationResponse
 	response, err := httpClient.
 		R().
 		SetResult(&applicationResponse).
 		SetHeader("User-Agent", USER_AGENT).
-		Get(fmt.Sprintf("%v/v1/cert-manager/applications/by-name/%s", config.INFISICAL_URL, url.PathEscape(name)))
+		Get(fmt.Sprintf("%v/v1/cert-manager/applications/%s", config.INFISICAL_URL, path))
 
 	if err != nil {
-		return PkiApplication{}, NewGenericRequestError("CallGetPkiApplicationByName", err)
+		return PkiApplication{}, NewGenericRequestError(operation, err)
 	}
 
 	if response.IsError() {
-		return PkiApplication{}, NewAPIErrorWithResponse("CallGetPkiApplicationByName", response, nil)
+		return PkiApplication{}, NewAPIErrorWithResponse(operation, response, nil)
 	}
 
 	return applicationResponse.Application, nil
@@ -1666,10 +1674,11 @@ func CallIssueCertificate(httpClient *resty.Client, request IssueCertificateRequ
 	return &resBody, nil
 }
 
-func CallRetrieveCertificate(httpClient *resty.Client, certificateId string) (*RetrieveCertificateResponse, error) {
+func CallRetrieveCertificate(ctx context.Context, httpClient *resty.Client, certificateId string) (*RetrieveCertificateResponse, error) {
 	var resBody RetrieveCertificateResponse
 	response, err := httpClient.
 		R().
+		SetContext(ctx).
 		SetResult(&resBody).
 		SetHeader("User-Agent", USER_AGENT).
 		Get(fmt.Sprintf("%v/v1/cert-manager/certificates/%s", config.INFISICAL_URL, certificateId))
@@ -1743,10 +1752,11 @@ func CallRenewCertificate(httpClient *resty.Client, certificateId string, reques
 	return &resBody, nil
 }
 
-func CallGetCertificateRequest(httpClient *resty.Client, certificateRequestId string) (*GetCertificateRequestResponse, error) {
+func CallGetCertificateRequest(ctx context.Context, httpClient *resty.Client, certificateRequestId string) (*GetCertificateRequestResponse, error) {
 	var resBody GetCertificateRequestResponse
 	response, err := httpClient.
 		R().
+		SetContext(ctx).
 		SetResult(&resBody).
 		SetHeader("User-Agent", USER_AGENT).
 		Get(fmt.Sprintf("%v/v1/cert-manager/certificates/certificate-requests/%s", config.INFISICAL_URL, certificateRequestId))
@@ -1799,4 +1809,107 @@ func CreateTag(httpClient *resty.Client, projectId string, request CreateTagRequ
 	}
 
 	return resBody.Tag, nil
+}
+
+func CallListPkiApplications(httpClient *resty.Client, offset, limit int) (ListPkiApplicationsResponse, error) {
+	var listResponse ListPkiApplicationsResponse
+	response, err := httpClient.
+		R().
+		SetResult(&listResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		SetQueryParam("offset", fmt.Sprint(offset)).
+		SetQueryParam("limit", fmt.Sprint(limit)).
+		Get(fmt.Sprintf("%v/v1/cert-manager/applications", config.INFISICAL_URL))
+
+	if err != nil {
+		return ListPkiApplicationsResponse{}, NewGenericRequestError("CallListPkiApplications", err)
+	}
+
+	if response.IsError() {
+		return ListPkiApplicationsResponse{}, NewAPIErrorWithResponse("CallListPkiApplications", response, nil)
+	}
+
+	return listResponse, nil
+}
+
+func CallSearchCertificates(httpClient *resty.Client, request SearchCertificatesRequest) (SearchCertificatesResponse, error) {
+	var resBody SearchCertificatesResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/cert-manager/certificates/search", config.INFISICAL_URL))
+
+	if err != nil {
+		return SearchCertificatesResponse{}, NewGenericRequestError("CallSearchCertificates", err)
+	}
+
+	if response.IsError() {
+		return SearchCertificatesResponse{}, NewAPIErrorWithResponse("CallSearchCertificates", response, nil)
+	}
+
+	return resBody, nil
+}
+
+func CallSearchCertificateRequests(httpClient *resty.Client, request SearchCertificateRequestsRequest) (SearchCertificateRequestsResponse, error) {
+	var resBody SearchCertificateRequestsResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/cert-manager/certificates/certificate-requests/search", config.INFISICAL_URL))
+
+	if err != nil {
+		return SearchCertificateRequestsResponse{}, NewGenericRequestError("CallSearchCertificateRequests", err)
+	}
+
+	if response.IsError() {
+		return SearchCertificateRequestsResponse{}, NewAPIErrorWithResponse("CallSearchCertificateRequests", response, nil)
+	}
+
+	return resBody, nil
+}
+
+// CallRevokeCertificate returns 200 with status "revoked", or 202 with status "pending_approval" and
+// an approvalRequestId when the certificate's application requires approval to revoke.
+func CallRevokeCertificate(httpClient *resty.Client, certificateId string, request RevokeCertificateRequest) (RevokeCertificateResponse, error) {
+	var resBody RevokeCertificateResponse
+	response, err := httpClient.
+		R().
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/cert-manager/certificates/%s/revoke", config.INFISICAL_URL, url.PathEscape(certificateId)))
+
+	if err != nil {
+		return RevokeCertificateResponse{}, NewGenericRequestError("CallRevokeCertificate", err)
+	}
+
+	if response.IsError() {
+		return RevokeCertificateResponse{}, NewAPIErrorWithResponse("CallRevokeCertificate", response, nil)
+	}
+
+	return resBody, nil
+}
+
+func CallGetCertificateRevocationApproval(ctx context.Context, httpClient *resty.Client, approvalRequestId string) (ApprovalRequestStatus, error) {
+	var resBody GetApprovalRequestResponse
+	response, err := httpClient.
+		R().
+		SetContext(ctx).
+		SetResult(&resBody).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/approval-policies/cert-revocation/requests/%s", config.INFISICAL_URL, url.PathEscape(approvalRequestId)))
+
+	if err != nil {
+		return ApprovalRequestStatus{}, NewGenericRequestError("CallGetCertificateRevocationApproval", err)
+	}
+
+	if response.IsError() {
+		return ApprovalRequestStatus{}, NewAPIErrorWithResponse("CallGetCertificateRevocationApproval", response, nil)
+	}
+
+	return resBody.Request, nil
 }

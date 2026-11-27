@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -196,7 +197,7 @@ func (tm *AgentManager) resumeCertificateFromDisk(certificateId int, certConfig 
 		return false
 	}
 
-	existing, err := api.CallRetrieveCertificate(httpClient, record.CertificateID)
+	existing, err := api.CallRetrieveCertificate(context.Background(), httpClient, record.CertificateID)
 	if err != nil {
 		log.Warn().Str("Certificate", displayName).Msgf("unable to verify the certificate on disk with Infisical; issuing a new certificate: %v", err)
 		return false

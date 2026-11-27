@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -114,9 +115,12 @@ func TestCertificateClient_AppliesRetryStrategy(t *testing.T) {
 		wantCalls int32
 	}{
 		{
-			name:      "retrieve retries a 503",
-			server:    retryTestServer{retrieveStatus: http.StatusServiceUnavailable},
-			call:      func(c *resty.Client) error { _, err := api.CallRetrieveCertificate(c, "cert-1"); return err },
+			name:   "retrieve retries a 503",
+			server: retryTestServer{retrieveStatus: http.StatusServiceUnavailable},
+			call: func(c *resty.Client) error {
+				_, err := api.CallRetrieveCertificate(context.Background(), c, "cert-1")
+				return err
+			},
 			calls:     func(s *retryTestServer) int32 { return s.retrieveCalls.Load() },
 			wantCalls: 3,
 		},
@@ -384,7 +388,7 @@ func TestCertificateClient_ExplicitZeroDisablesRetries(t *testing.T) {
 
 		httpClient, err := tm.createAuthenticatedClient()
 		require.NoError(t, err)
-		_, err = api.CallRetrieveCertificate(httpClient, "cert-1")
+		_, err = api.CallRetrieveCertificate(context.Background(), httpClient, "cert-1")
 
 		require.Error(t, err)
 		assert.Equal(t, int32(1), server.retrieveCalls.Load())
@@ -397,7 +401,7 @@ func TestCertificateClient_ExplicitZeroDisablesRetries(t *testing.T) {
 
 		httpClient, err := tm.createAuthenticatedClient()
 		require.NoError(t, err)
-		_, err = api.CallRetrieveCertificate(httpClient, "cert-1")
+		_, err = api.CallRetrieveCertificate(context.Background(), httpClient, "cert-1")
 
 		require.Error(t, err)
 		assert.Equal(t, int32(1), server.retrieveCalls.Load())

@@ -62,7 +62,7 @@ func everyConstructedError() []*util.CLIError {
 		errNothingToUpdate([]string{"name", "slug"}),
 		errConfirmationRequired(action, "infisical secrets-manager environments delete qa --yes"),
 		errConfirmationDeclined(action),
-	}, append(agentVaultConstructedErrors(), pamConstructedErrors()...)...)
+	}, append(append(agentVaultConstructedErrors(), pamConstructedErrors()...), certManagerConstructedErrors()...)...)
 }
 
 func TestErrorCodesAreStableSnakeCaseAndUnique(t *testing.T) {

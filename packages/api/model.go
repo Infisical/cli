@@ -138,8 +138,14 @@ type GetProjectByIdResponse struct {
 }
 
 type PkiApplication struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	Description *string `json:"description"`
+}
+
+type ListPkiApplicationsResponse struct {
+	Applications []PkiApplication `json:"applications"`
+	Total        int              `json:"total"`
 }
 
 type GetPkiApplicationResponse struct {
@@ -158,9 +164,11 @@ type GetCertificateProfileResponse struct {
 }
 
 type PkiApplicationProfile struct {
-	ApplicationID string `json:"applicationId"`
-	ProfileID     string `json:"profileId"`
-	ProfileSlug   string `json:"profileSlug"`
+	ApplicationID      string  `json:"applicationId"`
+	ProfileID          string  `json:"profileId"`
+	ProfileSlug        string  `json:"profileSlug"`
+	ProfileDescription *string `json:"profileDescription"`
+	APIConfigID        *string `json:"apiConfigId"`
 }
 
 type ListPkiApplicationProfilesResponse struct {
@@ -1297,6 +1305,13 @@ type AltName struct {
 	Value string `json:"value"`
 }
 
+const (
+	AltNameTypeDNS   = "dns_name"
+	AltNameTypeIP    = "ip_address"
+	AltNameTypeEmail = "email"
+	AltNameTypeURI   = "uri"
+)
+
 type CertificateAttributes struct {
 	TTL                string    `json:"ttl,omitempty"`
 	SignatureAlgorithm string    `json:"signatureAlgorithm,omitempty"`
@@ -1307,14 +1322,40 @@ type CertificateAttributes struct {
 	NotBefore          string    `json:"notBefore,omitempty"`
 	NotAfter           string    `json:"notAfter,omitempty"`
 	AltNames           []AltName `json:"altNames,omitempty"`
+
+	Organization       string                       `json:"organization,omitempty"`
+	OrganizationalUnit string                       `json:"organizationalUnit,omitempty"`
+	Country            string                       `json:"country,omitempty"`
+	State              string                       `json:"state,omitempty"`
+	Locality           string                       `json:"locality,omitempty"`
+	DomainComponents   []string                     `json:"domainComponents,omitempty"`
+	BasicConstraints   *CertificateBasicConstraints `json:"basicConstraints,omitempty"`
+	CustomExtensions   []CertificateCustomExtension `json:"customExtensions,omitempty"`
+}
+
+type CertificateBasicConstraints struct {
+	IsCA       bool `json:"isCA"`
+	PathLength *int `json:"pathLength,omitempty"`
+}
+
+type CertificateCustomExtension struct {
+	OID      string `json:"oid"`
+	Value    string `json:"value,omitempty"`
+	Critical bool   `json:"critical,omitempty"`
+}
+
+type CertificateMetadataEntry struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
 }
 
 type IssueCertificateRequest struct {
-	ProfileID            string                 `json:"profileId"`
-	ApplicationID        string                 `json:"applicationId,omitempty"`
-	CSR                  string                 `json:"csr,omitempty"`
-	Attributes           *CertificateAttributes `json:"attributes,omitempty"`
-	RemoveRootsFromChain bool                   `json:"removeRootsFromChain,omitempty"`
+	ProfileID            string                     `json:"profileId"`
+	ApplicationID        string                     `json:"applicationId,omitempty"`
+	CSR                  string                     `json:"csr,omitempty"`
+	Attributes           *CertificateAttributes     `json:"attributes,omitempty"`
+	RemoveRootsFromChain bool                       `json:"removeRootsFromChain,omitempty"`
+	Metadata             []CertificateMetadataEntry `json:"metadata,omitempty"`
 }
 
 type CertificateData struct {
@@ -1329,6 +1370,8 @@ type CertificateData struct {
 type CertificateResponse struct {
 	Certificate          *CertificateData `json:"certificate,omitempty"`
 	CertificateRequestID string           `json:"certificateRequestId"`
+	Status               string           `json:"status,omitempty"`
+	Message              string           `json:"message,omitempty"`
 }
 
 type CertificateStatus string
@@ -1337,27 +1380,64 @@ const (
 	CertificateStatusActive  CertificateStatus = "active"
 	CertificateStatusRevoked CertificateStatus = "revoked"
 	CertificateStatusExpired CertificateStatus = "expired"
+	CertificateStatusRenewed CertificateStatus = "renewed"
+)
+
+const (
+	CertificateRequestStatusPendingApproval   = "pending_approval"
+	CertificateRequestStatusPending           = "pending"
+	CertificateRequestStatusPendingValidation = "pending_validation"
+	CertificateRequestStatusIssued            = "issued"
+	CertificateRequestStatusFailed            = "failed"
+	CertificateRequestStatusRejected          = "rejected"
 )
 
 type RetrieveCertificateResponse struct {
-	Certificate struct {
-		ID                         string    `json:"id"`
-		CreatedAt                  time.Time `json:"createdAt"`
-		UpdatedAt                  time.Time `json:"updatedAt"`
-		Status                     string    `json:"status"`
-		SerialNumber               string    `json:"serialNumber"`
-		CommonName                 string    `json:"commonName"`
-		NotBefore                  time.Time `json:"notBefore"`
-		NotAfter                   time.Time `json:"notAfter"`
-		CaId                       string    `json:"caId"`
-		KeyUsages                  []string  `json:"keyUsages"`
-		ExtendedKeyUsages          []string  `json:"extendedKeyUsages"`
-		Certificate                string    `json:"certificate,omitempty"`
-		CertificateChain           string    `json:"certificateChain,omitempty"`
-		PrivateKey                 string    `json:"privateKey,omitempty"`
-		RenewedByCertificateID     string    `json:"renewedByCertificateId,omitempty"`
-		LatestRenewalCertificateID string    `json:"latestRenewalCertificateId,omitempty"`
-	} `json:"certificate"`
+	Certificate RetrievedCertificate `json:"certificate"`
+}
+
+type RetrievedCertificate struct {
+	ID                         string    `json:"id"`
+	CreatedAt                  time.Time `json:"createdAt"`
+	UpdatedAt                  time.Time `json:"updatedAt"`
+	Status                     string    `json:"status"`
+	SerialNumber               string    `json:"serialNumber"`
+	CommonName                 string    `json:"commonName"`
+	NotBefore                  time.Time `json:"notBefore"`
+	NotAfter                   time.Time `json:"notAfter"`
+	CaId                       string    `json:"caId"`
+	KeyUsages                  []string  `json:"keyUsages"`
+	ExtendedKeyUsages          []string  `json:"extendedKeyUsages"`
+	Certificate                string    `json:"certificate,omitempty"`
+	CertificateChain           string    `json:"certificateChain,omitempty"`
+	PrivateKey                 string    `json:"privateKey,omitempty"`
+	RenewedByCertificateID     string    `json:"renewedByCertificateId,omitempty"`
+	LatestRenewalCertificateID string    `json:"latestRenewalCertificateId,omitempty"`
+
+	ApplicationID            *string    `json:"applicationId"`
+	ApplicationName          *string    `json:"applicationName"`
+	ProfileID                *string    `json:"profileId"`
+	ProfileName              *string    `json:"profileName"`
+	CaName                   *string    `json:"caName"`
+	KeyAlgorithm             *string    `json:"keyAlgorithm"`
+	SignatureAlgorithm       *string    `json:"signatureAlgorithm"`
+	HasPrivateKey            bool       `json:"hasPrivateKey"`
+	RevokedAt                *time.Time `json:"revokedAt"`
+	RevocationReason         *int       `json:"revocationReason"`
+	RenewedFromCertificateID *string    `json:"renewedFromCertificateId"`
+
+	Subject          *CertificateSubject          `json:"subject"`
+	BasicConstraints *CertificateBasicConstraints `json:"basicConstraints"`
+	Metadata         []CertificateMetadataEntry   `json:"metadata"`
+}
+
+type CertificateSubject struct {
+	Organization       string   `json:"organization"`
+	OrganizationalUnit string   `json:"organizationalUnit"`
+	Country            string   `json:"country"`
+	State              string   `json:"state"`
+	Locality           string   `json:"locality"`
+	DomainComponents   []string `json:"domainComponents"`
 }
 
 type CertificateBundleResponse struct {
@@ -1374,7 +1454,10 @@ type CertificateBodyResponse struct {
 }
 
 type RenewCertificateRequest struct {
-	RemoveRootsFromChain bool `json:"removeRootsFromChain,omitempty"`
+	RemoveRootsFromChain bool                   `json:"removeRootsFromChain,omitempty"`
+	RenewalKeySource     string                 `json:"renewalKeySource,omitempty"`
+	CSR                  string                 `json:"csr,omitempty"`
+	Attributes           *CertificateAttributes `json:"attributes,omitempty"`
 }
 
 type RenewCertificateResponse struct {
@@ -1385,6 +1468,13 @@ type RenewCertificateResponse struct {
 	SerialNumber         string `json:"serialNumber"`
 	CertificateID        string `json:"certificateId"`
 	CertificateRequestID string `json:"certificateRequestId,omitempty"`
+	Status               string `json:"status,omitempty"`
+}
+
+func (r RenewCertificateResponse) CertificateData() CertificateData {
+	return CertificateData{Certificate: r.Certificate, IssuingCaCertificate: r.IssuingCaCertificate,
+		CertificateChain: r.CertificateChain, PrivateKey: r.PrivateKey, SerialNumber: r.SerialNumber,
+		CertificateID: r.CertificateID}
 }
 
 type GetCertificateRequestResponse struct {
@@ -1400,6 +1490,91 @@ type GetCertificateRequestResponse struct {
 	SerialNumber         *string   `json:"serialNumber,omitempty"`
 	CertificateID        *string   `json:"certificateId,omitempty"`
 	ErrorMessage         *string   `json:"errorMessage,omitempty"`
+	PendingMessage       *string   `json:"pendingMessage,omitempty"`
+	ApplicationID        *string   `json:"applicationId,omitempty"`
+	ApplicationName      *string   `json:"applicationName,omitempty"`
+	ProfileName          *string   `json:"profileName,omitempty"`
+}
+
+// IssuedCertificateData is the certificate an issued request holds, or false when the request has none,
+// such as when its certificate was deleted.
+func (r *GetCertificateRequestResponse) IssuedCertificateData() (CertificateData, bool) {
+	if r.Certificate == nil || r.SerialNumber == nil || r.CertificateID == nil {
+		return CertificateData{}, false
+	}
+	data := CertificateData{Certificate: *r.Certificate, SerialNumber: *r.SerialNumber, CertificateID: *r.CertificateID}
+	if r.IssuingCaCertificate != nil {
+		data.IssuingCaCertificate = *r.IssuingCaCertificate
+	}
+	if r.CertificateChain != nil {
+		data.CertificateChain = *r.CertificateChain
+	}
+	if r.PrivateKey != nil {
+		data.PrivateKey = *r.PrivateKey
+	}
+	return data, true
+}
+
+type SearchCertificatesRequest struct {
+	ApplicationIDs []string `json:"applicationIds"`
+	ProfileIDs     []string `json:"profileIds,omitempty"`
+	Status         []string `json:"status,omitempty"`
+	NotAfterFrom   string   `json:"notAfterFrom,omitempty"`
+	NotAfterTo     string   `json:"notAfterTo,omitempty"`
+	Offset         int      `json:"offset"`
+	Limit          int      `json:"limit"`
+}
+
+type CertificateSearchResult struct {
+	ID            string    `json:"id"`
+	CommonName    string    `json:"commonName"`
+	SerialNumber  string    `json:"serialNumber"`
+	Status        string    `json:"status"`
+	ProfileName   *string   `json:"profileName"`
+	NotBefore     time.Time `json:"notBefore"`
+	NotAfter      time.Time `json:"notAfter"`
+	KeyAlgorithm  *string   `json:"keyAlgorithm"`
+	HasPrivateKey bool      `json:"hasPrivateKey"`
+}
+
+type SearchCertificatesResponse struct {
+	Certificates []CertificateSearchResult `json:"certificates"`
+	TotalCount   int                       `json:"totalCount"`
+}
+
+type SearchCertificateRequestsRequest struct {
+	ApplicationID string `json:"applicationId"`
+	Status        string `json:"status,omitempty"`
+	SortBy        string `json:"sortBy,omitempty"`
+	SortOrder     string `json:"sortOrder,omitempty"`
+	Offset        int    `json:"offset"`
+	Limit         int    `json:"limit"`
+}
+
+type CertificateRequestSearchResult struct {
+	ID            string    `json:"id"`
+	Status        string    `json:"status"`
+	CommonName    *string   `json:"commonName"`
+	ProfileName   *string   `json:"profileName"`
+	CertificateID *string   `json:"certificateId"`
+	CreatedAt     time.Time `json:"createdAt"`
+}
+
+type SearchCertificateRequestsResponse struct {
+	CertificateRequests []CertificateRequestSearchResult `json:"certificateRequests"`
+	TotalCount          int                              `json:"totalCount"`
+}
+
+type RevokeCertificateRequest struct {
+	RevocationReason string `json:"revocationReason"`
+}
+
+type RevokeCertificateResponse struct {
+	Status            string     `json:"status"`
+	SerialNumber      string     `json:"serialNumber"`
+	RevokedAt         *time.Time `json:"revokedAt"`
+	ApprovalRequestID *string    `json:"approvalRequestId"`
+	CrlWarning        *string    `json:"crlWarning"`
 }
 
 type SecretTag struct {
@@ -1419,4 +1594,14 @@ type CreateTagRequest struct {
 
 type CreateTagResponse struct {
 	Tag SecretTag `json:"tag"`
+}
+
+type ApprovalRequestStatus struct {
+	Status                      string     `json:"status"`
+	ExpiresAt                   *time.Time `json:"expiresAt"`
+	ApproversCanNoLongerApprove bool       `json:"approversCanNoLongerApprove"`
+}
+
+type GetApprovalRequestResponse struct {
+	Request ApprovalRequestStatus `json:"request"`
 }
