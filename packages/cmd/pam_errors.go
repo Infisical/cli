@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/util"
 )
 
@@ -19,6 +21,9 @@ const (
 	errCodeSessionExpired        = "session_expired"
 	errCodeCommandNotSupported   = "command_not_supported"
 	errCodeCommandRemoved        = "command_removed"
+	errCodeDevicePostureFailed   = "device_posture_failed"
+	errCodeDeviceInfoUnavailable = "device_info_unavailable"
+	errCodeVerificationCode      = "verification_code_invalid"
 )
 
 const pamPrefix = "infisical pam"
@@ -286,4 +291,72 @@ func errPAMPermissionDenied(cause error, message string) *util.CLIError {
 	return &util.CLIError{Code: errCodePermissionDenied, Cause: cause,
 		Message: message,
 		Next:    []util.NextStep{{Purpose: "To list the accounts you can access", Command: pamPrefix + " accounts get"}}}
+}
+
+func errPAMDevicePostureFailed(path string, cause error) *util.CLIError {
+	return &util.CLIError{Code: errCodeDevicePostureFailed, Cause: cause,
+		Message: fmt.Sprintf("Access denied. This device doesn't meet the device posture policy for %s. Fix the failed checks above and try again. Changes can take a few minutes to show up.", pamAccountArg(path))}
+}
+
+func errPAMDeviceCheckUnavailable(cause error) *util.CLIError {
+	return &util.CLIError{Code: errCodeDevicePostureFailed, Cause: cause,
+		Message: "Infisical couldn't check this device. Try again in a few minutes, or contact your admin if it keeps happening."}
+}
+
+func errPAMDeviceCheckFailed(cause error) *util.CLIError {
+	return &util.CLIError{Code: errCodeDevicePostureFailed, Cause: cause,
+		Message: "Device check failed. Your browser shows which checks failed."}
+}
+
+func errPAMDeviceInfoUnavailable(cause error) *util.CLIError {
+	message := "Couldn't read this device's serial number, which the device check needs."
+	var infoErr *util.DeviceInfoError
+	if errors.As(cause, &infoErr) {
+		message = infoErr.Message
+	}
+	return &util.CLIError{Code: errCodeDeviceInfoUnavailable, Cause: cause, Message: message}
+}
+
+func errPAMInvalidVerificationCode(code string) *util.CLIError {
+	return &util.CLIError{Code: errCodeInvalidArgument,
+		Message: fmt.Sprintf("%s isn't a device check code. Copy the code your browser shows, for example ABCD-EF23.", quoted(code, "code"))}
+}
+
+func errPAMVerificationCode(statusCode int, cause error) *util.CLIError {
+	var message string
+	switch statusCode {
+	case 404:
+		message = "No device check is waiting for this code. Check the code your browser shows and try again."
+	case 400:
+		message = "This code expired. Start the device check again in your browser to get a new code."
+	case 409:
+		message = "This code was already used. Start the device check again in your browser to get a new code."
+	default:
+		message = "This code belongs to another user. Log in as the user who started the device check in the browser, then try again."
+	}
+	return &util.CLIError{Code: errCodeVerificationCode, Cause: cause, Message: message,
+		Next: verificationCodeNext(statusCode)}
+}
+
+func verificationCodeNext(statusCode int) []util.NextStep {
+	if statusCode == 403 {
+		return []util.NextStep{{Purpose: "To log in", Command: "infisical login"}}
+	}
+	return nil
+}
+
+func pamVerificationCodeStatus(err error) (int, bool) {
+	var apiErr *api.APIError
+	if !errors.As(err, &apiErr) {
+		return 0, false
+	}
+	switch apiErr.StatusCode {
+	case 404, 409:
+		return apiErr.StatusCode, true
+	case 400:
+		return 400, strings.Contains(strings.ToLower(apiErr.ErrorMessage), "expired")
+	case 403:
+		return 403, apiErr.Name != "TokenError"
+	}
+	return 0, false
 }

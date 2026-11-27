@@ -42,6 +42,14 @@ func pamConstructedErrors() []*util.CLIError {
 		errPAMApprovedRerun(invocation),
 		errPAMMFARequiredAfterApproval(invocation, "https://app.infisical.com/mfa-session/abc123", "abc123"),
 		errPAMNotMember(cause, true),
+		errPAMDevicePostureFailed("prod/orders-db", cause),
+		errPAMDeviceCheckFailed(nil),
+		errPAMDeviceInfoUnavailable(cause),
+		errPAMInvalidVerificationCode("abc; rm -rf /"),
+		errPAMVerificationCode(404, cause),
+		errPAMVerificationCode(400, cause),
+		errPAMVerificationCode(409, cause),
+		errPAMVerificationCode(403, cause),
 	}
 }
 

@@ -74,6 +74,9 @@ const (
 	operationCallPAMListAccessibleAccounts         = "CallPAMListAccessibleAccounts"
 	operationCallPAMAccessApprovalRequest          = "CallPAMAccessApprovalRequest"
 	operationCallPAMCreateAccessRequest            = "CallPAMCreateAccessRequest"
+	operationCallPAMCheckDevice                    = "CallPAMCheckDevice"
+	operationCallPAMCompleteDeviceVerification     = "CallPAMCompleteDeviceVerification"
+	operationCallPAMGetDeviceVerification          = "CallPAMGetDeviceVerification"
 	operationCallPAMSessionCredentials             = "CallPAMSessionCredentials"
 	operationCallGetPamSessionKey                  = "CallGetPamSessionKey"
 	operationCallUploadPamSessionLog               = "CallUploadPamSessionLog"
@@ -1495,6 +1498,65 @@ func CallPAMCreateAccessRequest(httpClient *resty.Client, request PAMCreateAcces
 	}
 
 	return pamCreateAccessRequestResponse, nil
+}
+
+func CallPAMCheckDevice(httpClient *resty.Client, request PAMCheckDeviceRequest) (PAMCheckDeviceResponse, error) {
+	var checkDeviceResponse PAMCheckDeviceResponse
+	response, err := httpClient.
+		R().
+		SetResult(&checkDeviceResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/pam/device-verifications/check", config.INFISICAL_URL))
+
+	if err != nil {
+		return PAMCheckDeviceResponse{}, NewGenericRequestError(operationCallPAMCheckDevice, err)
+	}
+
+	if response.IsError() {
+		return PAMCheckDeviceResponse{}, NewAPIErrorWithResponse(operationCallPAMCheckDevice, response, nil)
+	}
+
+	return checkDeviceResponse, nil
+}
+
+func CallPAMCompleteDeviceVerification(httpClient *resty.Client, request PAMCompleteDeviceVerificationRequest) (PAMDeviceVerificationResponse, error) {
+	var verificationResponse PAMDeviceVerificationResponse
+	response, err := httpClient.
+		R().
+		SetResult(&verificationResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		SetBody(request).
+		Post(fmt.Sprintf("%v/v1/pam/device-verifications/complete", config.INFISICAL_URL))
+
+	if err != nil {
+		return PAMDeviceVerificationResponse{}, NewGenericRequestError(operationCallPAMCompleteDeviceVerification, err)
+	}
+
+	if response.IsError() {
+		return PAMDeviceVerificationResponse{}, NewAPIErrorWithResponse(operationCallPAMCompleteDeviceVerification, response, nil)
+	}
+
+	return verificationResponse, nil
+}
+
+func CallPAMGetDeviceVerification(httpClient *resty.Client, verificationId string) (PAMDeviceVerificationResponse, error) {
+	var verificationResponse PAMDeviceVerificationResponse
+	response, err := httpClient.
+		R().
+		SetResult(&verificationResponse).
+		SetHeader("User-Agent", USER_AGENT).
+		Get(fmt.Sprintf("%v/v1/pam/device-verifications/%s", config.INFISICAL_URL, url.PathEscape(verificationId)))
+
+	if err != nil {
+		return PAMDeviceVerificationResponse{}, NewGenericRequestError(operationCallPAMGetDeviceVerification, err)
+	}
+
+	if response.IsError() {
+		return PAMDeviceVerificationResponse{}, NewAPIErrorWithResponse(operationCallPAMGetDeviceVerification, response, nil)
+	}
+
+	return verificationResponse, nil
 }
 
 func CallPAMSessionCredentials(httpClient *resty.Client, sessionId string) (PAMSessionCredentialsResponse, error) {

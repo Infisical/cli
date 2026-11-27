@@ -54,7 +54,7 @@ var errorCodes = []string{
 	errCodeSessionInvalid, errCodeLocalPortUnavailable, errCodeSkillNotFound,
 	errCodeAccountNotFound, errCodeApprovalPending, errCodeApprovalRequired, errCodeApprovalNotConfigured, errCodeAccessApproved,
 	errCodeReasonRequired, errCodeMFARequired, errCodeSessionExpired, errCodeCommandNotSupported,
-	errCodeCommandRemoved,
+	errCodeCommandRemoved, errCodeDevicePostureFailed, errCodeDeviceInfoUnavailable, errCodeVerificationCode,
 }
 
 const secretsManagerPrefix = "infisical " + secretsManagerCommandName

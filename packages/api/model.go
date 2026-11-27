@@ -1020,9 +1020,10 @@ type PAMAccessRequest struct {
 	MfaSessionId string `json:"mfaSessionId,omitempty"`
 
 	// Common fields
-	Duration   string `json:"duration,omitempty"`
-	Reason     string `json:"reason,omitempty"`
-	TargetHost string `json:"targetHost,omitempty"`
+	Duration             string `json:"duration,omitempty"`
+	Reason               string `json:"reason,omitempty"`
+	TargetHost           string `json:"targetHost,omitempty"`
+	DeviceVerificationId string `json:"deviceVerificationId,omitempty"`
 }
 
 type PAMAccessResponse struct {
@@ -1062,9 +1063,75 @@ type PAMAccessApprovalRequestResponse struct {
 }
 
 type PAMCreateAccessRequestBody struct {
-	Path     string `json:"path"`
-	Reason   string `json:"reason,omitempty"`
-	Duration string `json:"duration"`
+	Path                 string `json:"path"`
+	Reason               string `json:"reason,omitempty"`
+	Duration             string `json:"duration"`
+	DeviceVerificationId string `json:"deviceVerificationId,omitempty"`
+}
+
+type PAMDeviceInfo struct {
+	SerialNumber string `json:"serialNumber"`
+	Platform     string `json:"platform"`
+	Model        string `json:"model,omitempty"`
+	OSName       string `json:"osName,omitempty"`
+	OSVersion    string `json:"osVersion,omitempty"`
+	Hostname     string `json:"hostname,omitempty"`
+}
+
+const (
+	PAMDeviceVerificationPending = "pending"
+	PAMDeviceVerificationPassed  = "passed"
+	PAMDeviceVerificationFailed  = "failed"
+	PAMDeviceVerificationError   = "error"
+	PAMDeviceVerificationExpired = "expired"
+
+	PAMDevicePolicyTemplate     = "template"
+	PAMDevicePolicyAutoApproval = "auto-approval"
+)
+
+type PAMDeviceCheck struct {
+	Provider string `json:"provider"`
+	Check    string `json:"check"`
+	Label    string `json:"label"`
+	Passed   bool   `json:"passed"`
+	Detail   string `json:"detail"`
+}
+
+type PAMVerifiedDevice struct {
+	Serial string `json:"serial"`
+	Model  string `json:"model"`
+	OS     string `json:"os"`
+}
+
+type PAMDeviceVerification struct {
+	Id          string             `json:"id"`
+	Status      string             `json:"status"`
+	Message     string             `json:"message,omitempty"`
+	AccountName string             `json:"accountName"`
+	Providers   []string           `json:"providers"`
+	Device      *PAMVerifiedDevice `json:"device"`
+	Checks      []PAMDeviceCheck   `json:"checks"`
+}
+
+type PAMCheckDeviceRequest struct {
+	AccountId       string         `json:"accountId"`
+	AccessType      string         `json:"accessType,omitempty"`
+	ForAutoApproval bool           `json:"forAutoApproval,omitempty"`
+	Device          *PAMDeviceInfo `json:"device,omitempty"`
+}
+
+type PAMCheckDeviceResponse struct {
+	Verification *PAMDeviceVerification `json:"verification"`
+	AppliesTo    []string               `json:"appliesTo"`
+}
+
+type PAMCompleteDeviceVerificationRequest struct {
+	Code   string        `json:"code"`
+	Device PAMDeviceInfo `json:"device"`
+}
+
+type PAMDeviceVerificationResponse struct {
+	Verification PAMDeviceVerification `json:"verification"`
 }
 
 type PAMCreateAccessRequestResponse struct {

@@ -74,6 +74,8 @@ type AccessOptions struct {
 	Proxy        bool
 	Command      []string
 	MfaSessionId string
+
+	DeviceVerificationId string
 }
 
 // APIDuration renders a duration the way the API parses it: npm ms can't read Go compound formats
@@ -92,11 +94,12 @@ func OpenSession(httpClient *resty.Client, opts AccessOptions, interactive bool)
 	}
 
 	response, err := CallPAMAccessWithMFA(httpClient, api.PAMAccessRequest{
-		Path:         opts.Path,
-		Duration:     APIDuration(duration),
-		Reason:       opts.Reason,
-		TargetHost:   opts.TargetHost,
-		MfaSessionId: opts.MfaSessionId,
+		Path:                 opts.Path,
+		Duration:             APIDuration(duration),
+		Reason:               opts.Reason,
+		TargetHost:           opts.TargetHost,
+		MfaSessionId:         opts.MfaSessionId,
+		DeviceVerificationId: opts.DeviceVerificationId,
 	}, interactive)
 	if err != nil {
 		return nil, err
@@ -105,11 +108,12 @@ func OpenSession(httpClient *resty.Client, opts AccessOptions, interactive bool)
 }
 
 // PromptAccessRequest offers a terminal user an access request for an approval gate. approved
-// means an auto-approval rule granted it on submission.
-func PromptAccessRequest(httpClient *resty.Client, err error, opts AccessOptions) (handled, approved bool) {
+// means an auto-approval rule granted it on submission. deviceErr is a device posture failure, and
+// deviceVerificationID a passed check the session can reuse.
+func PromptAccessRequest(httpClient *resty.Client, err error, opts AccessOptions) (handled, approved bool, deviceVerificationID string, deviceErr error) {
 	duration, parseErr := time.ParseDuration(opts.Duration)
 	if parseErr != nil {
-		return false, false
+		return false, false, "", nil
 	}
 	return handleApprovalRequired(httpClient, err, opts.Path, opts.Reason, APIDuration(duration))
 }
@@ -174,10 +178,10 @@ func NewLiveSession(response *api.PAMAccessResponse, expiry time.Time) LiveSessi
 // handleApprovalRequired intercepts the PAM_APPROVAL_REQUIRED gate. In an interactive terminal it
 // offers to submit an access request for the account; otherwise it prints guidance. Returns true when
 // the error was an approval-required error (handled here), false to let normal error handling proceed.
-func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, durationStr string) (handled, approved bool) {
+func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, durationStr string) (handled, approved bool, deviceVerificationID string, deviceErr error) {
 	var apiErr *api.APIError
 	if !errors.As(err, &apiErr) || (apiErr.Name != approvalRequiredErrorName && apiErr.Name != grantExpiredErrorName) {
-		return false, false
+		return false, false, "", nil
 	}
 
 	expired := apiErr.Name == grantExpiredErrorName
@@ -202,13 +206,13 @@ func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, d
 	// Requesting would only hit a no-approvers error, so explain the misconfiguration instead
 	if !hasApprovalPolicy {
 		util.PrintErrorMessageAndExit("This account requires approval, but its folder has no approvers configured yet. Ask a folder admin to add approvers under the folder's Approvals tab.")
-		return true, false
+		return true, false, "", nil
 	}
 
 	// Submitting again would only hit the duplicate-request error, so point at the existing one
 	if hasPendingRequest {
 		util.PrintErrorMessageAndExit("Your access request for this account is awaiting approval. You'll be able to launch a session once it's approved.")
-		return true, false
+		return true, false, "", nil
 	}
 
 	// Non-interactive callers (CI, scripts) must see a non-zero exit since no session was created
@@ -218,7 +222,7 @@ func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, d
 		} else {
 			util.PrintErrorMessageAndExit("This account requires approval. Request access from the Infisical dashboard (PAM > My Access).")
 		}
-		return true, false
+		return true, false, "", nil
 	}
 
 	if expired {
@@ -235,7 +239,7 @@ func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, d
 			util.PrintErrorMessageAndExit("Access request cancelled")
 		}
 		log.Info().Msg("No access request created.")
-		return true, false
+		return true, false, "", nil
 	}
 
 	requestReason := reason
@@ -262,27 +266,30 @@ func handleApprovalRequired(httpClient *resty.Client, err error, path, reason, d
 				util.PrintErrorMessageAndExit("Access request cancelled")
 			}
 			log.Info().Msg("No access request created.")
-			return true, false
+			return true, false, "", nil
 		}
 		requestReason = strings.TrimSpace(reasonInput)
 	}
 
-	created, reqErr := api.CallPAMCreateAccessRequest(httpClient, api.PAMCreateAccessRequestBody{
+	created, deviceVerificationID, reqErr := createAccessRequest(httpClient, api.PAMCreateAccessRequestBody{
 		Path:     path,
 		Reason:   requestReason,
 		Duration: durationStr,
 	})
 	if reqErr != nil {
+		if IsDeviceError(reqErr) {
+			return true, false, "", reqErr
+		}
 		util.HandleError(reqErr, "Failed to submit access request")
-		return true, false
+		return true, false, "", nil
 	}
 	if created.Request.Status == accessRequestStatusApproved {
 		log.Info().Msg("Access request approved automatically. Connecting.")
-		return true, true
+		return true, true, deviceVerificationID, nil
 	}
 
 	log.Info().Msg("Access request submitted. You'll be able to launch a session once it's approved.")
-	return true, false
+	return true, false, "", nil
 }
 
 // AccountConnectionDisplay describes how a client reaches one account type through a local proxy.

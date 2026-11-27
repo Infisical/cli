@@ -114,6 +114,10 @@ func resolvePAMAccessToken(cmd *cobra.Command) (accessToken func() string, stop 
 		return source, stopAuth, true
 	}
 
+	return pamUserAccessToken(cmd), func() {}, false
+}
+
+func pamUserAccessToken(cmd *cobra.Command) func() string {
 	interactive := stdinIsTerminal()
 	if !util.IsLoggedIn() {
 		if !interactive {
@@ -142,7 +146,7 @@ func resolvePAMAccessToken(cmd *cobra.Command) (accessToken func() string, stop 
 	if exp, ok := jwtExpiry(jwt); ok && exp.Before(time.Now()) {
 		exitWithError(cmd, errPAMAuthRequired(nil))
 	}
-	return func() string { return jwt }, func() {}, false
+	return func() string { return jwt }
 }
 
 // newPAMHTTPClient reads the token per request, so a renewed machine identity token is picked up.

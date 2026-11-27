@@ -89,7 +89,11 @@ Without a terminal, nothing prompts. An account that needs approval gets an acce
 filed with --reason and --duration. If an auto-approval rule approves it, the command
 connects; otherwise it exits with an error saying it's waiting for approval. An account
 that requires MFA exits with an error that has a link a person opens; run the command
-again with --mfa-session afterwards.`,
+again with --mfa-session afterwards.
+
+An account with a device posture policy first checks this device with your device management
+provider, by its hardware serial number, and prints each check. A device that fails is denied.
+On Linux, reading the serial number may need sudo.`,
 	Example: `  infisical pam access prod/orders-db -- psql -c "select count(*) from orders"
   infisical pam access prod/cluster -- kubectl get pods -A
   infisical pam access servers/prod-bastion -- systemctl status nginx
@@ -159,14 +163,16 @@ func runPAMAccess(cmd *cobra.Command, args []string) {
 	invocation := pamAccessInvocation{Path: path, HasCommand: len(command) > 0, Reason: strings.TrimSpace(reason), Duration: duration, Interactive: stdinIsTerminal()}
 	failure := pamAccessFailure{opts: opts, invocation: invocation, duration: duration, noApprovalRequest: noApprovalRequest, machineIdentity: machineIdentity}
 
-	response, err := pam.OpenSession(httpClient, opts, true)
+	response, err := openPAMSession(cmd, httpClient, &opts, failure)
 	if err != nil {
-		if !handlePAMAccessError(cmd, httpClient, err, failure) {
+		approved, deviceVerificationID := handlePAMAccessError(cmd, httpClient, err, failure)
+		if !approved {
 			return
 		}
 		// The backend uses up an MFA session before it checks for approval, so it can't be sent twice.
 		opts.MfaSessionId = ""
-		response, err = pam.OpenSession(httpClient, opts, true)
+		opts.DeviceVerificationId = deviceVerificationID
+		response, err = openPAMSession(cmd, httpClient, &opts, failure)
 		if _, gated := pam.ApprovalGateFrom(err); gated {
 			exitWithError(cmd, errPAMApprovedRerun(invocation))
 		}
@@ -208,6 +214,45 @@ func runPAMAccess(cmd *cobra.Command, args []string) {
 	pam.RunAccess(httpClient, response, opts)
 }
 
+func openPAMSession(cmd *cobra.Command, httpClient *resty.Client, opts *pam.AccessOptions, f pamAccessFailure) (*api.PAMAccessResponse, error) {
+	response, err := pam.OpenSession(httpClient, *opts, true)
+	if err == nil {
+		return response, nil
+	}
+	verificationID, handled, deviceErr := pam.ResolveDeviceGate(httpClient, err, util.GetStderrWriter(), false)
+	if !handled {
+		return nil, err
+	}
+	if deviceErr != nil {
+		exitWithError(cmd, classifyPAMDeviceError(deviceErr, opts.Path, f.machineIdentity), "Failed to check this device")
+	}
+	opts.DeviceVerificationId = verificationID
+	response, err = pam.OpenSession(httpClient, *opts, true)
+	if verification, failed := pam.DevicePostureFailedFrom(err); failed {
+		pam.PrintDeviceChecks(util.GetStderrWriter(), pam.CheckingDeviceHeader(verification, ""), verification, api.PAMDeviceInfo{})
+		exitWithError(cmd, errPAMDevicePostureFailed(opts.Path, err))
+	}
+	if _, required := pam.DeviceVerificationRequiredFrom(err); required {
+		exitWithError(cmd, errPAMDevicePostureFailed(opts.Path, err))
+	}
+	return response, err
+}
+
+func classifyPAMDeviceError(err error, path string, machineIdentity bool) error {
+	var postureErr *pam.DevicePostureError
+	if errors.As(err, &postureErr) {
+		if postureErr.Verification != nil && postureErr.Verification.Status == api.PAMDeviceVerificationError {
+			return errPAMDeviceCheckUnavailable(err)
+		}
+		return errPAMDevicePostureFailed(path, err)
+	}
+	var infoErr *util.DeviceInfoError
+	if errors.As(err, &infoErr) {
+		return errPAMDeviceInfoUnavailable(err)
+	}
+	return classifyPAMAPIError(err, path, pamDeniedLaunch, machineIdentity)
+}
+
 type pamAccessFailure struct {
 	opts              pam.AccessOptions
 	invocation        pamAccessInvocation
@@ -217,8 +262,8 @@ type pamAccessFailure struct {
 }
 
 // handlePAMAccessError exits with why a session couldn't be created. It returns true only when an
-// auto-approval rule approved the request it filed, so the caller can open the session.
-func handlePAMAccessError(cmd *cobra.Command, httpClient *resty.Client, err error, f pamAccessFailure) bool {
+// auto-approval rule approved the request it filed, with the device check the session can reuse.
+func handlePAMAccessError(cmd *cobra.Command, httpClient *resty.Client, err error, f pamAccessFailure) (bool, string) {
 	opts, invocation := f.opts, f.invocation
 	if gate, ok := pam.ApprovalGateFrom(err); ok {
 		switch {
@@ -231,14 +276,17 @@ func handlePAMAccessError(cmd *cobra.Command, httpClient *resty.Client, err erro
 		}
 
 		if stdinIsTerminal() {
-			if handled, approved := pam.PromptAccessRequest(httpClient, err, opts); handled {
+			if handled, approved, deviceVerificationID, deviceErr := pam.PromptAccessRequest(httpClient, err, opts); handled {
+				if deviceErr != nil {
+					exitWithError(cmd, classifyPAMDeviceError(deviceErr, opts.Path, f.machineIdentity))
+				}
 				if approved {
-					return true
+					return true, deviceVerificationID
 				}
 				if invocation.HasCommand {
 					os.Exit(1)
 				}
-				return false
+				return false, ""
 			}
 		}
 
@@ -246,12 +294,15 @@ func handlePAMAccessError(cmd *cobra.Command, httpClient *resty.Client, err erro
 			exitWithError(cmd, errPAMReasonRequired(invocation, true))
 		}
 
-		requestID, approved, requestErr := pam.RaiseAccessRequest(httpClient, opts.Path, strings.TrimSpace(opts.Reason), f.duration)
+		requestID, approved, deviceVerificationID, requestErr := pam.RaiseAccessRequest(httpClient, opts.Path, strings.TrimSpace(opts.Reason), f.duration)
 		if requestErr != nil {
+			if pam.IsDeviceError(requestErr) {
+				exitWithError(cmd, classifyPAMDeviceError(requestErr, opts.Path, f.machineIdentity))
+			}
 			exitWithError(cmd, classifyPAMAPIError(requestErr, opts.Path, pamDeniedRequest, f.machineIdentity), "Failed to file an access request")
 		}
 		if approved {
-			return true
+			return true, deviceVerificationID
 		}
 		exitWithError(cmd, errPAMApprovalPending(invocation, requestID, gate.Expired))
 	}
@@ -265,7 +316,7 @@ func handlePAMAccessError(cmd *cobra.Command, httpClient *resty.Client, err erro
 	}
 
 	exitWithError(cmd, classifyPAMAPIError(err, opts.Path, pamDeniedLaunch, f.machineIdentity), "Failed to create PAM session")
-	return false
+	return false, ""
 }
 
 // classifyPAMAPIError reads only the status code and the error names the backend guarantees.
