@@ -93,7 +93,7 @@ again with --mfa-session afterwards.
 
 An account with a device posture policy first checks this device with your device management
 provider, by its hardware serial number, and prints each check. A device that fails is denied.
-On Linux, reading the serial number may need sudo.`,
+On Linux, the serial number must be readable by your user.`,
 	Example: `  infisical pam access prod/orders-db -- psql -c "select count(*) from orders"
   infisical pam access prod/cluster -- kubectl get pods -A
   infisical pam access servers/prod-bastion -- systemctl status nginx

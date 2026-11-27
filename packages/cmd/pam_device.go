@@ -20,8 +20,8 @@ started in the browser. The browser shows a code; run this command on the same d
 code. The CLI reads this device's hardware serial number, and Infisical looks the device up in
 your device management provider.
 
-The code works once and expires after 5 minutes. On Linux, reading the serial number may
-need sudo.`,
+The code works once and expires after 5 minutes. On Linux, the serial number must be
+readable by your user.`,
 	Example:               `  infisical pam verify-device ABCD-EF23`,
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.ExactArgs(1),

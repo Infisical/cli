@@ -89,8 +89,8 @@ func TestCollectDeviceInfoLinuxPermissionDenied(t *testing.T) {
 	withDeviceStubs(t, "linux", nil, map[string]any{linuxSerialPath: fs.ErrPermission})
 	_, err := CollectDeviceInfo()
 	var infoErr *DeviceInfoError
-	if !errors.As(err, &infoErr) || !strings.Contains(infoErr.Message, "sudo") {
-		t.Errorf("expected a sudo hint, got %v", err)
+	if !errors.As(err, &infoErr) || !strings.Contains(infoErr.Message, "IT team") {
+		t.Errorf("expected an IT team hint, got %v", err)
 	}
 }
 

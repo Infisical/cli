@@ -143,7 +143,7 @@ func collectLinuxDeviceInfo() (api.PAMDeviceInfo, error) {
 	if err != nil {
 		if errors.Is(err, os.ErrPermission) {
 			return api.PAMDeviceInfo{}, &DeviceInfoError{Cause: err,
-				Message: fmt.Sprintf("Couldn't read this device's serial number: %s is readable only by root on most Linux systems. Run the command with sudo -E so it keeps your Infisical login, or ask your IT team to make the serial number readable.", linuxSerialPath)}
+				Message: fmt.Sprintf("Couldn't read this device's serial number: %s is readable only by root on most Linux systems. Ask your IT team to make it readable by your user, for example with a udev rule.", linuxSerialPath)}
 		}
 		return api.PAMDeviceInfo{}, &DeviceInfoError{Cause: err,
 			Message: fmt.Sprintf("Couldn't read this device's serial number from %s (%v). Linux serial numbers may not be readable on virtual machines and some hardware.", linuxSerialPath, err)}
