@@ -2402,7 +2402,7 @@ func (tm *AgentManager) retrieveCertificate(certificateID string) (*api.Retrieve
 	if err != nil {
 		return nil, err
 	}
-	return api.CallRetrieveCertificate(httpClient, certificateID)
+	return api.CallRetrieveCertificate(context.Background(), httpClient, certificateID)
 }
 
 func isNotFoundError(err error) bool {
@@ -2473,7 +2473,7 @@ func (tm *AgentManager) runDeliveryHook(replacing bool, certificateId int, certi
 }
 
 func resolveCertificateFrom(httpClient *resty.Client, certConfig *AgentCertificateConfig, fromCertificateID string) (*api.RetrieveCertificateResponse, error) {
-	certificate, err := api.CallRetrieveCertificate(httpClient, fromCertificateID)
+	certificate, err := api.CallRetrieveCertificate(context.Background(), httpClient, fromCertificateID)
 	if err != nil {
 		return nil, err
 	}
@@ -2490,7 +2490,7 @@ func resolveCertificateFrom(httpClient *resty.Client, certConfig *AgentCertifica
 	}
 
 	latestID := certificate.Certificate.LatestRenewalCertificateID
-	latest, err := api.CallRetrieveCertificate(httpClient, latestID)
+	latest, err := api.CallRetrieveCertificate(context.Background(), httpClient, latestID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve certificate %s, the latest renewal of certificate %s: %v", latestID, fromCertificateID, err)
 	}
@@ -2828,7 +2828,7 @@ func (tm *AgentManager) checkCertificateRequestStatus(certificateId int, certifi
 		return err
 	}
 
-	response, err := api.CallGetCertificateRequest(httpClient, requestID)
+	response, err := api.CallGetCertificateRequest(context.Background(), httpClient, requestID)
 	if err != nil {
 		return fmt.Errorf("failed to get certificate request status: %v", err)
 	}
@@ -3429,7 +3429,7 @@ func (tm *AgentManager) CheckCertificateStatus(certificateId int, infisicalCertI
 		return err
 	}
 
-	response, err := api.CallRetrieveCertificate(httpClient, infisicalCertId)
+	response, err := api.CallRetrieveCertificate(context.Background(), httpClient, infisicalCertId)
 	if err != nil {
 		return fmt.Errorf("failed to retrieve certificate status: %v", err)
 	}
@@ -3751,7 +3751,7 @@ func (tm *AgentManager) checkCertificateRequestStatusByID(certConfig *AgentCerti
 		return "", nil, err
 	}
 
-	response, err := api.CallGetCertificateRequest(httpClient, requestID)
+	response, err := api.CallGetCertificateRequest(context.Background(), httpClient, requestID)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to get certificate request status: %v", err)
 	}

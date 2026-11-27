@@ -62,7 +62,7 @@ func everyConstructedError() []*util.CLIError {
 		errNothingToUpdate([]string{"name", "slug"}),
 		errConfirmationRequired(action, "infisical secrets-manager environments delete qa --yes"),
 		errConfirmationDeclined(action),
-	}, append(agentVaultConstructedErrors(), pamConstructedErrors()...)...)
+	}, append(append(agentVaultConstructedErrors(), pamConstructedErrors()...), certManagerConstructedErrors()...)...)
 }
 
 func TestErrorCodesAreStableSnakeCaseAndUnique(t *testing.T) {
@@ -221,6 +221,21 @@ func TestMessagesNeverRepeatUnsafeInput(t *testing.T) {
 	}
 	if got := errSecretExists([]string{"OK", pasted}, scope).Message; got != `Secrets "OK", <name> already exist. Nothing was written.` {
 		t.Errorf("safe names should still be quoted: %q", got)
+	}
+}
+
+func TestConfirmationDeclinedRepeatsOnlyValuesFromInfisical(t *testing.T) {
+	revoke := revokeConfirmation(testCertificateID, api.RetrievedCertificate{CommonName: "*.api.example.com"}, "payments-api", "superseded")
+	if got := errConfirmationDeclined(revoke).Message; got != `Nothing was revoked: the confirmation didn't match the certificate's common name "*.api.example.com".` {
+		t.Errorf("got %q", got)
+	}
+	unnamed := revokeConfirmation(testCertificateID, api.RetrievedCertificate{}, "payments-api", "superseded")
+	if got := errConfirmationDeclined(unnamed).Message; got != `Nothing was revoked: the confirmation didn't match the certificate ID "`+testCertificateID+`".` {
+		t.Errorf("got %q", got)
+	}
+	typed := destructiveAction{Label: "the secret name", Expected: "DB_PASSWORD=hunter2!"}
+	if got := errConfirmationDeclined(typed).Message; strings.Contains(got, "hunter2") {
+		t.Errorf("repeated the typed value: %q", got)
 	}
 }
 

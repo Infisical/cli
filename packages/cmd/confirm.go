@@ -34,7 +34,8 @@ var credentialFlags = map[string]bool{"token": true, "client-secret": true, "cli
 // suggestion even when it looks like a slug.
 var rerunIdentifierFlags = map[string]bool{
 	"projectId": true, "project-id": true, "project-slug": true, "env": true, "path": true, "type": true, "tag": true, "tags": true,
-	"name": true, "slug": true, "output": true, "version": true,
+	"name": true, "slug": true, "output": true, "version": true, "application": true, "reason": true,
+	"org": true, "profile": true,
 }
 
 // scopeFlag is a flag that says where a delete acts, with the value the command resolved for it.
@@ -42,19 +43,46 @@ type scopeFlag struct{ Name, Value string }
 
 // destructiveAction is what a command is about to delete.
 type destructiveAction struct {
-	Target      string // named in messages: `environment "qa"`, `3 secrets`
-	Expected    string // what the user types to confirm: "qa", "3"
-	Label       string // how the prompt names Expected: "the environment slug", "the number of secrets"
-	Description string // "environment qa and all of its secrets"
+	Target   string // named in messages: `environment "qa"`, `3 secrets`
+	Expected string // what the user types to confirm: "qa", "3"
+	Label    string // how the prompt names Expected: "the environment slug", "the number of secrets"
+	// ShowExpected makes a declined confirmation repeat Expected in full instead of a placeholder for
+	// anything but a safe identifier. Set it only for a value Infisical returned, never one typed on the
+	// command line, which could be a pasted credential.
+	ShowExpected bool
+	Description  string // "environment qa and all of its secrets"
 	// Scope is where the delete acts (--env, --path, --projectId), as resolved from flags, INFISICAL_*
 	// variables or the workspace file. The suggested rerun passes every one that wasn't typed, so
 	// running it without those variables or that file can't delete somewhere else.
 	Scope []scopeFlag
+	// Verb is how messages name the action; the zero value is delete.
+	Verb actionVerb
+}
+
+// actionVerb is a destructive action's verb as messages use it: "This revokes ...", "Revoking ...
+// needs confirmation", "Nothing was revoked".
+type actionVerb struct{ Present, Gerund, Past string }
+
+var (
+	verbDelete = actionVerb{Present: "deletes", Gerund: "Deleting", Past: "deleted"}
+	verbRevoke = actionVerb{Present: "revokes", Gerund: "Revoking", Past: "revoked"}
+)
+
+func (a destructiveAction) verb() actionVerb {
+	if a.Verb == (actionVerb{}) {
+		return verbDelete
+	}
+	return a.Verb
 }
 
 // addConfirmFlags gives a destructive command -y/--yes. Pair it with confirmDestructive.
 func addConfirmFlags(cmd *cobra.Command) {
-	cmd.Flags().BoolP("yes", "y", false, "Delete without asking for confirmation (for scripts and agents)")
+	addConfirmFlagsFor(cmd, "Delete")
+}
+
+// addConfirmFlagsFor is addConfirmFlags for an action other than deleting, such as "Revoke".
+func addConfirmFlagsFor(cmd *cobra.Command, action string) {
+	cmd.Flags().BoolP("yes", "y", false, action+" without asking for confirmation (for scripts and agents)")
 }
 
 // confirmDestructive asks the user to type the name of what's being deleted. --yes skips the
@@ -69,7 +97,7 @@ func confirmDestructive(cmd *cobra.Command, args []string, action destructiveAct
 	}
 
 	// The description repeats names from the backend, such as a project's, so it's redacted like errors.
-	util.PrintlnStderr(util.RedactCredentials(fmt.Sprintf("This deletes %s.", util.SanitizeDisplay(action.Description))))
+	util.PrintlnStderr(util.RedactCredentials(fmt.Sprintf("This %s %s.", action.verb().Present, util.SanitizeDisplay(action.Description))))
 	typed, err := promptForConfirmation(fmt.Sprintf("Type %s to confirm", action.Label))
 	if err != nil || strings.TrimSpace(typed) != action.Expected {
 		return errConfirmationDeclined(action)
@@ -104,6 +132,9 @@ func rerunWithYes(cmd *cobra.Command, args []string, scope []scopeFlag) string {
 			}
 		case f.Name == "domain":
 			parts = append(parts, "--domain "+util.SuggestedDomain(f.Value.String()))
+		// A duration can't hold a secret, and a placeholder would make the rerun fail to parse.
+		case f.Value.Type() == "duration":
+			parts = append(parts, "--"+f.Name+" "+f.Value.String())
 		default:
 			values := []string{f.Value.String()}
 			if slice, ok := f.Value.(pflag.SliceValue); ok {
@@ -144,6 +175,28 @@ func unpinnedDomain(cmd *cobra.Command) string {
 		return domain
 	}
 	return ""
+}
+
+// instanceFlags are the --domain, --profile and --org a command suggested to the user needs to reach
+// the same Infisical instance and organization as cmd. Credentials are never included.
+func instanceFlags(cmd *cobra.Command) string {
+	var flags string
+	if cmd.Flags().Changed("domain") {
+		domain, _ := cmd.Flags().GetString("domain")
+		flags += " --domain " + util.SuggestedDomain(domain)
+	} else if domain := unpinnedDomain(cmd); domain != "" {
+		flags += " --domain " + util.SuggestedDomain(domain)
+	}
+	if cmd.Flags().Changed("profile") {
+		profile, _ := cmd.Flags().GetString("profile")
+		flags += " --profile " + util.SuggestedValue(profile, "profile")
+	}
+	if org, _ := cmd.Flags().GetString("org"); cmd.Flags().Changed("org") {
+		flags += " --org " + util.SuggestedValue(org, "org")
+	} else if org := strings.TrimSpace(os.Getenv(util.INFISICAL_ORG_ENV_NAME)); org != "" {
+		flags += " --org " + util.SuggestedValue(org, "org")
+	}
+	return flags
 }
 
 // requireConfirmation gives cmd -y/--yes and makes it confirm before its Run deletes anything.

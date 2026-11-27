@@ -41,7 +41,7 @@ const (
 	errCodeConfirmationDeclined    = "confirmation_declined"
 )
 
-var errorCodes = []string{
+var errorCodes = append([]string{
 	errCodeAuthRequired, errCodePermissionDenied, errCodeProjectNotLinked, errCodeProjectNotFound,
 	errCodeProjectTypeNotSupported, errCodeEnvironmentNotFound, errCodeSecretExists, errCodeSecretNotFound,
 	errCodeFolderNotFound, errCodeNothingToUpdate, errCodeConfirmationRequired, errCodeConfirmationDeclined,
@@ -55,7 +55,7 @@ var errorCodes = []string{
 	errCodeAccountNotFound, errCodeApprovalPending, errCodeApprovalRequired, errCodeApprovalNotConfigured, errCodeAccessApproved,
 	errCodeReasonRequired, errCodeMFARequired, errCodeSessionExpired, errCodeCommandNotSupported,
 	errCodeCommandRemoved,
-}
+}, certManagerErrorCodes...)
 
 const secretsManagerPrefix = "infisical " + secretsManagerCommandName
 
@@ -383,8 +383,8 @@ func errNothingToUpdate(flags []string) *util.CLIError {
 
 func errConfirmationRequired(action destructiveAction, rerun string) *util.CLIError {
 	return &util.CLIError{Code: errCodeConfirmationRequired,
-		Message: fmt.Sprintf("Deleting %s needs confirmation, and there's no terminal to ask. Nothing was deleted.", action.Target),
-		Next:    []util.NextStep{{Purpose: "To delete it without asking", Command: rerun}}}
+		Message: fmt.Sprintf("%s %s needs confirmation, and there's no terminal to ask. Nothing was %s.", action.verb().Gerund, action.Target, action.verb().Past),
+		Next:    []util.NextStep{{Purpose: fmt.Sprintf("To %s it without asking", strings.TrimSuffix(action.verb().Present, "s")), Command: rerun}}}
 }
 
 // errConfirmedTargetChanged is for a delete whose environment, path or project resolved differently
@@ -400,8 +400,12 @@ func errConfirmedTargetChanged(action destructiveAction, before, after scopeFlag
 }
 
 func errConfirmationDeclined(action destructiveAction) *util.CLIError {
+	expected := quoted(action.Expected, "value")
+	if action.ShowExpected {
+		expected = strconv.Quote(util.SanitizeDisplay(action.Expected))
+	}
 	return &util.CLIError{Code: errCodeConfirmationDeclined,
-		Message: fmt.Sprintf("Nothing was deleted: the confirmation didn't match %s %s.", action.Label, quoted(action.Expected, "value"))}
+		Message: fmt.Sprintf("Nothing was %s: the confirmation didn't match %s %s.", action.verb().Past, action.Label, expected)}
 }
 
 // classifyAPIError turns a backend error into a CLIError using only what is stable: the status code,
