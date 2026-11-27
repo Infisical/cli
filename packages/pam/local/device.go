@@ -21,6 +21,9 @@ const (
 
 var collectDeviceInfo = util.CollectDeviceInfo
 
+// The error name the server gives a browser code that has expired
+const DeviceVerificationCodeExpiredName = "DEVICE_VERIFICATION_CODE_EXPIRED"
+
 type DeviceRequirement struct {
 	AccountID  string
 	AccessType string

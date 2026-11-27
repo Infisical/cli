@@ -61,7 +61,8 @@ func runPAMVerifyDevice(cmd *cobra.Command, args []string) {
 	if verification.Status != api.PAMDeviceVerificationPassed {
 		exitWithError(cmd, errPAMDeviceCheckFailed(nil))
 	}
-	util.PrintlnStdout("Device verified. Return to your browser to continue.")
+	util.PrintlnStdout("Device verified.")
+	printProjectsTip(cmd, "Return to your browser to continue.")
 }
 
 func init() {

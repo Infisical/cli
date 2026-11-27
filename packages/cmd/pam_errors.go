@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	pam "github.com/Infisical/infisical-merge/packages/pam/local"
 	"strings"
 	"time"
 
@@ -354,7 +355,7 @@ func pamVerificationCodeStatus(err error) (int, bool) {
 	case 404, 409:
 		return apiErr.StatusCode, true
 	case 400:
-		return 400, strings.Contains(strings.ToLower(apiErr.ErrorMessage), "expired")
+		return 400, apiErr.Name == pam.DeviceVerificationCodeExpiredName
 	case 403:
 		return 403, apiErr.Name != "TokenError"
 	}
