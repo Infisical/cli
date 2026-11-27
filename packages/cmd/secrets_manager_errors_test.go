@@ -224,6 +224,21 @@ func TestMessagesNeverRepeatUnsafeInput(t *testing.T) {
 	}
 }
 
+func TestConfirmationDeclinedRepeatsOnlyValuesFromInfisical(t *testing.T) {
+	revoke := revokeConfirmation(testCertificateID, api.RetrievedCertificate{CommonName: "*.api.example.com"}, "payments-api", "superseded")
+	if got := errConfirmationDeclined(revoke).Message; got != `Nothing was revoked: the confirmation didn't match the certificate's common name "*.api.example.com".` {
+		t.Errorf("got %q", got)
+	}
+	unnamed := revokeConfirmation(testCertificateID, api.RetrievedCertificate{}, "payments-api", "superseded")
+	if got := errConfirmationDeclined(unnamed).Message; got != `Nothing was revoked: the confirmation didn't match the certificate ID "`+testCertificateID+`".` {
+		t.Errorf("got %q", got)
+	}
+	typed := destructiveAction{Label: "the secret name", Expected: "DB_PASSWORD=hunter2!"}
+	if got := errConfirmationDeclined(typed).Message; strings.Contains(got, "hunter2") {
+		t.Errorf("repeated the typed value: %q", got)
+	}
+}
+
 // Constructors are always called with names, but an empty list must still give a usable error.
 func TestSecretErrorsWithoutNames(t *testing.T) {
 	for _, err := range []*util.CLIError{errSecretExists(nil, testScope), errSecretNotFound([]string{}, errorScope{})} {

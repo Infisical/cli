@@ -43,10 +43,14 @@ type scopeFlag struct{ Name, Value string }
 
 // destructiveAction is what a command is about to delete.
 type destructiveAction struct {
-	Target      string // named in messages: `environment "qa"`, `3 secrets`
-	Expected    string // what the user types to confirm: "qa", "3"
-	Label       string // how the prompt names Expected: "the environment slug", "the number of secrets"
-	Description string // "environment qa and all of its secrets"
+	Target   string // named in messages: `environment "qa"`, `3 secrets`
+	Expected string // what the user types to confirm: "qa", "3"
+	Label    string // how the prompt names Expected: "the environment slug", "the number of secrets"
+	// ShowExpected makes a declined confirmation repeat Expected in full instead of a placeholder for
+	// anything but a safe identifier. Set it only for a value Infisical returned, never one typed on the
+	// command line, which could be a pasted credential.
+	ShowExpected bool
+	Description  string // "environment qa and all of its secrets"
 	// Scope is where the delete acts (--env, --path, --projectId), as resolved from flags, INFISICAL_*
 	// variables or the workspace file. The suggested rerun passes every one that wasn't typed, so
 	// running it without those variables or that file can't delete somewhere else.

@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -240,6 +242,23 @@ func TestReadCertRequestInputReportsTheFirstInvalidFlag(t *testing.T) {
 		setFlags(t, cmd, "key-algorithm", "bogus", "signature-algorithm", "bogus", "common-name", " ")
 		if _, err := readCertRequestInput(cmd); err == nil || !strings.Contains(err.Message, "--common-name") {
 			t.Fatalf("got %v, want the --common-name error first", err)
+		}
+	}
+}
+
+func TestWrittenFileLabelHidesUnsafePaths(t *testing.T) {
+	for path, want := range map[string]string{
+		"cert.pem":                       "cert.pem",
+		"./certs/key.pem":                "./certs/key.pem",
+		"/etc/ssl/cert.pem":              "/etc/ssl/cert.pem",
+		"DB_PASSWORD=hunter2!":           "--output-certificate-file",
+		"my cert.pem":                    "--output-certificate-file",
+		"st.abc.def":                     "--output-certificate-file",
+		strings.Repeat("a", 65):          "--output-certificate-file",
+		"ghp_" + strings.Repeat("a", 36): "--output-certificate-file",
+	} {
+		if got := writtenFileLabel(certOutputFile{"output-certificate-file", path}); got != want {
+			t.Errorf("writtenFileLabel(%q) = %q, want %q", path, got, want)
 		}
 	}
 }
@@ -531,6 +550,106 @@ func TestCertOutputFilesForceWritesThroughASymlink(t *testing.T) {
 	}
 	if contents, _ := os.ReadFile(target); string(contents) != "NEW\n" {
 		t.Errorf("target = %q, want the new certificate", contents)
+	}
+}
+
+func TestCertOutputFilesForceCreatesADanglingSymlinksTarget(t *testing.T) {
+	dir := t.TempDir()
+	target, link := filepath.Join(dir, "archive", "cert1.pem"), filepath.Join(dir, "cert.pem")
+	if err := os.Symlink(filepath.Join("archive", "cert1.pem"), link); err != nil {
+		t.Skip("symlinks unavailable:", err)
+	}
+	files := certOutputFiles{Cert: link, Force: true}
+	if err := files.checkOverwrite(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := files.write(api.CertificateData{Certificate: "NEW"}); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the symlink was replaced: %v, %v", info, err)
+	}
+	if contents, _ := os.ReadFile(target); string(contents) != "NEW\n" {
+		t.Errorf("target = %q, want the new certificate", contents)
+	}
+}
+
+// The layout of certbot's live/ directory reached through a symlinked directory: the leaf's ".." is
+// taken from where the directory link points, not from the link itself.
+func TestCertOutputFilesForceFollowsARelativeLinkInsideALinkedDirectory(t *testing.T) {
+	dir := t.TempDir()
+	live, archive := filepath.Join(dir, "le", "live", "ex"), filepath.Join(dir, "le", "archive", "ex")
+	for _, d := range []string{live, archive} {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(archive, "cert1.pem"), []byte("OLD\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("..", "..", "archive", "ex", "cert1.pem"), filepath.Join(live, "cert.pem")); err != nil {
+		t.Skip("symlinks unavailable:", err)
+	}
+	if err := os.Symlink(live, filepath.Join(dir, "certs")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (certOutputFiles{Cert: filepath.Join(dir, "certs", "cert.pem"), Force: true}).write(api.CertificateData{Certificate: "NEW"}); err != nil {
+		t.Fatal(err)
+	}
+	if contents, _ := os.ReadFile(filepath.Join(archive, "cert1.pem")); string(contents) != "NEW\n" {
+		t.Errorf("target = %q, want the new certificate", contents)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "archive")); err == nil {
+		t.Error("wrote beside the directory link instead of through it")
+	}
+}
+
+// Creating the key's directory would make the certificate's dangling directory link lead to the key.
+func TestCertOutputFilesCatchOneFileThroughADanglingDirectoryLink(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Symlink(filepath.Join("releases", "v1"), filepath.Join(dir, "current")); err != nil {
+		t.Skip("symlinks unavailable:", err)
+	}
+	if err := os.Symlink(filepath.Join("current", "pair.pem"), filepath.Join(dir, "cert.pem")); err != nil {
+		t.Fatal(err)
+	}
+	files := certOutputFiles{Key: filepath.Join(dir, "releases", "v1", "pair.pem"), Cert: filepath.Join(dir, "cert.pem"), Force: true}
+	if err := files.checkOverwrite(); err == nil || !strings.Contains(err.Message, "same file") {
+		t.Errorf("got %v, want the two flags refused as one file", err)
+	}
+}
+
+// A destination swapped for a pipe while a request waited for approval must fail, not hang.
+func TestCertOutputFilesForceRefusesAPipeAfterTheCheck(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no named pipes")
+	}
+	pipe := filepath.Join(t.TempDir(), "cert.pem")
+	if err := exec.Command("mkfifo", pipe).Run(); err != nil {
+		t.Skip("mkfifo unavailable:", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := (certOutputFiles{Cert: pipe, Force: true}).write(api.CertificateData{Certificate: "NEW"})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Errorf("got %v, want a refusal", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("blocked reading the pipe")
+	}
+}
+
+func TestCertOutputFilesRefuseAFileThatIsntRegular(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no device file to point at")
+	}
+	err := (certOutputFiles{Cert: os.DevNull, Force: true}).checkOverwrite()
+	if err == nil || !strings.Contains(err.Message, "not a regular file") {
+		t.Errorf("got %v, want a refusal before anything is sent", err)
 	}
 }
 

@@ -400,8 +400,12 @@ func errConfirmedTargetChanged(action destructiveAction, before, after scopeFlag
 }
 
 func errConfirmationDeclined(action destructiveAction) *util.CLIError {
+	expected := quoted(action.Expected, "value")
+	if action.ShowExpected {
+		expected = strconv.Quote(util.SanitizeDisplay(action.Expected))
+	}
 	return &util.CLIError{Code: errCodeConfirmationDeclined,
-		Message: fmt.Sprintf("Nothing was %s: the confirmation didn't match %s %s.", action.verb().Past, action.Label, strconv.Quote(util.SanitizeDisplay(action.Expected)))}
+		Message: fmt.Sprintf("Nothing was %s: the confirmation didn't match %s %s.", action.verb().Past, action.Label, expected)}
 }
 
 // classifyAPIError turns a backend error into a CLIError using only what is stable: the status code,

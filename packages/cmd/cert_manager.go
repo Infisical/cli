@@ -20,6 +20,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
@@ -823,14 +824,49 @@ func resolvedPath(path string) string {
 }
 
 // writeTarget is the file a write replaces: the target of a symlink, so --force updates a linked file
-// (such as certbot's live/ links) instead of replacing the link.
+// (such as certbot's live/ links) instead of replacing the link. A link whose target doesn't exist yet,
+// such as one set up before the first certificate, yields that target and the write creates it.
 func writeTarget(path string) string {
-	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
-		if resolved, err := filepath.EvalSymlinks(path); err == nil {
-			return resolved
-		}
+	if info, err := os.Lstat(path); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return path
+	}
+	hops := 0
+	if resolved, ok := followLinks(path, &hops); ok {
+		return resolved
 	}
 	return path
+}
+
+// followLinks resolves every symlink in path as the OS would once missing directories are created,
+// including dangling ones. It resolves a link's directory before joining a relative target to it, since
+// a lexical join would apply ".." before the directory's own link is followed.
+func followLinks(path string, hops *int) (string, bool) {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved, true
+	}
+	parent := filepath.Dir(path)
+	if parent == path {
+		return path, true
+	}
+	dir, ok := followLinks(parent, hops)
+	if !ok {
+		return "", false
+	}
+	joined := filepath.Join(dir, filepath.Base(path))
+	if info, err := os.Lstat(joined); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return joined, true
+	}
+	if *hops++; *hops > 40 {
+		return "", false
+	}
+	link, err := os.Readlink(joined)
+	if err != nil {
+		return "", false
+	}
+	if !filepath.IsAbs(link) {
+		link = filepath.Join(dir, link)
+	}
+	return followLinks(link, hops)
 }
 
 // checkOverwrite compares paths without letter case: on a case-insensitive volume, Pair.pem and
@@ -838,7 +874,7 @@ func writeTarget(path string) string {
 func (f certOutputFiles) checkOverwrite() *util.CLIError {
 	seen := map[string]string{}
 	for _, file := range f.destinations() {
-		resolved := strings.ToLower(resolvedPath(file.path))
+		resolved := strings.ToLower(resolvedPath(writeTarget(file.path)))
 		if other, ok := seen[resolved]; ok {
 			return errFlagsConflict(file.flag, other, "they name the same file")
 		}
@@ -850,8 +886,15 @@ func (f certOutputFiles) checkOverwrite() *util.CLIError {
 			}
 			return errInvalidFlag(file.flag, fmt.Sprintf("%s can't be checked (%s)", quoted(file.path, "file"), util.SanitizeDisplay(pathErrorReason(err))))
 		}
-		if info, err := os.Stat(file.path); err == nil && info.IsDir() {
-			return errInvalidFlag(file.flag, fmt.Sprintf("%s is a directory: pass a file path", quoted(file.path, "file")))
+		if info, err := os.Stat(file.path); err == nil {
+			if info.IsDir() {
+				return errInvalidFlag(file.flag, fmt.Sprintf("%s is a directory: pass a file path", quoted(file.path, "file")))
+			}
+			// A pipe or device would block or never end when --force reads it to keep a copy, after the
+			// certificate is already issued.
+			if !info.Mode().IsRegular() {
+				return errInvalidFlag(file.flag, fmt.Sprintf("%s is a device or pipe, not a regular file: pass the path of a regular file, such as cert.pem", quoted(file.path, "file")))
+			}
 		}
 		if !f.Force {
 			return errOutputFileExists(file.flag, file.path)
@@ -895,6 +938,32 @@ type previousCertFile struct {
 	info     os.FileInfo
 }
 
+// readReplacedCertFile reads the file a forced write replaces, or returns nil when there is none. The
+// destination can change after checkOverwrite while a request waits for approval, so it opens without
+// blocking and refuses anything but a regular file: reading a pipe would hang after issuance.
+func readReplacedCertFile(target string) (*previousCertFile, error) {
+	file, err := os.OpenFile(target, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("it is a device or pipe, not a regular file")
+	}
+	contents, err := io.ReadAll(file)
+	if err != nil {
+		return nil, err
+	}
+	return &previousCertFile{contents, info}, nil
+}
+
 // write leaves the files as they were when it fails: without --force it removes the files it created,
 // and with --force every file is staged before any existing one is replaced, and the replaced ones are
 // put back. The caller checks first that a requested key is there.
@@ -933,12 +1002,13 @@ func (f certOutputFiles) write(bundle api.CertificateData) ([]string, error) {
 		mode := os.FileMode(0600)
 		var prepare func(*os.File) error
 		var ownerErr error
-		if info, err := os.Stat(target); err == nil {
-			old, err := os.ReadFile(target)
-			if err != nil {
-				return nil, certFileError(file, err)
-			}
-			previous[file.flag] = &previousCertFile{old, info}
+		old, err := readReplacedCertFile(target)
+		if err != nil {
+			return nil, certFileError(file, err)
+		}
+		if old != nil {
+			previous[file.flag] = old
+			info := old.info
 			// A service under another account may read the deployed certificate or chain, as its owner or
 			// through its group. A new key stays private to whoever runs the CLI.
 			if file.flag != "output-private-key-file" {
@@ -1015,16 +1085,14 @@ func requireMaterial(cmd *cobra.Command, files certOutputFiles, bundle api.Certi
 // writeCertificateFiles runs before the result is printed, so stdout never shows a result whose files
 // weren't written. retry is the command that delivers them again, so a failed write keeps the caller's
 // choices, such as --remove-roots-from-chain on a request pickup.
-func writeCertificateFiles(cmd *cobra.Command, files certOutputFiles, bundle api.CertificateData, retry string) []string {
+func writeCertificateFiles(cmd *cobra.Command, files certOutputFiles, bundle api.CertificateData, retry string) {
 	if !files.any() {
-		return nil
+		return
 	}
-	written, err := files.write(bundle)
-	if err != nil {
+	if _, err := files.write(bundle); err != nil {
 		exitCertError(cmd, err, fmt.Sprintf("Certificate %s is in Infisical, but its files weren't written. Fix the problem above, then download it with: %s",
 			util.SanitizeDisplay(bundle.CertificateID), retry))
 	}
-	return written
 }
 
 func certificateDownload(cmd *cobra.Command, certificateID, application string, files certOutputFiles) string {
@@ -1034,8 +1102,12 @@ func certificateDownload(cmd *cobra.Command, certificateID, application string, 
 // printCertificateOutput follows the printed result: it names the files written, or prints the
 // certificate PEM (and the key with --include-private-key) when no file flag is given and the output
 // is plain text.
-func printCertificateOutput(cmd *cobra.Command, files certOutputFiles, bundle api.CertificateData, outputFormat string, written []string) {
+func printCertificateOutput(cmd *cobra.Command, files certOutputFiles, bundle api.CertificateData, outputFormat string) {
 	if files.any() {
+		var written []string
+		for _, file := range files.destinations() {
+			written = append(written, writtenFileLabel(file))
+		}
 		certNotice(cmd, fmt.Sprintf("Wrote %s.", strings.Join(written, ", ")))
 		if outputFormat == "" && files.IncludeKey {
 			util.PrintStdout(ensureTrailingNewline(bundle.PrivateKey))
@@ -1050,6 +1122,18 @@ func printCertificateOutput(cmd *cobra.Command, files certOutputFiles, bundle ap
 		util.PrintStdout(ensureTrailingNewline(bundle.PrivateKey))
 	}
 }
+
+// writtenFileLabel shows the path as typed when it looks like an ordinary path, and the flag otherwise,
+// so a credential pasted into a file flag isn't repeated. suggestablePath is too strict here: it hides
+// cert.pem.
+func writtenFileLabel(file certOutputFile) string {
+	if displayablePath.MatchString(file.path) && util.RedactCredentials(file.path) == file.path {
+		return file.path
+	}
+	return "--" + file.flag
+}
+
+var displayablePath = regexp.MustCompile(`^[A-Za-z0-9._~/-]{1,64}$`)
 
 func rfc3339(t time.Time) *string {
 	if t.IsZero() {
@@ -1411,10 +1495,10 @@ func finishIssuance(cmd *cobra.Command, client *resty.Client, application string
 	if requestID != "" {
 		retry = certificateRequestPickup(requestID, application, options.pickupFlags(cmd))
 	}
-	written := writeCertificateFiles(cmd, options.files, *issued, retry)
+	writeCertificateFiles(cmd, options.files, *issued, retry)
 	result.fillIssued(*issued, options.files.IncludeKey)
 	printIssueResult(options.outputFormat, result)
-	printCertificateOutput(cmd, options.files, *issued, options.outputFormat, written)
+	printCertificateOutput(cmd, options.files, *issued, options.outputFormat)
 }
 
 // collectPages reads every page of an offset-paged list. An empty page ends it too, so a total that
@@ -1720,7 +1804,7 @@ func runCertGet(cmd *cobra.Command, args []string) {
 	}
 
 	requireMaterial(cmd, files, bundle)
-	written := writeCertificateFiles(cmd, files, bundle, certificateDownload(cmd, bundle.CertificateID, application.Name, files))
+	writeCertificateFiles(cmd, files, bundle, certificateDownload(cmd, bundle.CertificateID, application.Name, files))
 	details := certificateDetailsFrom(certificate, bundle, files.IncludeKey, time.Now())
 	if outputFormat != "" {
 		printFormattedOutput(outputFormat, details)
@@ -1728,7 +1812,7 @@ func runCertGet(cmd *cobra.Command, args []string) {
 		visualize.GenericTable([]string{"CERTIFICATE ID", "COMMON NAME", "STATUS", "SERIAL NUMBER", "PROFILE", "NOT AFTER"},
 			[][]string{{details.CertificateID, display(details.CommonName), details.Status, details.SerialNumber, display(details.ProfileName), display(details.NotAfter)}})
 	}
-	printCertificateOutput(cmd, files, bundle, outputFormat, written)
+	printCertificateOutput(cmd, files, bundle, outputFormat)
 	captureCertEvent("certificates get", posthog.NewProperties().Set("download", files.any()))
 }
 
@@ -1995,6 +2079,23 @@ func listCertificates(cmd *cobra.Command, applicationName, outputFormat string) 
 	captureCertEvent("certificates get", posthog.NewProperties().Set("certificateCount", len(items)))
 }
 
+// revokeConfirmation asks for the certificate's common name, which Infisical returned, so a declined
+// confirmation repeats it in full; a wildcard name would otherwise show as a placeholder.
+func revokeConfirmation(certificateID string, certificate api.RetrievedCertificate, application, reason string) destructiveAction {
+	expected, label, names := certificate.CommonName, "the certificate's common name", certificate.CommonName+", "
+	if expected == "" {
+		expected, label, names = certificateID, "the certificate ID", ""
+	}
+	return destructiveAction{
+		Target:       "certificate " + quoted(certificateID, "certificate-id"),
+		Expected:     expected,
+		ShowExpected: certificate.CommonName != "",
+		Label:        label,
+		Description:  fmt.Sprintf("certificate %s (%sserial %s) in application %s, for reason %s", certificateID, names, certificate.SerialNumber, application, strings.ToLower(reason)),
+		Verb:         verbRevoke,
+	}
+}
+
 func runCertRevoke(cmd *cobra.Command, args []string) {
 	outputFormat := crudOutputFormat(cmd, "certificates")
 	certificateID := certificateIDArg(cmd, args[0])
@@ -2016,17 +2117,7 @@ func runCertRevoke(cmd *cobra.Command, args []string) {
 	application := resolveCertApplication(cmd, client, applicationName)
 	certificate := certificateInApplication(cmd, client, certificateID, application).Certificate
 
-	expected, label, names := certificate.CommonName, "the certificate's common name", certificate.CommonName+", "
-	if expected == "" {
-		expected, label, names = certificateID, "the certificate ID", ""
-	}
-	if err := confirmDestructive(cmd, args, destructiveAction{
-		Target:      "certificate " + quoted(certificateID, "certificate-id"),
-		Expected:    expected,
-		Label:       label,
-		Description: fmt.Sprintf("certificate %s (%sserial %s) in application %s, for reason %s", certificateID, names, certificate.SerialNumber, application.Name, strings.ToLower(reason)),
-		Verb:        verbRevoke,
-	}); err != nil {
+	if err := confirmDestructive(cmd, args, revokeConfirmation(certificateID, certificate, application.Name, reason)); err != nil {
 		// The rerun it suggests already repeats the instance flags.
 		exitWithError(cmd, err)
 	}
@@ -2242,7 +2333,7 @@ func runCertRequestsGet(cmd *cobra.Command, args []string) {
 		bundle.CertificateChain = withoutRootCertificates(bundle.CertificateChain)
 	}
 	requireMaterial(cmd, files, bundle)
-	written := writeCertificateFiles(cmd, files, bundle, certificateRequestPickup(requestID, application.Name, pickupFlags))
+	writeCertificateFiles(cmd, files, bundle, certificateRequestPickup(requestID, application.Name, pickupFlags))
 	result.SerialNumber = request.SerialNumber
 	result.Certificate, result.CertificateChain = optional(bundle.Certificate), optional(bundle.CertificateChain)
 	fillFromLeaf(bundle.Certificate, &result.CommonName, &result.NotBefore, &result.NotAfter)
@@ -2250,7 +2341,7 @@ func runCertRequestsGet(cmd *cobra.Command, args []string) {
 		result.PrivateKey = optional(bundle.PrivateKey)
 	}
 	printCertificateRequest(outputFormat, result)
-	printCertificateOutput(cmd, files, bundle, outputFormat, written)
+	printCertificateOutput(cmd, files, bundle, outputFormat)
 }
 
 type certificateRequestDetails struct {
