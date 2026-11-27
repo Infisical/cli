@@ -15,7 +15,7 @@ import (
 var (
 	crudActions      = map[string]bool{"get": true, "create": true, "update": true, "delete": true}
 	lifecycleActions = map[string]bool{"start": true, "stop": true, "install": true, "uninstall": true}
-	workflowCommands = map[string]bool{"run": true, "export": true, "proxy": true, "connect": true}
+	workflowCommands = map[string]bool{"run": true, "export": true, "proxy": true, "connect": true, "access": true, "verify-device": true}
 	resourceActions  = map[string]bool{"revoke": true, "push": true, "pull": true}
 )
 

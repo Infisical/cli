@@ -16,7 +16,7 @@ infisical secrets-manager secrets get API_KEY --env prod
 - **Action**: `get`, `create`, `update`, or `delete`.
   - `get` without a name lists; `get <name>` shows one. Don't add a separate `list`.
   - `create` fails if the item exists, and `update` fails if it doesn't. Don't add upserts like `set`.
-- **Workflow commands** act on a whole environment rather than one resource: `run` sits directly under the product, and `export` under the resource it writes out (`secrets-manager secrets export`). Agent Vault also has `agent-vault proxy`, which runs the proxy, and `agent-vault connect`, which opens local ports to a session's database and SSH services.
+- **Workflow commands** act on a whole environment rather than one resource: `run` sits directly under the product, and `export` under the resource it writes out (`secrets-manager secrets export`). Agent Vault also has `agent-vault proxy`, which runs the proxy, and `agent-vault connect`, which opens local ports to a session's database and SSH services. PAM has `pam access`, which opens a session on an account, and `pam verify-device`, which finishes a device check started in the browser.
 - **Lifecycle actions** are for long-running things such as agents and services: `start`, `stop`, `install`, `uninstall`.
 - **Other resource actions** cover what CRUD can't say: `revoke` ends something that keeps existing (`agent-vault sessions revoke`), `push` uploads a local copy (`agent-vault skills push`), and `pull` downloads one to edit and push back (`agent-vault skills pull`).
 
@@ -106,6 +106,9 @@ With `-o json`, the same error is JSON on stderr:
 | `session_expired` | `pam access -- <command>`: the session's duration, or the AWS credentials of an account without a Gateway, ran out before the command finished, so the command was stopped |
 | `command_not_supported` | `pam access -- <command>` on an account type that can't run one (Windows). The session is ended |
 | `command_removed` | A removed command that is kept hidden, such as `pam agentic access`. Suggests its replacement |
+| `device_posture_failed` | `pam access`, or filing its access request, on an account whose device posture policy this device doesn't meet, or `pam verify-device` when the device check doesn't pass. The failed checks are printed above the error |
+| `device_info_unavailable` | `pam verify-device`, or `pam access` on an account with a device posture policy, can't read this device's hardware serial number (on Linux, often because it needs root) |
+| `verification_code_invalid` | `pam verify-device` with a code that matches no waiting check (404), has expired (400), was already used (409), or belongs to another user (403) |
 | `skill_not_found` | An Agent Vault skills command names a skill the project doesn't have, or that the caller can't see |
 | `secret_exists` | `secrets create` on a key that exists. Nothing is written |
 | `secret_not_found` | `secrets update` on a key that doesn't exist. Nothing is written |

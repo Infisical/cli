@@ -8,6 +8,7 @@ import (
 
 	"github.com/Infisical/infisical-merge/packages/api"
 	"github.com/Infisical/infisical-merge/packages/config"
+	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
 )
 
@@ -87,15 +88,48 @@ func MFAChallengeFrom(err error) (MFAChallenge, bool) {
 const accessRequestStatusApproved = "approved"
 
 // RaiseAccessRequest files an access request. approved is true when an auto-approval rule granted it
-// on submission, so the caller can connect at once.
-func RaiseAccessRequest(httpClient *resty.Client, path, reason string, duration time.Duration) (requestID string, approved bool, err error) {
-	response, err := api.CallPAMCreateAccessRequest(httpClient, api.PAMCreateAccessRequestBody{
+// on submission, so the caller can connect at once, reusing deviceVerificationID when it's set.
+func RaiseAccessRequest(httpClient *resty.Client, path, reason string, duration time.Duration) (requestID string, approved bool, deviceVerificationID string, err error) {
+	response, deviceVerificationID, err := createAccessRequest(httpClient, api.PAMCreateAccessRequestBody{
 		Path:     path,
 		Reason:   reason,
 		Duration: APIDuration(duration),
 	})
 	if err != nil {
-		return "", false, err
+		return "", false, "", err
 	}
-	return response.Request.ID, response.Request.Status == accessRequestStatusApproved, nil
+	return response.Request.ID, response.Request.Status == accessRequestStatusApproved, deviceVerificationID, nil
+}
+
+func createAccessRequest(httpClient *resty.Client, body api.PAMCreateAccessRequestBody) (api.PAMCreateAccessRequestResponse, string, error) {
+	stderr := util.GetStderrWriter()
+	verificationID, err := CheckDeviceBeforeRequest(httpClient, body.Path, stderr)
+	if err != nil {
+		return api.PAMCreateAccessRequestResponse{}, "", err
+	}
+	body.DeviceVerificationId = verificationID
+
+	response, err := api.CallPAMCreateAccessRequest(httpClient, body)
+	if err == nil {
+		return response, verificationID, nil
+	}
+	retryID, handled, failure := ResolveDeviceGate(httpClient, err, stderr, true)
+	if !handled {
+		return api.PAMCreateAccessRequestResponse{}, "", err
+	}
+	if failure != nil {
+		return api.PAMCreateAccessRequestResponse{}, "", failure
+	}
+	body.DeviceVerificationId = retryID
+	response, err = api.CallPAMCreateAccessRequest(httpClient, body)
+	if err != nil {
+		return api.PAMCreateAccessRequestResponse{}, "", err
+	}
+	return response, retryID, nil
+}
+
+func IsDeviceError(err error) bool {
+	var postureErr *DevicePostureError
+	var infoErr *util.DeviceInfoError
+	return errors.As(err, &postureErr) || errors.As(err, &infoErr)
 }
